@@ -103,7 +103,7 @@ export function TaskDetailDialog({
     <div className="fixed inset-0 z-50 flex items-center justify-center">
       {/* Backdrop */}
       <div
-        className="absolute inset-0 bg-black/50 backdrop-blur-sm"
+        className="absolute inset-0 bg-black/50 backdrop-blur-sm cursor-pointer"
         onClick={onClose}
       />
 
@@ -132,7 +132,7 @@ export function TaskDetailDialog({
           </div>
           <button
             onClick={onClose}
-            className="p-2 hover:bg-muted rounded-lg transition-colors text-muted-foreground hover:text-foreground"
+            className="p-2 hover:bg-muted rounded-lg transition-colors text-muted-foreground hover:text-foreground cursor-pointer"
           >
             <X className="h-5 w-5" />
           </button>
@@ -140,7 +140,10 @@ export function TaskDetailDialog({
 
         {/* Body — reusa TaskBriefContent */}
         <div className="flex-1 min-h-0 overflow-y-auto">
-          <TaskBriefContent task={task} />
+          <TaskBriefContent
+            task={liveTask ?? task}
+            editable={syncStatus !== "synced" && syncStatus !== "syncing"}
+          />
         </div>
 
         {/* Footer — Publish action */}
@@ -206,7 +209,7 @@ export function TaskDetailDialog({
                 <button
                   onClick={handlePublish}
                   disabled={isPublishing || syncStatus === "syncing"}
-                  className="flex items-center gap-2 px-4 py-2 bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed text-sm font-medium"
+                  className="flex items-center gap-2 px-4 py-2 bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed text-sm font-medium cursor-pointer"
                 >
                   {isPublishing || syncStatus === "syncing" ? (
                     <>
@@ -226,7 +229,7 @@ export function TaskDetailDialog({
 
               <button
                 onClick={onClose}
-                className="px-4 py-2 border border-border rounded-lg hover:bg-muted transition-colors text-sm text-muted-foreground"
+                className="px-4 py-2 border border-border rounded-lg hover:bg-muted transition-colors text-sm text-muted-foreground cursor-pointer"
               >
                 Cerrar
               </button>

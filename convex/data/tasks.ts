@@ -864,6 +864,48 @@ export const getUserIdFromThread = internalQuery({
   },
 });
 
+// Mutation pública para actualizar campos de una task desde el frontend (Panel de Control)
+export const updateTaskFields = mutation({
+  args: {
+    taskId: v.id("tasks"),
+    updates: v.object({
+      title: v.optional(v.string()),
+      description: v.optional(v.string()),
+      requestType: v.optional(v.string()),
+      brand: v.optional(v.string()),
+      objective: v.optional(v.string()),
+      keyMessage: v.optional(v.string()),
+      kpis: v.optional(v.string()),
+      deadline: v.optional(v.string()),
+      budget: v.optional(v.string()),
+      approvers: v.optional(v.string()),
+      priority: v.optional(v.string()),
+    }),
+  },
+  handler: async (ctx, args) => {
+    // Verificar que el usuario esté autenticado
+    const userId = await getAuthUserId(ctx);
+    if (!userId) throw new Error("No autenticado");
+
+    const task = await ctx.db.get(args.taskId);
+    if (!task) throw new Error("Task no encontrada");
+
+    // Filtrar campos undefined
+    const updateData: Record<string, string> = {};
+    for (const [key, value] of Object.entries(args.updates)) {
+      if (value !== undefined) {
+        updateData[key] = value;
+      }
+    }
+
+    if (Object.keys(updateData).length === 0) return args.taskId;
+
+    console.log(`[Tasks.updateTaskFields] Actualizando task ${args.taskId}:`, Object.keys(updateData));
+    await ctx.db.patch(args.taskId, updateData);
+    return args.taskId;
+  },
+});
+
 // Mutation para actualizar el estado de una task
 export const updateTaskStatus = mutation({
   args: {

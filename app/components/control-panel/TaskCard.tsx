@@ -71,7 +71,7 @@ export function TaskCard({ task, onClick }: TaskCardProps) {
   return (
     <button
       onClick={onClick}
-      className="w-full text-left bg-card border border-border rounded-xl p-4 hover:shadow-md hover:border-primary/30 transition-all duration-200 group"
+      className="w-full text-left bg-card border border-border rounded-xl p-4 hover:shadow-md hover:border-primary/30 transition-all duration-200 group cursor-pointer"
     >
       {/* Header: Title + Priority */}
       <div className="flex items-start justify-between gap-2 mb-2">
