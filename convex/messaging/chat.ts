@@ -162,7 +162,7 @@ export const generateResponseAsync = internalAction({
     // PASO 0: Consultar estado de proveedores (UNA sola vez)
     // Usa llmConfig table via isProviderEnabled (convex/data/llmConfig.ts)
     // =====================================================
-    const geminiEnabled = await ctx.runQuery(internal.data.llmConfig.isProviderEnabled, { provider: "gemini" });
+    let geminiEnabled = await ctx.runQuery(internal.data.llmConfig.isProviderEnabled, { provider: "gemini" });
     const openaiEnabled = await ctx.runQuery(internal.data.llmConfig.isProviderEnabled, { provider: "openai" });
     console.log(`[GenerateResponse] 🔧 Proveedores: Gemini=${geminiEnabled}, OpenAI=${openaiEnabled}`);
 
@@ -217,7 +217,7 @@ export const generateResponseAsync = internalAction({
             const classification = await orchestratorAgent.generateObject(
               ctx,
               { threadId },
-              { promptMessageId, schema: intentSchema },
+              { promptMessageId, schema: intentSchema, maxRetries: 0 },
               { storageOptions: { saveMessages: "none" } }
             );
             classificationResult = classification.object as { intent: string };
@@ -237,6 +237,10 @@ export const generateResponseAsync = internalAction({
               resolved: false,
               fallbackUsed: undefined,
             });
+
+            // Compartir estado de fallo: si Gemini falló aquí, no reintentar en fase de agente
+            geminiEnabled = false;
+            console.log("[GenerateResponse] 🔄 Gemini marcado como caído para esta request");
           }
         }
 
@@ -253,6 +257,7 @@ export const generateResponseAsync = internalAction({
             const fallbackResult = await generateObject({
               ...orchArgs,
               schema: intentSchema,
+              maxRetries: 0,
             });
             classificationResult = fallbackResult.object as { intent: string };
             logLLMAttempt(openaiConfig.provider, openaiConfig.modelId, true, Date.now() - openaiStart);
@@ -361,6 +366,7 @@ export const generateResponseAsync = internalAction({
           ...preparedArgs,
           model: geminiConfig.model,
           providerOptions: geminiConfig.providerOptions as any,
+          maxRetries: 0,
         });
         
         usedProvider = "gemini";
@@ -396,6 +402,7 @@ export const generateResponseAsync = internalAction({
         result = await generateText({
           ...preparedArgs,
           model: openaiConfig.model,
+          maxRetries: 0,
         });
         
         usedProvider = "openai";
