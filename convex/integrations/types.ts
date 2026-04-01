@@ -7,6 +7,16 @@
 
 // ==================== TIPOS DE DATOS EXTERNOS ====================
 
+/** Usuario tal como existe en el sistema externo */
+export interface ExternalUser {
+  id: number;
+  firstName: string;
+  lastName: string;
+  email: string;
+  roleId?: number;
+  positionName?: string;
+}
+
 /** Cliente/Marca tal como existe en el sistema externo */
 export interface ExternalClient {
   id: number;
@@ -85,6 +95,12 @@ export interface UpdateTaskInput {
 export interface ProjectManagementProvider {
   /** Nombre identificador del provider (ej: "cor", "trello", "noop") */
   name: string;
+
+  /**
+   * Buscar usuarios por nombre en el sistema externo.
+   * Retorna un array de usuarios que coinciden con el nombre.
+   */
+  searchUsersByName(name: string): Promise<ExternalUser[]>;
 
   /**
    * Buscar un cliente/marca por nombre en el sistema externo.

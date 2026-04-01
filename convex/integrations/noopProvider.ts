@@ -11,6 +11,7 @@
 
 import type {
   ProjectManagementProvider,
+  ExternalUser,
   ExternalClient,
   ExternalProject,
   ExternalTask,
@@ -26,6 +27,11 @@ import type {
 export function createNoopProvider(): ProjectManagementProvider {
   return {
     name: "noop",
+
+    async searchUsersByName(_name: string): Promise<ExternalUser[]> {
+      console.log("[Noop Provider] searchUsersByName — no hay integración externa configurada");
+      return [];
+    },
 
     async searchClient(_name: string): Promise<ExternalClient | null> {
       console.log("[Noop Provider] searchClient — no hay integración externa configurada");

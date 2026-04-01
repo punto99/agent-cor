@@ -14,6 +14,7 @@
 
 import type {
   ProjectManagementProvider,
+  ExternalUser,
   ExternalClient,
   ExternalProject,
   ExternalTask,
@@ -199,6 +200,40 @@ async function getFirstActiveFeeForClient(clientId: number): Promise<number | nu
 export function createCORProvider(): ProjectManagementProvider {
   return {
     name: "cor",
+
+    // ==================== SEARCH USERS BY NAME ====================
+
+    async searchUsersByName(name: string): Promise<ExternalUser[]> {
+      console.log(`[COR Provider] 🔍 Buscando usuarios por nombre: "${name}"`);
+
+      try {
+        const encodedName = encodeURIComponent(name);
+        const response = await corApiFetch(`/users/search-by-name/${encodedName}`);
+
+        if (!response.ok) {
+          const errorText = await response.text();
+          console.error(`[COR Provider] ❌ Error buscando usuarios: ${response.status} - ${errorText}`);
+          return [];
+        }
+
+        const result = await response.json();
+        const users = Array.isArray(result) ? result : (result.data || []);
+
+        console.log(`[COR Provider] ✅ Encontrados ${users.length} usuarios para "${name}"`);
+
+        return users.map((u: Record<string, unknown>) => ({
+          id: u.id as number,
+          firstName: (u.first_name as string) || "",
+          lastName: (u.last_name as string) || "",
+          email: (u.email as string) || "",
+          roleId: u.role_id as number | undefined,
+          positionName: u.position_name as string | undefined,
+        }));
+      } catch (error) {
+        console.error(`[COR Provider] ❌ Error en searchUsersByName:`, error);
+        return [];
+      }
+    },
 
     // ==================== SEARCH CLIENT ====================
 

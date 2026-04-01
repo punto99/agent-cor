@@ -54,6 +54,7 @@ export default defineSchema({
     threadId: v.string(),
     fileIds: v.optional(v.array(v.string())),
     createdBy: v.optional(v.string()),
+    projectId: v.optional(v.id("projects")),   // Referencia al proyecto LOCAL en Convex
     // === Campos de sincronización con herramienta externa (COR, Trello, etc.) ===
     corTaskId: v.optional(v.string()),
     corProjectId: v.optional(v.number()),
@@ -171,4 +172,86 @@ export default defineSchema({
       dimensions: 1536,
       filterFields: ["documentId", "pageNumber"],
     }),
+
+  // =====================================================
+  // COR Users — Cache de usuarios resueltos en COR
+  // =====================================================
+  corUsers: defineTable({
+    userId: v.id("users"),              // Referencia al user de Convex (authTables)
+    corUserId: v.number(),              // ID del usuario en COR
+    corFirstName: v.string(),
+    corLastName: v.string(),
+    corEmail: v.string(),
+    corRoleId: v.optional(v.number()),  // 1=C-Level, 2=Director, 3=PM, 4=Collaborator, 5=Freelancer, 6=Client
+    corPositionName: v.optional(v.string()),
+    resolvedAt: v.number(),             // Timestamp de cuándo se resolvió por primera vez
+    lastVerifiedAt: v.optional(v.number()),
+  })
+    .index("by_userId", ["userId"])
+    .index("by_corUserId", ["corUserId"]),
+
+  // =====================================================
+  // COR Clients — Clientes sincronizados desde COR
+  // =====================================================
+  corClients: defineTable({
+    corClientId: v.number(),                // ID del cliente en COR
+    name: v.string(),                       // Nombre del cliente
+    businessName: v.optional(v.string()),
+    nameContact: v.optional(v.string()),
+    lastNameContact: v.optional(v.string()),
+    emailContact: v.optional(v.string()),
+    website: v.optional(v.string()),
+    description: v.optional(v.string()),
+    phone: v.optional(v.string()),
+    syncedAt: v.number(),                   // Última sincronización con COR
+  })
+    .index("by_corClientId", ["corClientId"])
+    .index("by_name", ["name"]),
+
+  // =====================================================
+  // Client-User Assignments — Qué usuarios pueden usar qué clientes
+  // =====================================================
+  clientUserAssignments: defineTable({
+    clientId: v.id("corClients"),           // Referencia al cliente local
+    userId: v.id("users"),                  // Referencia al usuario local
+    assignedAt: v.number(),
+    assignedBy: v.optional(v.id("users")),  // Quién lo asignó (admin/PM)
+  })
+    .index("by_client", ["clientId"])
+    .index("by_user", ["userId"])
+    .index("by_client_and_user", ["clientId", "userId"]),
+
+  // =====================================================
+  // Projects — Proyectos locales (Client → Project → Task)
+  // =====================================================
+  projects: defineTable({
+    // === Campos 1:1 con COR ===
+    name: v.string(),
+    brief: v.optional(v.string()),
+    startDate: v.optional(v.string()),         // YYYY-MM-DD
+    endDate: v.optional(v.string()),           // YYYY-MM-DD (deadline)
+    status: v.string(),                        // "active" | "finished" | "suspended"
+    estimatedTime: v.optional(v.number()),     // Horas estimadas
+    billable: v.optional(v.boolean()),
+    incomeType: v.optional(v.string()),        // "fee" | "one_time" | "hourly_rate" | "contract"
+    deliverables: v.optional(v.string()),
+    pmId: v.optional(v.number()),              // PM en COR (opcional)
+    brandId: v.optional(v.number()),           // Marca en COR (opcional)
+    productId: v.optional(v.number()),         // Producto en COR (opcional)
+    // === Campos internos (no van a COR) ===
+    clientId: v.optional(v.id("corClients")),  // Referencia al cliente LOCAL
+    createdBy: v.optional(v.string()),         // Id<"users"> como string
+    threadId: v.optional(v.string()),          // Thread que originó este proyecto
+    // === Campos de sincronización con COR ===
+    corProjectId: v.optional(v.number()),
+    corClientId: v.optional(v.number()),       // Denormalized para fast publish
+    corSyncStatus: v.optional(v.string()),     // "pending" | "syncing" | "synced" | "error"
+    corSyncError: v.optional(v.string()),
+    corSyncedAt: v.optional(v.number()),
+  })
+    .index("by_clientId", ["clientId"])
+    .index("by_corProjectId", ["corProjectId"])
+    .index("by_createdBy", ["createdBy"])
+    .index("by_threadId", ["threadId"])
+    .index("by_corSyncStatus", ["corSyncStatus"]),
 });
