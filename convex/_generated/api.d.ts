@@ -12,6 +12,7 @@ import type * as agents_agent from "../agents/agent.js";
 import type * as agents_documentSearchAgent from "../agents/documentSearchAgent.js";
 import type * as agents_evaluatorAgentAction from "../agents/evaluatorAgentAction.js";
 import type * as agents_orchestratorAgent from "../agents/orchestratorAgent.js";
+import type * as agents_priorityAgent from "../agents/priorityAgent.js";
 import type * as agents_reviewerAgent from "../agents/reviewerAgent.js";
 import type * as auth from "../auth.js";
 import type * as data_evaluation from "../data/evaluation.js";
@@ -54,6 +55,7 @@ declare const fullApi: ApiFromModules<{
   "agents/documentSearchAgent": typeof agents_documentSearchAgent;
   "agents/evaluatorAgentAction": typeof agents_evaluatorAgentAction;
   "agents/orchestratorAgent": typeof agents_orchestratorAgent;
+  "agents/priorityAgent": typeof agents_priorityAgent;
   "agents/reviewerAgent": typeof agents_reviewerAgent;
   auth: typeof auth;
   "data/evaluation": typeof data_evaluation;

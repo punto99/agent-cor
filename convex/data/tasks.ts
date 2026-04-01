@@ -318,6 +318,29 @@ Si necesitas crear un nuevo requerimiento, por favor inicia una nueva conversaci
     const userId = await ctx.runQuery(internal.data.tasks.getUserIdFromThread, { threadId });
     console.log(`[CreateTask] UserId: ${userId || "no encontrado"}`);
 
+    // Clasificar prioridad estratégica (no bloquea la creación si falla)
+    let strategicPriority: string | undefined;
+    try {
+      console.log("[CreateTask] 🎯 Clasificando prioridad estratégica...");
+      const classification = await ctx.runAction(internal.agents.priorityAgent.classifyPriorityAction, {
+        title: args.title,
+        requestType: args.requestType,
+        brand: args.brand,
+        objective: args.objective,
+        keyMessage: args.keyMessage,
+        kpis: args.kpis,
+        deadline: args.deadline,
+        budget: args.budget,
+        approvers: args.approvers,
+      });
+      if (classification) {
+        strategicPriority = classification;
+        console.log(`[CreateTask] ✅ Prioridad estratégica: ${strategicPriority}`);
+      }
+    } catch (error) {
+      console.log("[CreateTask] ⚠️ No se pudo clasificar prioridad estratégica (continuando):", error);
+    }
+
     // Construir description con toda la info del brief
     const description = buildBriefDescription({
       requestType: args.requestType,
@@ -327,6 +350,7 @@ Si necesitas crear un nuevo requerimiento, por favor inicia una nueva conversaci
       kpis: args.kpis,
       budget: args.budget,
       approvers: args.approvers,
+      strategicPriority,
     });
 
     // Crear task SOLO en Convex (sin sincronización con COR)

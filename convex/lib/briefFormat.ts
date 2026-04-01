@@ -31,6 +31,7 @@ export function buildBriefDescription(fields: {
   budget?: string;
   approvers?: string;
   additionalNotes?: string;
+  strategicPriority?: string;
 }): string {
   const lines: string[] = [];
 
@@ -41,6 +42,7 @@ export function buildBriefDescription(fields: {
   if (fields.kpis) lines.push(`KPIs: ${fields.kpis}`);
   if (fields.budget) lines.push(`Presupuesto: ${fields.budget}`);
   if (fields.approvers) lines.push(`Aprobadores: ${fields.approvers}`);
+  if (fields.strategicPriority) lines.push(`Prioridad Estratégica: ${fields.strategicPriority}`);
   if (fields.additionalNotes) lines.push(`\nNotas adicionales:\n${fields.additionalNotes}`);
 
   return lines.join("\n");
