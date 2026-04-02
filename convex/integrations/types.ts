@@ -86,6 +86,22 @@ export interface UpdateTaskInput {
   status?: string;
 }
 
+export interface TaskMessageAttachment {
+  name: string;
+  url: string;
+  type: string;
+  source?: string;
+}
+
+export interface PostTaskMessageInput {
+  /** ID de la task en el sistema externo */
+  taskId: number;
+  /** Texto del mensaje */
+  message: string;
+  /** Archivos adjuntos */
+  attachments?: TaskMessageAttachment[];
+}
+
 // ==================== INTERFACE PRINCIPAL ====================
 
 /**
@@ -142,6 +158,15 @@ export interface ProjectManagementProvider {
   updateTask(
     taskId: number,
     data: UpdateTaskInput
+  ): Promise<{ success: boolean; error?: string }>;
+
+  /**
+   * Enviar un mensaje con attachments opcionales a una task.
+   * En COR: POST /tasks/{task_id}/messages
+   * Útil para adjuntar archivos del brief a la task publicada.
+   */
+  postTaskMessage(
+    data: PostTaskMessageInput
   ): Promise<{ success: boolean; error?: string }>;
 
   /**

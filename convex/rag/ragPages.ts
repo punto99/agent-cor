@@ -2,6 +2,7 @@
 // CRUD para la tabla ragPages - Páginas de documentos con embeddings
 import { query, mutation, internalQuery } from "../_generated/server";
 import { v } from "convex/values";
+import { cosineSimilarity } from "../lib/math";
 
 // Obtener páginas de un documento
 export const getByDocument = query({
@@ -164,24 +165,7 @@ export const searchByImageEmbedding = internalQuery({
   },
 });
 
-// Utilidad: Similitud coseno
-function cosineSimilarity(a: number[], b: number[]): number {
-  if (a.length !== b.length || a.length === 0) return 0;
-  
-  let dotProduct = 0;
-  let normA = 0;
-  let normB = 0;
-  
-  for (let i = 0; i < a.length; i++) {
-    dotProduct += a[i] * b[i];
-    normA += a[i] * a[i];
-    normB += b[i] * b[i];
-  }
-  
-  const denominator = Math.sqrt(normA) * Math.sqrt(normB);
-  return denominator === 0 ? 0 : dotProduct / denominator;
-}
-
+// cosineSimilarity importada desde lib/math.ts
 // Query interna para obtener URL de imagen (para uso en actions)
 export const getImageUrlInternal = internalQuery({
   args: { pageId: v.id("ragPages") },

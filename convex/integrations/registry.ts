@@ -57,12 +57,3 @@ export function isProjectManagementEnabled(): boolean {
   return integrationConfig.projectManagement.enabled;
 }
 
-/**
- * Obtiene el nombre del provider activo.
- * Útil para logging y para mostrar en la UI ("Crear en COR", "Crear en Trello").
- */
-export function getProviderName(): string {
-  const config = integrationConfig.projectManagement;
-  if (!config.enabled) return "noop";
-  return config.provider;
-}

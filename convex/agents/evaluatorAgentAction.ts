@@ -16,6 +16,7 @@ import {
   logLLMAttempt,
   geminiConfig,
   openaiConfig,
+  withLLMFallback,
 } from "../lib/llmFallback";
 
 // Usar modelo flash que es más eficiente en memoria
@@ -67,8 +68,8 @@ const getTaskInfoTool = createTool({
       return "Error: No se pudo identificar el taskId. Por favor verifica que el mensaje incluya la información de la task.";
     }
     
-    // Buscar la task por ID usando la query en el otro archivo
-    const task = await ctx.runQuery(internal.data.evaluatorQueries.getTaskByIdInternal, {
+    // Buscar la task por ID
+    const task = await ctx.runQuery(internal.data.tasks.getTaskByIdInternal, {
       taskId: taskIdToUse,
     });
     
@@ -191,7 +192,11 @@ export const generateEvaluationAsync = internalAction({
     threadId: v.string(),
     promptMessageId: v.string(),
   },
-  handler: async (ctx, { threadId, promptMessageId }) => {
+  handler: async (ctx, { threadId, promptMessageId }): Promise<{
+    text: string;
+    promptMessageId: string;
+    provider: "gemini" | "openai";
+  }> => {
     const startTime = Date.now();
     console.log("\n========================================");
     console.log("[Evaluator] 🚀 INICIO DE EVALUACIÓN");
@@ -208,99 +213,31 @@ export const generateEvaluationAsync = internalAction({
     );
 
     // Verificar configuración de proveedores
-    const geminiEnabled = await ctx.runQuery(internal.data.llmConfig.isProviderEnabled, { provider: "gemini" });
-    const openaiEnabled = await ctx.runQuery(internal.data.llmConfig.isProviderEnabled, { provider: "openai" });
+    const geminiEnabled: boolean = await ctx.runQuery(internal.data.llmConfig.isProviderEnabled, { provider: "gemini" });
+    const openaiEnabled: boolean = await ctx.runQuery(internal.data.llmConfig.isProviderEnabled, { provider: "openai" });
 
-    let result: Awaited<ReturnType<typeof generateText>> | null = null;
-    let usedProvider: "gemini" | "openai" | null = null;
-    let geminiError: Error | null = null;
-    let openaiError: Error | null = null;
-
-    // Intentar con Gemini primero
-    if (geminiEnabled) {
-      const geminiStart = Date.now();
-      console.log("[Evaluator] 📍 Intentando con Gemini...");
-      
-      try {
-        result = await generateText({
-          ...preparedArgs,
-          model: geminiConfig.model,
-          providerOptions: geminiConfig.providerOptions as any,
-          maxRetries: 0,
-        });
-        
-        usedProvider = "gemini";
-        logLLMAttempt(geminiConfig.provider, geminiConfig.modelId, true, Date.now() - geminiStart);
-        
-      } catch (error) {
-        geminiError = error instanceof Error ? error : new Error(String(error));
-        logLLMAttempt(geminiConfig.provider, geminiConfig.modelId, false, Date.now() - geminiStart);
-        console.error(`[Evaluator] ❌ Gemini falló: ${extractErrorMessage(error)}`);
-        
-        await ctx.runMutation(internal.data.llmConfig.logLLMError, {
-          provider: geminiConfig.provider,
-          model: geminiConfig.modelId,
-          agentName: "evaluatorAgent",
-          errorType: classifyError(error),
-          errorMessage: extractErrorMessage(error),
-          threadId,
-          resolved: false,
-          fallbackUsed: undefined,
-        });
-      }
-    }
-
-    // Fallback a OpenAI
-    if (!result && openaiEnabled) {
-      const openaiStart = Date.now();
-      console.log("[Evaluator] 📍 Fallback a OpenAI GPT-5.2...");
-      
-      try {
-        result = await generateText({
-          ...preparedArgs,
-          model: openaiConfig.model,
-          maxRetries: 0,
-        });
-        
-        usedProvider = "openai";
-        logLLMAttempt(openaiConfig.provider, openaiConfig.modelId, true, Date.now() - openaiStart);
-        
-        if (geminiError) {
-          await ctx.runMutation(internal.data.llmConfig.logLLMError, {
-            provider: geminiConfig.provider,
-            model: geminiConfig.modelId,
-            agentName: "evaluatorAgent",
-            errorType: classifyError(geminiError),
-            errorMessage: extractErrorMessage(geminiError),
-            threadId,
-            resolved: true,
-            fallbackUsed: openaiConfig.modelId,
-          });
-        }
-        
-      } catch (error) {
-        openaiError = error instanceof Error ? error : new Error(String(error));
-        logLLMAttempt(openaiConfig.provider, openaiConfig.modelId, false, Date.now() - openaiStart);
-        
-        await ctx.runMutation(internal.data.llmConfig.logLLMError, {
-          provider: openaiConfig.provider,
-          model: openaiConfig.modelId,
-          agentName: "evaluatorAgent",
-          errorType: classifyError(error),
-          errorMessage: extractErrorMessage(error),
-          threadId,
-          resolved: false,
-          fallbackUsed: undefined,
-        });
-      }
-    }
-
-    // Si ambos fallan
-    if (!result) {
-      const errorMessage = "Los servicios de evaluación están temporalmente no disponibles. Por favor, intenta de nuevo más tarde.";
-      console.error(`[Evaluator] ❌ TODOS LOS PROVEEDORES FALLARON`);
-      throw new Error(errorMessage);
-    }
+    // Ejecutar con fallback automático Gemini → OpenAI
+    const { result, provider: usedProvider } = await withLLMFallback({
+      agentName: "evaluatorAgent",
+      threadId,
+      geminiEnabled,
+      openaiEnabled,
+      primaryFn: () => generateText({
+        ...preparedArgs,
+        model: geminiConfig.model,
+        providerOptions: geminiConfig.providerOptions as any,
+        maxRetries: 0,
+      }),
+      fallbackFn: () => generateText({
+        ...preparedArgs,
+        model: openaiConfig.model,
+        maxRetries: 0,
+      }),
+      logError: async (log) => {
+        await ctx.runMutation(internal.data.llmConfig.logLLMError, log);
+      },
+      onBothFailed: "Los servicios de evaluación están temporalmente no disponibles. Por favor, intenta de nuevo más tarde.",
+    });
 
     // Guardar resultado
     for (const step of result.steps) {

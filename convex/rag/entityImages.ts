@@ -2,6 +2,7 @@
 // CRUD para la tabla entityImages - Imágenes de entidades extraídas de documentos
 import { query, mutation, internalQuery } from "../_generated/server";
 import { v } from "convex/values";
+import { cosineSimilarity } from "../lib/math";
 
 // Listar todas las imágenes de entidades
 export const list = query({
@@ -195,23 +196,7 @@ export const searchByImageEmbedding = internalQuery({
   },
 });
 
-// Utilidad: Similitud coseno
-function cosineSimilarity(a: number[], b: number[]): number {
-  if (a.length !== b.length || a.length === 0) return 0;
-  
-  let dotProduct = 0;
-  let normA = 0;
-  let normB = 0;
-  
-  for (let i = 0; i < a.length; i++) {
-    dotProduct += a[i] * b[i];
-    normA += a[i] * a[i];
-    normB += b[i] * b[i];
-  }
-  
-  const denominator = Math.sqrt(normA) * Math.sqrt(normB);
-  return denominator === 0 ? 0 : dotProduct / denominator;
-}
+// cosineSimilarity importada desde lib/math.ts
 
 // Query interna para obtener URL de imagen de entidad (para uso en actions)
 export const getImageUrlInternal = internalQuery({

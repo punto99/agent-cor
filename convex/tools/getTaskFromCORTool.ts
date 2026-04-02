@@ -1,8 +1,8 @@
 // convex/tools/getTaskFromCORTool.ts
-// Tool para consultar una task directamente desde COR
+// Tool para consultar una task directamente desde el sistema externo
 import { createTool } from "@convex-dev/agent";
 import { z } from "zod";
-import { internal } from "../_generated/api";
+import { getProjectManagementProvider } from "../integrations/registry";
 
 export const getTaskFromCORTool = createTool({
   description: `Consultar los detalles de una task directamente desde el sistema COR.
@@ -19,12 +19,11 @@ export const getTaskFromCORTool = createTool({
     console.log(`[GetTaskFromCOR] 🔍 Consultando task COR ID: ${args.corTaskId}`);
     
     try {
-      const result = await ctx.runAction(internal.integrations.cor.getTaskFromCOR, {
-        corTaskId: parseInt(args.corTaskId),
-      });
+      const provider = getProjectManagementProvider();
+      const task = await provider.getTask(parseInt(args.corTaskId));
       
-      if (!result.success || !result.task) {
-        console.log(`[GetTaskFromCOR] ❌ Task no encontrada: ${result.error}`);
+      if (!task) {
+        console.log(`[GetTaskFromCOR] ❌ Task no encontrada`);
         return `No se encontró ninguna task con el COR ID: ${args.corTaskId}
 
 Posibles causas:
@@ -35,11 +34,10 @@ Posibles causas:
 Por favor verifica el ID e intenta de nuevo.`;
       }
       
-      const task = result.task;
       console.log(`[GetTaskFromCOR] ✅ Task encontrada:`, task.title);
       
       // Mapear prioridad a texto legible
-      const prioridadTexto = ["Baja", "Media", "Alta", "Urgente"][task.priority] || "Media";
+      const prioridadTexto = ["Baja", "Media", "Alta", "Urgente"][task.priority ?? 1] || "Media";
       
       // Formatear fecha si existe
       let deadlineTexto = "Sin fecha límite";
@@ -57,11 +55,10 @@ Por favor verifica el ID e intenta de nuevo.`;
 
 **Título:** ${task.title}
 **Descripción:** ${task.description || "Sin descripción"}
-**Estado:** ${task.status}
+**Estado:** ${task.status || "Sin estado"}
 **Prioridad:** ${prioridadTexto}
 **Deadline:** ${deadlineTexto}
-**Proyecto ID:** ${task.project_id}
-**Archivada:** ${task.archived ? "Sí" : "No"}
+**Proyecto ID:** ${task.projectId}
 
 ¿Qué te gustaría hacer con esta task?`;
     } catch (error) {

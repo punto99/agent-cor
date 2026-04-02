@@ -48,25 +48,6 @@ export function buildBriefDescription(fields: {
   return lines.join("\n");
 }
 
-// ==================== MAPEO DE ESTADOS ====================
-
-/**
- * Estados válidos de COR. Usamos los mismos en Convex.
- * nueva | en_proceso | estancada | finalizada
- */
-export const COR_STATUSES = ["nueva", "en_proceso", "estancada", "finalizada"] as const;
-export type CORStatus = typeof COR_STATUSES[number];
-
-/**
- * Labels legibles para los estados de COR (para UI)
- */
-export const COR_STATUS_LABELS: Record<CORStatus, string> = {
-  nueva: "Nueva",
-  en_proceso: "En proceso",
-  estancada: "Estancada",
-  finalizada: "Finalizada",
-};
-
 // ==================== MAPEO DE PRIORIDADES ====================
 
 /** Labels legibles para la prioridad numérica */

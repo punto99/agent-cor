@@ -1,18 +1,20 @@
 // convex/tools/reviewBriefTool.ts
-// Tool de validación rápida del brief (supervisor inline)
+// Tool de validación del brief usando el reviewerAgent (agente supervisor de calidad)
 import { createTool } from "@convex-dev/agent";
 import { z } from "zod";
+import { internal } from "../_generated/api";
 import { reviewerAgent } from "../agents/reviewerAgent";
 
-// Action interna para generar respuesta del reviewer (preservada por backward compat)
+// Action interna para generar respuesta del reviewer
 export const generateReviewerResponse = reviewerAgent.asTextAction({});
 
-// Tool que el briefAgent usa para validar si la información recolectada es suficiente
-// OPTIMIZADO: Validación rápida en línea sin llamar a otro agente
+// Tool que el briefAgent usa para validar si la información recolectada es suficiente.
+// Delega la evaluación al reviewerAgent, que tiene instrucciones detalladas
+// para analizar la calidad del brief y responder en formato JSON estructurado.
 export const reviewBriefTool = createTool({
-  description: `Validar rapidamente si la informacion recolectada es suficiente para crear el brief.
+  description: `Validar si la informacion recolectada es suficiente para crear el brief.
   Usar esta herramienta ANTES de mostrar el resumen final al usuario.
-  Verifica que los campos obligatorios esten completos.`,
+  Verifica que los campos obligatorios esten completos y evalua la calidad general.`,
   args: z.object({
     requestType: z.string().describe("Tipo de requerimiento recolectado"),
     brand: z.string().describe("Marca o empresa recolectada"),
@@ -25,57 +27,48 @@ export const reviewBriefTool = createTool({
     hasFiles: z.boolean().optional().describe("Si el usuario adjunto archivos"),
   }),
   handler: async (ctx, args): Promise<string> => {
-    console.log("[ReviewTool] Validando brief (modo rapido)...");
+    console.log("[ReviewTool] Validando brief con reviewerAgent...");
     
-    // OPTIMIZACIÓN: Validación simple en línea sin llamar a otro agente
-    const observaciones: string[] = [];
-    const sugerencias: string[] = [];
-    let confianza = 100;
+    // Construir prompt con los datos del brief para el agente reviewer
+    const briefSummary = [
+      `Tipo de requerimiento: ${args.requestType}`,
+      `Marca: ${args.brand}`,
+      `Objetivo: ${args.objective || "No proporcionado"}`,
+      `Mensaje clave: ${args.keyMessage || "No proporcionado"}`,
+      `KPIs: ${args.kpis || "No proporcionados"}`,
+      `Timing/Deadline: ${args.deadline || "No proporcionado"}`,
+      `Presupuesto: ${args.budget || "No proporcionado"}`,
+      `Aprobadores: ${args.approvers || "No proporcionados"}`,
+      `Archivos adjuntos: ${args.hasFiles ? "Sí" : "No"}`,
+    ].join("\n");
     
-    // Verificar campos obligatorios
-    const camposObligatoriosCompletos = !!(args.requestType && args.brand);
+    const prompt = `Evalúa el siguiente brief recolectado y responde en el formato JSON especificado en tus instrucciones:\n\n${briefSummary}`;
     
-    if (!camposObligatoriosCompletos) {
-      observaciones.push("Faltan campos obligatorios");
+    try {
+      // Llamar al reviewerAgent via su action registrada
+      const result = await ctx.runAction(
+        internal.tools.reviewBriefTool.generateReviewerResponse,
+        { prompt }
+      );
+      console.log("[ReviewTool] ✅ Evaluación del reviewer completada");
+      return `EVALUACION DEL SUPERVISOR:\n\n${result.text}`;
+    } catch (error) {
+      console.error("[ReviewTool] ❌ Error al llamar reviewerAgent:", error);
+      // Fallback: si el reviewer falla, hacer validación básica
+      const camposObligatoriosCompletos = !!(args.requestType && args.brand);
+      const sugerencias: string[] = [];
       if (!args.requestType) sugerencias.push("Falta el tipo de requerimiento");
       if (!args.brand) sugerencias.push("Falta la marca");
-      confianza = 0;
-    } else {
-      observaciones.push("Campos obligatorios completos");
+      const fallback = {
+        aprobado: camposObligatoriosCompletos,
+        campos_obligatorios_completos: camposObligatoriosCompletos,
+        observaciones: [camposObligatoriosCompletos
+          ? "Campos obligatorios completos (evaluación de fallback)"
+          : "Faltan campos obligatorios"],
+        sugerencias,
+        confianza: camposObligatoriosCompletos ? 70 : 0,
+      };
+      return `EVALUACION DEL SUPERVISOR (fallback):\n\n${JSON.stringify(fallback, null, 2)}`;
     }
-    
-    // Evaluar calidad de la información
-    let camposOpcionales = 0;
-    if (args.objective) camposOpcionales++;
-    if (args.keyMessage) camposOpcionales++;
-    if (args.kpis) camposOpcionales++;
-    if (args.deadline) camposOpcionales++;
-    if (args.budget) camposOpcionales++;
-    if (args.approvers) camposOpcionales++;
-    if (args.hasFiles) camposOpcionales++;
-    
-    if (camposOpcionales >= 4) {
-      observaciones.push("Informacion muy completa");
-      confianza = Math.min(confianza, 95);
-    } else if (camposOpcionales >= 2) {
-      observaciones.push("Informacion adecuada");
-      confianza = Math.min(confianza, 85);
-    } else if (camposObligatoriosCompletos) {
-      observaciones.push("Informacion basica, podria mejorarse");
-      sugerencias.push("Considera solicitar mas detalles como objetivo, timing o presupuesto");
-      confianza = Math.min(confianza, 70);
-    }
-    
-    const resultado = {
-      aprobado: camposObligatoriosCompletos,
-      campos_obligatorios_completos: camposObligatoriosCompletos,
-      observaciones,
-      sugerencias,
-      confianza,
-    };
-    
-    console.log("[ReviewTool] ✅ Validacion completada:", JSON.stringify(resultado));
-    
-    return `EVALUACION DEL SUPERVISOR:\n\n${JSON.stringify(resultado, null, 2)}`;
   },
 });

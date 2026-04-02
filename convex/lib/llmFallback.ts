@@ -119,3 +119,152 @@ export function logLLMAttempt(provider: LLMProvider, model: string, success: boo
   const duration = durationMs ? ` (${durationMs}ms)` : "";
   console.log(`[LLM] ${status} ${provider}/${model}${duration}`);
 }
+
+// ==================== WRAPPER DE FALLBACK ====================
+
+/**
+ * Datos del error LLM para logging vía ctx.runMutation
+ */
+export interface LLMErrorLog {
+  provider: LLMProvider;
+  model: string;
+  agentName: string;
+  errorType: LLMError["errorType"];
+  errorMessage: string;
+  threadId: string;
+  resolved: boolean;
+  fallbackUsed: string | undefined;
+}
+
+/**
+ * Opciones para withLLMFallback
+ */
+export interface LLMFallbackOptions<T> {
+  /** Nombre del agente para logging */
+  agentName: string;
+  /** Thread ID para contexto de error */
+  threadId: string;
+  /** Si Gemini está habilitado (consultar vía llmConfig.isProviderEnabled) */
+  geminiEnabled: boolean;
+  /** Si OpenAI está habilitado (consultar vía llmConfig.isProviderEnabled) */
+  openaiEnabled: boolean;
+  /** Función que ejecuta el LLM con el modelo primario (Gemini) */
+  primaryFn: () => Promise<T>;
+  /** Función que ejecuta el LLM con el modelo fallback (OpenAI) */
+  fallbackFn: () => Promise<T>;
+  /** Callback para persistir errores LLM (ej: ctx.runMutation(internal.data.llmConfig.logLLMError, log)) */
+  logError?: (log: LLMErrorLog) => Promise<void>;
+  /** Mensaje de error cuando ambos proveedores fallan */
+  onBothFailed?: string;
+}
+
+/**
+ * Resultado de withLLMFallback
+ */
+export interface LLMFallbackResult<T> {
+  /** Resultado de la operación */
+  result: T;
+  /** Provider que se usó */
+  provider: LLMProvider;
+  /** Si el primario falló y se usó fallback */
+  usedFallback: boolean;
+}
+
+/**
+ * Ejecuta una operación LLM con fallback automático: Gemini → OpenAI.
+ * 
+ * Maneja: timing, logging, clasificación de errores, y reporte de fallback.
+ * El caller solo necesita proveer las funciones primary/fallback y el callback de log.
+ *
+ * Ejemplo de uso:
+ * ```
+ * const { result, provider } = await withLLMFallback({
+ *   agentName: "evaluatorAgent",
+ *   threadId,
+ *   geminiEnabled, openaiEnabled,
+ *   primaryFn: () => generateText({ ...args, model: geminiConfig.model }),
+ *   fallbackFn: () => generateText({ ...args, model: openaiConfig.model }),
+ *   logError: async (log) => ctx.runMutation(internal.data.llmConfig.logLLMError, log),
+ * });
+ * ```
+ */
+export async function withLLMFallback<T>(
+  opts: LLMFallbackOptions<T>
+): Promise<LLMFallbackResult<T>> {
+  const { agentName, threadId, logError } = opts;
+  let primaryError: Error | null = null;
+
+  // 1. Intentar con el modelo primario (Gemini)
+  if (opts.geminiEnabled) {
+    const start = Date.now();
+    try {
+      const result = await opts.primaryFn();
+      logLLMAttempt(geminiConfig.provider, geminiConfig.modelId, true, Date.now() - start);
+      return { result, provider: "gemini", usedFallback: false };
+    } catch (err) {
+      primaryError = err instanceof Error ? err : new Error(String(err));
+      logLLMAttempt(geminiConfig.provider, geminiConfig.modelId, false, Date.now() - start);
+      console.error(`[${agentName}] ⚠️ Gemini falló: ${extractErrorMessage(err)}`);
+
+      if (logError) {
+        await logError({
+          provider: geminiConfig.provider,
+          model: geminiConfig.modelId,
+          agentName,
+          errorType: classifyError(err),
+          errorMessage: extractErrorMessage(err),
+          threadId,
+          resolved: false,
+          fallbackUsed: undefined,
+        });
+      }
+    }
+  }
+
+  // 2. Fallback al modelo secundario (OpenAI)
+  if (opts.openaiEnabled) {
+    const start = Date.now();
+    console.log(`[${agentName}] 🔄 Intentando con OpenAI (fallback)...`);
+    try {
+      const result = await opts.fallbackFn();
+      logLLMAttempt(openaiConfig.provider, openaiConfig.modelId, true, Date.now() - start);
+
+      // Marcar el error de Gemini como resuelto con fallback
+      if (primaryError && logError) {
+        await logError({
+          provider: geminiConfig.provider,
+          model: geminiConfig.modelId,
+          agentName,
+          errorType: classifyError(primaryError),
+          errorMessage: extractErrorMessage(primaryError),
+          threadId,
+          resolved: true,
+          fallbackUsed: openaiConfig.modelId,
+        });
+      }
+
+      return { result, provider: "openai", usedFallback: true };
+    } catch (err) {
+      logLLMAttempt(openaiConfig.provider, openaiConfig.modelId, false, Date.now() - start);
+      console.error(`[${agentName}] ❌ OpenAI también falló: ${extractErrorMessage(err)}`);
+
+      if (logError) {
+        await logError({
+          provider: openaiConfig.provider,
+          model: openaiConfig.modelId,
+          agentName,
+          errorType: classifyError(err),
+          errorMessage: extractErrorMessage(err),
+          threadId,
+          resolved: false,
+          fallbackUsed: undefined,
+        });
+      }
+    }
+  }
+
+  // 3. Ambos fallaron
+  throw new Error(
+    opts.onBothFailed || `[${agentName}] Ambos proveedores LLM fallaron`
+  );
+}

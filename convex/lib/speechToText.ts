@@ -4,7 +4,7 @@ import { v } from "convex/values";
 import { action } from "../_generated/server";
 
 // Tipos de audio soportados
-export const SUPPORTED_AUDIO_TYPES = [
+const SUPPORTED_AUDIO_TYPES = [
   'audio/wav',
   'audio/wave',
   'audio/x-wav',
@@ -18,7 +18,7 @@ export const SUPPORTED_AUDIO_TYPES = [
 ];
 
 // Verificar si es un tipo de audio soportado
-export function isAudioType(mimeType: string): boolean {
+function isAudioType(mimeType: string): boolean {
   return SUPPORTED_AUDIO_TYPES.includes(mimeType) || mimeType.startsWith('audio/');
 }
 

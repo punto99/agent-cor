@@ -3,6 +3,7 @@
 import { v } from "convex/values";
 import { workflow } from "./index";
 import { internal } from "../_generated/api";
+import { getProjectManagementProvider } from "../integrations/registry";
 
 // Tipo de resultado del proceso de creación
 export type CreateTaskWorkflowResult = {
@@ -101,24 +102,19 @@ export const createTaskWorkflow = workflow.define({
     let corError: string | undefined;
 
     try {
-      // Intentar crear en COR (el workflow reintentará automáticamente si falla)
-      const corResult = await ctx.runAction(
-        internal.integrations.cor.createTaskInCOR,
-        {
-          localTaskId: taskId,
-          title: args.taskData.title,
-          description: args.taskData.description,
-          deadline: args.taskData.deadline,
-          priority: args.taskData.priority,
-          projectId: args.corProjectId,
-        }
-      );
+      // Crear task en el sistema externo via provider
+      const provider = getProjectManagementProvider();
+      const externalTask = await provider.createTask({
+        projectId: args.corProjectId || 0,
+        title: args.taskData.title,
+        description: args.taskData.description,
+        deadline: args.taskData.deadline,
+        priority: args.taskData.priority,
+      });
 
-      if (corResult.success) {
-        corTaskId = corResult.corTaskId;
-        corSyncStatus = "synced";
-        console.log(`[Workflow] ✅ Task sincronizada con COR: ${corTaskId}`);
-      }
+      corTaskId = externalTask.id;
+      corSyncStatus = "synced";
+      console.log(`[Workflow] ✅ Task sincronizada con COR: ${corTaskId}`);
     } catch (error) {
       // Si COR falla, registrar el error pero no fallar el workflow completo
       // La task ya existe localmente y puede sincronizarse después
@@ -131,7 +127,7 @@ export const createTaskWorkflow = workflow.define({
     console.log("[Workflow] 📍 STEP 4: Actualizando task con resultado de COR...");
     
     await ctx.runMutation(
-      internal.integrations.cor.updateCORSyncStatus,
+      internal.data.tasks.updateCORSyncStatus,
       {
         taskId,
         corTaskId,
@@ -281,23 +277,18 @@ export const createTaskAndSyncWithCOR = internalAction({
     let corError: string | undefined;
 
     try {
-      const corResult = await ctx.runAction(
-        internal.integrations.cor.createTaskInCOR,
-        {
-          localTaskId: taskId,
-          title: args.taskData.title,
-          description: args.taskData.description,
-          deadline: args.taskData.deadline,
-          priority: args.taskData.priority,
-          projectId: args.corProjectId,
-        }
-      );
+      const provider = getProjectManagementProvider();
+      const externalTask = await provider.createTask({
+        projectId: args.corProjectId || 0,
+        title: args.taskData.title,
+        description: args.taskData.description,
+        deadline: args.taskData.deadline,
+        priority: args.taskData.priority,
+      });
 
-      if (corResult.success) {
-        corTaskId = corResult.corTaskId;
-        corSyncStatus = "synced";
-        console.log(`[CreateTask] ✅ Task sincronizada con COR: ${corTaskId}`);
-      }
+      corTaskId = externalTask.id;
+      corSyncStatus = "synced";
+      console.log(`[CreateTask] ✅ Task sincronizada con COR: ${corTaskId}`);
     } catch (error) {
       corError = error instanceof Error ? error.message : String(error);
       console.error("[CreateTask] ❌ Error sincronizando con COR:", corError);
@@ -307,7 +298,7 @@ export const createTaskAndSyncWithCOR = internalAction({
     console.log("[CreateTask] 📍 STEP 4: Actualizando task con resultado de COR...");
     
     await ctx.runMutation(
-      internal.integrations.cor.updateCORSyncStatus,
+      internal.data.tasks.updateCORSyncStatus,
       {
         taskId,
         corTaskId,

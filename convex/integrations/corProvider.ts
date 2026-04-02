@@ -6,10 +6,6 @@
 //
 // Este archivo contiene funciones puras (no Convex primitives).
 // Se invocan desde dentro de Convex actions.
-//
-// NOTA: El archivo cor.ts original se mantiene para backward compatibility
-// con las internalActions existentes. Este provider es la nueva abstracción
-// que se usará para las nuevas funcionalidades (searchClient, createProject).
 // =====================================================
 
 import type {
@@ -21,6 +17,7 @@ import type {
   CreateProjectInput,
   CreateTaskInput,
   UpdateTaskInput,
+  PostTaskMessageInput,
 } from "./types";
 
 // ==================== CONFIGURACIÓN ====================
@@ -481,6 +478,54 @@ export function createCORProvider(): ProjectManagementProvider {
         }
 
         console.log(`[COR Provider] ✅ Task ${taskId} actualizada correctamente`);
+        return { success: true };
+      } catch (error) {
+        return {
+          success: false,
+          error: error instanceof Error ? error.message : String(error),
+        };
+      }
+    },
+
+    // ==================== POST TASK MESSAGE ====================
+
+    async postTaskMessage(
+      data: PostTaskMessageInput
+    ): Promise<{ success: boolean; error?: string }> {
+      console.log(`[COR Provider] 📎 Enviando mensaje a task: ${data.taskId}`);
+      console.log(`[COR Provider]   Mensaje: ${data.message}`);
+      console.log(`[COR Provider]   Attachments: ${data.attachments?.length || 0}`);
+
+      try {
+        const body: Record<string, unknown> = {
+          message: data.message,
+        };
+
+        if (data.attachments && data.attachments.length > 0) {
+          body.attachments = data.attachments.map((att, index) => ({
+            id: index + 1,
+            name: att.name,
+            url: att.url,
+            type: att.type,
+            source: att.source || "convex",
+          }));
+        }
+
+        const response = await corApiFetch(`/tasks/${data.taskId}/messages`, {
+          method: "POST",
+          body: JSON.stringify(body),
+        });
+
+        if (!response.ok) {
+          const errorText = await response.text();
+          console.error(`[COR Provider] ❌ Error enviando mensaje: ${response.status} - ${errorText}`);
+          return {
+            success: false,
+            error: `COR API error: ${response.status} - ${errorText}`,
+          };
+        }
+
+        console.log(`[COR Provider] ✅ Mensaje enviado a task ${data.taskId}`);
         return { success: true };
       } catch (error) {
         return {

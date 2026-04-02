@@ -316,10 +316,11 @@ export const associateFilesToTask = internalAction({
               }
             }
             
-            // Si hay attachments, enviar mensaje a COR
+            // Si hay attachments, enviar mensaje al sistema externo
             if (attachments.length > 0) {
-              await ctx.runAction(internal.integrations.cor.postTaskMessage, {
-                corTaskId: args.corTaskId,
+              const provider = getProjectManagementProvider();
+              await provider.postTaskMessage({
+                taskId: args.corTaskId,
                 message: `📎 Archivos adjuntos del brief (${attachments.length} archivo${attachments.length > 1 ? 's' : ''})`,
                 attachments,
               });
@@ -896,8 +897,8 @@ export const publishTaskToExternalAction = internalAction({
           }
           
           if (attachments.length > 0) {
-            await ctx.runAction(internal.integrations.cor.postTaskMessage, {
-              corTaskId: externalTask.id,
+            await provider.postTaskMessage({
+              taskId: externalTask.id,
               message: `📎 Archivos adjuntos del brief (${attachments.length} archivo${attachments.length > 1 ? 's' : ''})`,
               attachments,
             });
@@ -954,5 +955,29 @@ export const updatePublishStatus = internalMutation({
     
     await ctx.db.patch(args.taskId, updateData as any);
     console.log(`[UpdatePublishStatus] Task ${args.taskId} → ${args.corSyncStatus}`);
+  },
+});
+
+/**
+ * Mutation interna para actualizar el estado de sincronización con el sistema externo.
+ * Equivalente a la anterior updateCORSyncStatus de cor.ts, pero como mutation en tasks.ts.
+ */
+export const updateCORSyncStatus = internalMutation({
+  args: {
+    taskId: v.string(),
+    corTaskId: v.optional(v.number()),
+    syncStatus: v.string(), // "pending" | "synced" | "error"
+    syncError: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    console.log(`[Tasks] Actualizando sync status de task ${args.taskId} a ${args.syncStatus}`);
+    
+    await ctx.db.patch(args.taskId as any, {
+      corTaskId: args.corTaskId ? String(args.corTaskId) : undefined,
+      corSyncStatus: args.syncStatus,
+      corSyncError: args.syncError,
+    });
+    
+    return args.taskId;
   },
 });

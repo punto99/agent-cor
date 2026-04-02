@@ -3,6 +3,7 @@
 import { createTool } from "@convex-dev/agent";
 import { z } from "zod";
 import { internal } from "../_generated/api";
+import { getProjectManagementProvider } from "../integrations/registry";
 
 export const editTaskTool = createTool({
   description: `Editar una task/requerimiento existente en COR y en la base de datos local.
@@ -48,13 +49,12 @@ export const editTaskTool = createTool({
       if (args.corTaskId) {
         console.log(`[EditTask] 🔍 Buscando task por COR ID: ${args.corTaskId}`);
         
-        // Primero, obtener la task desde COR para ver su estado actual
-        const corResult = await ctx.runAction(internal.integrations.cor.getTaskFromCOR, {
-          corTaskId: parseInt(args.corTaskId),
-        });
+        // Obtener la task desde el sistema externo para ver su estado actual
+        const provider = getProjectManagementProvider();
+        const corTask = await provider.getTask(parseInt(args.corTaskId));
         
-        if (!corResult.success || !corResult.task) {
-          console.log(`[EditTask] ❌ Task no encontrada en COR: ${corResult.error}`);
+        if (!corTask) {
+          console.log(`[EditTask] ❌ Task no encontrada en COR`);
           return `No se encontró ninguna task con el COR ID: ${args.corTaskId} en el sistema COR.
 
 Posibles causas:
@@ -65,7 +65,7 @@ Posibles causas:
 Por favor verifica el ID e intenta de nuevo.`;
         }
         
-        corTaskData = corResult.task;
+        corTaskData = corTask;
         console.log(`[EditTask] ✅ Task encontrada en COR:`, JSON.stringify(corTaskData, null, 2));
         
         // Buscar la task local por el COR ID
@@ -96,13 +96,12 @@ Por favor verifica el ID e intenta de nuevo.`;
           return "No tienes permiso para editar esta task. Solo puedes modificar requerimientos creados por ti.";
         }
         
-        // Si la task tiene COR ID, obtener datos de COR
+        // Si la task tiene COR ID, obtener datos del sistema externo
         if (task.corTaskId) {
-          const corResult = await ctx.runAction(internal.integrations.cor.getTaskFromCOR, {
-            corTaskId: parseInt(task.corTaskId),
-          });
-          if (corResult.success && corResult.task) {
-            corTaskData = corResult.task;
+          const provider = getProjectManagementProvider();
+          const corTask = await provider.getTask(parseInt(task.corTaskId));
+          if (corTask) {
+            corTaskData = corTask;
           }
         }
       } 
@@ -114,13 +113,12 @@ Por favor verifica el ID e intenta de nuevo.`;
           taskIdToEdit = task._id;
           console.log(`[EditTask] Task encontrada: ${taskIdToEdit}`);
           
-          // Si la task tiene COR ID, obtener datos de COR
+          // Si la task tiene COR ID, obtener datos del sistema externo
           if (task.corTaskId) {
-            const corResult = await ctx.runAction(internal.integrations.cor.getTaskFromCOR, {
-              corTaskId: parseInt(task.corTaskId),
-            });
-            if (corResult.success && corResult.task) {
-              corTaskData = corResult.task;
+            const provider = getProjectManagementProvider();
+            const corTask = await provider.getTask(parseInt(task.corTaskId));
+            if (corTask) {
+              corTaskData = corTask;
             }
           }
         }
@@ -164,8 +162,8 @@ Por favor verifica el ID e intenta de nuevo.`;
         console.log(`[EditTask] 🔄 Actualizando en COR (Task ID: ${corIdToUpdate})...`);
         
         try {
-          corUpdateResult = await ctx.runAction(internal.integrations.cor.updateTaskInCOR, {
-            corTaskId: parseInt(corIdToUpdate),
+          const provider = getProjectManagementProvider();
+          corUpdateResult = await provider.updateTask(parseInt(corIdToUpdate), {
             title: args.title,
             description: args.description,
             deadline: args.deadline,

@@ -61,7 +61,7 @@ export const resolveUserInCOR = internalAction({
       const corUsers = await provider.searchUsersByName(searchTerm);
 
       if (corUsers.length === 0) {
-        console.log(`[corUsers] ℹ️ No se encontró usuario en COR para "${searchTerm}". El usuario puede no existir en COR.`);
+        console.log(`[corUsers] No se encontró usuario en COR para "${searchTerm}". El usuario puede no existir en COR.`);
         return;
       }
 
@@ -83,11 +83,11 @@ export const resolveUserInCOR = internalAction({
       // (solo si hay un único resultado, para evitar ambigüedades)
       if (!match && corUsers.length === 1) {
         match = corUsers[0];
-        console.log(`[corUsers] ℹ️ Único resultado en COR, usando como match: ${match.firstName} ${match.lastName}`);
+        console.log(`[corUsers] Único resultado en COR, usando como match: ${match.firstName} ${match.lastName}`);
       }
 
       if (!match) {
-        console.log(`[corUsers] ℹ️ ${corUsers.length} resultados en COR para "${searchTerm}" pero ninguno coincide por email/nombre exacto.`);
+        console.log(`[corUsers] ${corUsers.length} resultados en COR para "${searchTerm}" pero ninguno coincide por email/nombre exacto.`);
         return;
       }
 
@@ -125,7 +125,7 @@ export const verifyUserInCOR = internalAction({
       });
 
       if (!corUser) {
-        console.log(`[corUsers] ℹ️ No hay registro de COR para usuario ${args.userId}. Nada que verificar.`);
+        console.log(`[corUsers] No hay registro de COR para usuario ${args.userId}. Nada que verificar.`);
         return;
       }
 
