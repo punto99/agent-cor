@@ -97,6 +97,14 @@ export interface TenantConfig {
     };
   };
 
+  // Agentes habilitados para este tenant
+  // NOTA: Debe coincidir con enabledAgents en convex/lib/serverConfig.ts
+  enabledAgents: {
+    orchestrator: boolean;
+    brief: boolean;
+    documentSearch: boolean;
+  };
+
   // Configuración de la UI
   ui: {
     welcomeMessage: string;
@@ -183,6 +191,13 @@ const activeTenantConfig: TenantConfig = {
     reviewer: {
       name: `Supervisor de Calidad ${CLIENT}`,
     },
+  },
+
+  // Agentes habilitados — debe coincidir con convex/lib/serverConfig.ts
+  enabledAgents: {
+    orchestrator: true,   // true por default, false para clientes sin orquestador
+    brief: true,
+    documentSearch: true,
   },
 
   ui: {

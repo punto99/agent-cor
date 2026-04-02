@@ -24,6 +24,9 @@ export const ACTIVE_TENANT = CLIENT_ID;
  * Controla qué agentes están activos para este tenant.
  * - Si solo 1 agente especializado está habilitado, el orquestador se salta.
  * - Si ≥2 están habilitados, el orquestador clasifica y enruta.
+ * 
+ * IMPORTANTE: Al forkear, mantener sincronizado con enabledAgents
+ * en config/tenant.config.ts (configuración del frontend).
  */
 export const enabledAgents = {
   orchestrator: true,

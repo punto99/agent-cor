@@ -312,8 +312,11 @@ export const generateResponseAsync = internalAction({
         console.error(`[GenerateResponse] ⚠️ Orquestador falló, usando briefAgent por defecto: ${extractErrorMessage(error)}`);
         selectedAgentKey = "brief";
       }
-    } else {
+    }
+    // Cuando orquestador está deshabilitado explícitamente
+    else if (!enabledAgents.orchestrator) {
       console.log("[GenerateResponse] ⚡ Orquestador deshabilitado, usando briefAgent por defecto");
+      selectedAgentKey = "brief";
     }
 
     // Seleccionar el agente concreto

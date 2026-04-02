@@ -5,6 +5,7 @@ import { useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import { TaskBriefContent } from "../task/TaskBriefContent";
+import { ProjectBriefContent } from "../task/ProjectBriefContent";
 import { getStatusColor, getStatusDisplay } from "../task/types";
 import type { Task } from "../task/types";
 import { clientConfig } from "@/config/tenant.config";
@@ -24,6 +25,7 @@ interface TaskDetailDialogProps {
     corClientId?: number;
     corClientName?: string;
     corSyncError?: string;
+    projectId?: Id<"projects">;
   };
   onClose: () => void;
   /** Callback cuando la publicación se completa (éxito o error) */
@@ -51,6 +53,12 @@ export function TaskDetailDialog({
 
   // Tracking: saber si el usuario inició la publicación desde ESTE dialog
   const publishInitiatedRef = useRef(false);
+
+  // Obtener el proyecto asociado a la task (si tiene projectId)
+  const project = useQuery(
+    api.data.projects.getProject,
+    task.projectId ? { projectId: task.projectId } : "skip",
+  );
 
   const showPublishButton = clientConfig.ui.showPublishToExternalTool;
   const toolName = clientConfig.ui.externalToolName;
@@ -130,8 +138,23 @@ export function TaskDetailDialog({
           </button>
         </div>
 
-        {/* Body — reusa TaskBriefContent */}
+        {/* Body — Proyecto + Task */}
         <div className="flex-1 min-h-0 overflow-y-auto">
+          {/* Sección de Proyecto (si existe) */}
+          {project && (
+            <div className="p-4 pb-2">
+              <ProjectBriefContent
+                project={project}
+                editable={syncStatus !== "syncing"}
+                syncStatus={project.corSyncStatus || "pending"}
+              />
+            </div>
+          )}
+
+          {/* Separador entre proyecto y tarea */}
+          {project && <div className="mx-4 border-t border-border" />}
+
+          {/* Sección de Tarea */}
           <TaskBriefContent
             task={liveTask ?? task}
             editable={syncStatus !== "syncing"}

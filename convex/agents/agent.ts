@@ -3,7 +3,7 @@
 import { Agent } from "@convex-dev/agent";
 import { components } from "../_generated/api";
 import { google } from "@ai-sdk/google";
-import { createTaskTool, reviewBriefTool, editTaskTool, getTaskTool, nowTool, getTaskFromCORTool, searchClientInCORTool } from "../data/tasks";
+import { createTaskTool, reviewBriefTool, editTaskTool, getTaskTool, nowTool, getTaskFromCORTool, searchClientInCORTool } from "../tools";
 import { agentConfig, getBriefAgentInstructions } from "../lib/serverConfig";
 import { isProjectManagementEnabled } from "../integrations/registry";
 
