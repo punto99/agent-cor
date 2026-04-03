@@ -1,5 +1,5 @@
 // convex/chat.ts
-// Funciones para manejar conversaciones con el agente de Brief
+// Funciones para manejar conversaciones con el sistema multi-agente
 import { v } from "convex/values";
 import { mutation, query, internalAction } from "../_generated/server";
 import { briefAgent } from "../agents/agent";

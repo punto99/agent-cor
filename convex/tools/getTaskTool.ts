@@ -13,7 +13,8 @@ export const getTaskTool = createTool({
   
   IMPORTANTE: Usar esta herramienta ANTES de editar para conocer los valores actuales.`,
   args: z.object({
-    taskId: z.string().optional().describe("ID de la task a consultar (opcional si se busca por thread)"),
+    corTaskId: z.string().optional().describe("ID de la task en COR (ej: 11301144) - PREFERIDO"),
+    taskId: z.string().optional().describe("ID local de la task (opcional si se usa corTaskId o thread)"),
   }),
   handler: async (ctx, args): Promise<string> => {
     console.log("\n========================================");
@@ -31,8 +32,19 @@ export const getTaskTool = createTool({
         console.log(`[GetTask] Usuario actual: ${currentUserId}`);
       }
       
-      // Si se proporciona taskId, buscar directamente por ID
-      if (args.taskId) {
+      // PRIORIDAD 1: Si se proporciona corTaskId, buscar por COR ID
+      if (args.corTaskId) {
+        console.log(`[GetTask] 🔍 Buscando task por COR ID: ${args.corTaskId}`);
+        task = await ctx.runQuery(internal.data.tasks.getTaskByCORIdInternal, { 
+          corTaskId: args.corTaskId 
+        });
+        
+        if (!task) {
+          return `No se encontró ninguna task con el COR ID: ${args.corTaskId}. Verifica el ID e intenta de nuevo.`;
+        }
+      }
+      // PRIORIDAD 2: Si se proporciona taskId local
+      else if (args.taskId) {
         console.log(`[GetTask] Buscando task por ID: ${args.taskId}`);
         task = await ctx.runQuery(internal.data.tasks.getTaskByIdInternal, { taskId: args.taskId });
         
@@ -46,8 +58,9 @@ export const getTaskTool = createTool({
           console.log(`[GetTask] Permiso denegado: usuario ${currentUserId} intentó acceder a task de ${task.createdBy}`);
           return "No tienes permiso para ver esta task. Solo puedes consultar requerimientos creados por ti.";
         }
-      } else if (threadId) {
-        // Si no hay taskId, buscar por threadId
+      }
+      // PRIORIDAD 3: Buscar por threadId
+      else if (threadId) {
         console.log(`[GetTask] Buscando task por threadId: ${threadId}`);
         task = await ctx.runQuery(internal.data.tasks.getTaskByThreadInternal, { threadId });
         
@@ -56,7 +69,7 @@ export const getTaskTool = createTool({
           return "No se encontró ninguna task asociada a esta conversación. ¿Deseas crear un nuevo requerimiento?";
         }
       } else {
-        return "Error: No se pudo identificar la task a consultar. Por favor proporciona el ID de la task o asegúrate de estar en la conversación correcta.";
+        return "Error: No se pudo identificar la task a consultar. Por favor proporciona el COR ID de la task, el ID local, o asegúrate de estar en la conversación correcta.";
       }
       
       // Formatear la respuesta

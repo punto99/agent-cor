@@ -141,6 +141,13 @@ export const updateProjectFields = mutation({
     const project = await ctx.db.get(args.projectId);
     if (!project) throw new Error("Proyecto no encontrado");
 
+    // ─── Bloquear edición durante sincronización ───
+    if (project.corSyncStatus === "syncing" || project.corSyncStatus === "retrying") {
+      throw new Error(
+        "El proyecto se está sincronizando con el sistema externo. Espera a que termine la sincronización antes de editar."
+      );
+    }
+
     // ─── Validación de permisos (clientUserAssignments) ───
     if (project.corClientId) {
       const client = await ctx.db
@@ -248,11 +255,11 @@ export const scheduleProjectSyncToCOR = internalMutation({
       return;
     }
 
+    // Solo permitir sync si el proyecto está en estado sincronizable
+    if (!project.corProjectId) return;
     if (!["synced", "retrying", "error"].includes(project.corSyncStatus || "")) {
-      if (project.corSyncStatus !== "synced") {
-        console.log(`[scheduleProjectSyncToCOR] Proyecto ${args.projectId} no está en estado sincronizable, omitiendo.`);
-        return;
-      }
+      console.log(`[scheduleProjectSyncToCOR] Proyecto ${args.projectId} en estado "${project.corSyncStatus}", omitiendo sync.`);
+      return;
     }
 
     console.log(`[scheduleProjectSyncToCOR] 🔄 Programando sync para proyecto ${args.projectId}`);
@@ -465,6 +472,29 @@ export const retryProjectSync = mutation({
 
     const project = await ctx.db.get(args.projectId);
     if (!project) throw new Error("Proyecto no encontrado");
+
+    // Verificar permisos (clientUserAssignments)
+    if (project.corClientId) {
+      const client = await ctx.db
+        .query("corClients")
+        .filter((q) => q.eq(q.field("corClientId"), project.corClientId))
+        .first();
+
+      if (client) {
+        const assignment = await ctx.db
+          .query("clientUserAssignments")
+          .withIndex("by_client_and_user", (q) =>
+            q.eq("clientId", client._id).eq("userId", userId)
+          )
+          .first();
+
+        if (!assignment) {
+          throw new Error(
+            `No tienes permisos para reintentar la sincronización de proyectos de este cliente.`
+          );
+        }
+      }
+    }
 
     if (!["error", "retrying"].includes(project.corSyncStatus || "")) {
       throw new Error("El proyecto no está en estado de error para reintentar.");

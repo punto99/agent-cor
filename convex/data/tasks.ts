@@ -87,6 +87,9 @@ export const updateTaskInternal = internalMutation({
       }
     }
     
+    // Registrar timestamp de edición local (detección de conflictos bidireccional)
+    updateData.lastLocalEditAt = Date.now();
+    
     await ctx.db.patch(args.taskId as any, updateData);
     
     console.log(`[Tasks.updateTaskInternal] Task actualizada`);
@@ -176,6 +179,13 @@ export const updateTaskFields = mutation({
 
     const task = await ctx.db.get(args.taskId);
     if (!task) throw new Error("Task no encontrada");
+
+    // ─── Bloquear edición durante sincronización ───
+    if (task.corSyncStatus === "syncing" || task.corSyncStatus === "retrying") {
+      throw new Error(
+        "La tarea se está sincronizando con el sistema externo. Espera a que termine la sincronización antes de editar."
+      );
+    }
 
     // ─── Validación de permisos (clientUserAssignments) ───
     if (task.corClientId) {
@@ -701,27 +711,18 @@ export const syncEditToCORAction = internalAction({
         throw new Error(result.error || "Error desconocido de COR");
       }
 
-      // 5. Actualizar hash y timestamp de sync — ÉXITO
-      if (updatePayload.description) {
-        const newHash = hashText(updatePayload.description as string);
-        await ctx.runMutation(internal.data.tasks.updateSyncMetadata, {
-          taskId: args.taskId,
-          corDescriptionHash: newHash,
-          corSyncedAt: Date.now(),
-        });
-        console.log(`[SyncEdit] ✅ Hash actualizado: ${newHash}`);
-      } else {
-        await ctx.runMutation(internal.data.tasks.updateSyncMetadata, {
-          taskId: args.taskId,
-          corSyncedAt: Date.now(),
-        });
-      }
-
-      // Marcar como synced y limpiar error/attempt
-      await ctx.runMutation(internal.data.tasks.updatePublishStatus, {
+      // 5. Marcar como synced, actualizar hash y timestamp — TODO en una sola mutation
+      const successUpdate: Record<string, unknown> = {
         taskId: args.taskId,
         corSyncStatus: "synced",
-      });
+        corSyncedAt: Date.now(),
+      };
+      if (updatePayload.description) {
+        const newHash = hashText(updatePayload.description as string);
+        successUpdate.corDescriptionHash = newHash;
+        console.log(`[SyncEdit] ✅ Hash actualizado: ${newHash}`);
+      }
+      await ctx.runMutation(internal.data.tasks.updatePublishStatus, successUpdate as any);
 
       console.log(`[SyncEdit] ✅ Sincronización completada exitosamente`);
       console.log("========================================\n");
@@ -807,6 +808,29 @@ export const retryTaskSync = mutation({
     const task = await ctx.db.get(args.taskId);
     if (!task) throw new Error("Task no encontrada");
 
+    // Verificar permisos (clientUserAssignments)
+    if (task.corClientId) {
+      const client = await ctx.db
+        .query("corClients")
+        .filter((q) => q.eq(q.field("corClientId"), task.corClientId))
+        .first();
+
+      if (client) {
+        const assignment = await ctx.db
+          .query("clientUserAssignments")
+          .withIndex("by_client_and_user", (q) =>
+            q.eq("clientId", client._id).eq("userId", userId)
+          )
+          .first();
+
+        if (!assignment) {
+          throw new Error(
+            `No tienes permisos para reintentar la sincronización de tasks del cliente "${task.corClientName || client.name}".`
+          );
+        }
+      }
+    }
+
     // Solo permitir retry si está en error o retrying
     if (!["error", "retrying"].includes(task.corSyncStatus || "")) {
       throw new Error("La task no está en estado de error para reintentar.");
@@ -882,8 +906,8 @@ export const startPublishTaskToExternal = mutation({
     }
 
     // Verificar que no está en proceso de sincronización
-    if (task.corSyncStatus === "syncing") {
-      throw new Error("La task ya está en proceso de publicación");
+    if (task.corSyncStatus === "syncing" || task.corSyncStatus === "retrying") {
+      throw new Error("La task ya está en proceso de publicación o sincronización. Espera a que termine.");
     }
 
     // Verificar que la task tiene un cliente asociado
@@ -927,6 +951,7 @@ export const startPublishTaskToExternal = mutation({
     await ctx.db.patch(args.taskId, {
       corSyncStatus: "syncing",
       corSyncError: undefined,
+      corSyncAttempt: 0,
     });
 
     // Schedular la action que hace el trabajo pesado
@@ -1183,6 +1208,12 @@ export const updatePublishStatus = internalMutation({
     if (args.corProjectId !== undefined) updateData.corProjectId = args.corProjectId;
     if (args.corSyncedAt !== undefined) updateData.corSyncedAt = args.corSyncedAt;
     if (args.corDescriptionHash !== undefined) updateData.corDescriptionHash = args.corDescriptionHash;
+    
+    // Auto-cleanup: cuando se marca "synced", limpiar error y resetear attempt
+    if (args.corSyncStatus === "synced") {
+      updateData.corSyncError = undefined;
+      updateData.corSyncAttempt = 0;
+    }
     
     await ctx.db.patch(args.taskId, updateData as any);
     console.log(`[UpdatePublishStatus] Task ${args.taskId} → ${args.corSyncStatus}`);
