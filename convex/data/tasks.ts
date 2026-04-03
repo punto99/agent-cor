@@ -990,9 +990,9 @@ export const startPublishTaskToExternal = mutation({
     taskId: v.id("tasks"),
   },
   handler: async (ctx, args) => {
-    // Verificar autenticación
-    const identity = await ctx.auth.getUserIdentity();
-    if (!identity) {
+    // Verificar autenticación usando getAuthUserId (consistente con el resto del codebase)
+    const userId = await getAuthUserId(ctx);
+    if (!userId) {
       throw new Error("No autenticado");
     }
 
@@ -1027,11 +1027,8 @@ export const startPublishTaskToExternal = mutation({
       throw new Error("No se puede publicar: el cliente no está registrado en el sistema.");
     }
 
-    // Resolver el userId del usuario autenticado
-    const user = await ctx.db
-      .query("users")
-      .filter((q) => q.eq(q.field("email"), identity.email))
-      .unique();
+    // Obtener el usuario directamente por su ID (ya autenticado por getAuthUserId)
+    const user = await ctx.db.get(userId);
 
     if (!user) {
       throw new Error("No se puede publicar: usuario no encontrado en el sistema.");
@@ -1041,7 +1038,7 @@ export const startPublishTaskToExternal = mutation({
     const assignment = await ctx.db
       .query("clientUserAssignments")
       .withIndex("by_client_and_user", (q) =>
-        q.eq("clientId", localClient._id).eq("userId", user._id)
+        q.eq("clientId", localClient._id).eq("userId", userId)
       )
       .unique();
 
