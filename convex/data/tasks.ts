@@ -11,6 +11,7 @@ import { getProjectManagementProvider } from "../integrations/registry";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { hashText } from "../lib/briefFormat";
 import { shouldRetry, getRetryDelay, formatRetryError, MAX_RETRY_ATTEMPTS } from "../lib/corRetry";
+import type { ActionCtx } from "../_generated/server";
 
 // ==================== MUTATIONS ====================
 
@@ -23,7 +24,6 @@ export const createTaskInternal = internalMutation({
     priority: v.optional(v.number()),       // 0=Low, 1=Medium, 2=High, 3=Urgent
     threadId: v.string(),
     status: v.string(),
-    fileIds: v.optional(v.array(v.string())),
     createdBy: v.optional(v.string()),
     // Referencia al proyecto local
     projectId: v.optional(v.string()),
@@ -46,7 +46,6 @@ export const createTaskInternal = internalMutation({
       priority: args.priority ?? 1,
       threadId: args.threadId,
       status: args.status,
-      fileIds: args.fileIds,
       createdBy: args.createdBy,
       // Referencia al proyecto local
       projectId: args.projectId as any,
@@ -260,35 +259,15 @@ export const updateTaskStatus = mutation({
   },
 });
 
-// Mutation para agregar fileIds a una task existente
-export const addFilesToTask = mutation({
-  args: {
-    taskId: v.id("tasks"),
-    fileIds: v.array(v.string()),
-  },
-  handler: async (ctx, args) => {
-    const task = await ctx.db.get(args.taskId);
-    if (!task) throw new Error("Task no encontrada");
-    
-    const currentFileIds = task.fileIds || [];
-    const newFileIds = [...currentFileIds, ...args.fileIds];
-    
-    await ctx.db.patch(args.taskId, {
-      fileIds: newFileIds,
-    });
-    return args.taskId;
-  },
-});
+
 
 // ==================== BACKGROUND JOB: Asociar archivos a task ====================
 // Esta acción se ejecuta en background después de crear una task
-// para buscar y asociar los archivos del thread sin bloquear la respuesta
-// TAMBIÉN envía los archivos a COR como attachments si la task está sincronizada
+// para buscar archivos del thread y crear registros en taskAttachments
 export const associateFilesToTask = internalAction({
   args: {
     taskId: v.string(),
     threadId: v.string(),
-    corTaskId: v.optional(v.number()), // ID de la task en COR para enviar attachments
   },
   handler: async (ctx, args): Promise<void> => {
     console.log(`[AssociateFiles] Buscando archivos para task ${args.taskId}...`);
@@ -305,73 +284,135 @@ export const associateFilesToTask = internalAction({
       // Buscar fileIds en cada mensaje
       for (const msg of messagesResult.page) {
         const msgAny = msg as any;
-        
-        // Verificar si el mensaje tiene fileIds (guardados como metadata)
         if (msgAny.fileIds && Array.isArray(msgAny.fileIds)) {
-          console.log(`[AssociateFiles] FileIds encontrados: ${msgAny.fileIds}`);
           allFileIds.push(...msgAny.fileIds);
         }
       }
       
-      if (allFileIds.length > 0) {
-        console.log(`[AssociateFiles] Asociando ${allFileIds.length} archivos a task ${args.taskId}`);
-        
-        // Actualizar la task con los fileIds encontrados
-        await ctx.runMutation(internal.data.tasks.updateTaskFileIds, {
-          taskId: args.taskId,
-          fileIds: allFileIds,
-        });
-        
-        console.log(`[AssociateFiles] ✅ Archivos asociados exitosamente a task local`);
-        
-        // Si la task está sincronizada con COR, enviar los archivos como mensaje con attachments
-        if (args.corTaskId) {
-          console.log(`[AssociateFiles] 📎 Enviando archivos a COR (Task ID: ${args.corTaskId})...`);
-          
-          try {
-            // Obtener información y URLs de cada archivo
-            const attachments: { name: string; url: string; type: string; source: string }[] = [];
-            
-            for (const fileId of allFileIds) {
-              try {
-                // Obtener info del archivo desde el agente
-                const fileInfo = await ctx.runQuery(internal.data.tasks.getFileInfoInternal, { fileId });
-                
-                if (fileInfo && fileInfo.url) {
-                  attachments.push({
-                    name: fileInfo.filename || `archivo_${fileId}`,
-                    url: fileInfo.url,
-                    type: fileInfo.mimeType || "application/octet-stream",
-                    source: "convex",
-                  });
-                  console.log(`[AssociateFiles] 📎 Archivo preparado: ${fileInfo.filename}`);
-                }
-              } catch (fileError) {
-                console.error(`[AssociateFiles] ⚠️ Error obteniendo archivo ${fileId}:`, fileError);
-              }
-            }
-            
-            // Si hay attachments, enviar mensaje al sistema externo
-            if (attachments.length > 0) {
-              const provider = getProjectManagementProvider();
-              await provider.postTaskMessage({
-                taskId: args.corTaskId,
-                message: `📎 Archivos adjuntos del brief (${attachments.length} archivo${attachments.length > 1 ? 's' : ''})`,
-                attachments,
-              });
-              console.log(`[AssociateFiles] ✅ ${attachments.length} archivos enviados a COR`);
-            }
-          } catch (corError) {
-            console.error(`[AssociateFiles] ⚠️ Error enviando archivos a COR:`, corError);
-            // No fallar si COR tiene problemas, los archivos ya están asociados localmente
-          }
-        }
-      } else {
+      if (allFileIds.length === 0) {
         console.log(`[AssociateFiles] No se encontraron archivos en el thread`);
+        return;
       }
+
+      console.log(`[AssociateFiles] Creando ${allFileIds.length} registros en taskAttachments...`);
+      
+      for (const fileId of allFileIds) {
+        try {
+          const fileInfo = await ctx.runQuery(internal.data.tasks.getFileInfoInternal, { fileId });
+          if (fileInfo) {
+            await ctx.runMutation(internal.data.tasks.createTaskAttachment, {
+              taskId: args.taskId as any,
+              fileId,
+              storageId: fileInfo.storageId,
+              filename: fileInfo.filename,
+              mimeType: fileInfo.mimeType,
+              size: fileInfo.size,
+            });
+            console.log(`[AssociateFiles] ✅ Attachment creado: ${fileInfo.filename}`);
+          }
+        } catch (fileError) {
+          console.error(`[AssociateFiles] ⚠️ Error con archivo ${fileId}:`, fileError);
+        }
+      }
+      
+      console.log(`[AssociateFiles] ✅ Archivos asociados exitosamente`);
     } catch (error) {
       console.error(`[AssociateFiles] Error:`, error);
     }
+  },
+});
+
+// Mutation interna para crear un registro de attachment
+export const createTaskAttachment = internalMutation({
+  args: {
+    taskId: v.id("tasks"),
+    fileId: v.string(),
+    storageId: v.string(),
+    filename: v.string(),
+    mimeType: v.string(),
+    size: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    return await ctx.db.insert("taskAttachments", {
+      taskId: args.taskId,
+      fileId: args.fileId,
+      storageId: args.storageId,
+      filename: args.filename,
+      mimeType: args.mimeType,
+      size: args.size,
+      createdAt: Date.now(),
+    });
+  },
+});
+
+// Mutation interna para marcar un attachment como sincronizado con COR
+export const updateAttachmentCORSync = internalMutation({
+  args: {
+    attachmentId: v.id("taskAttachments"),
+    corAttachmentId: v.number(),
+    corUrl: v.string(),
+  },
+  handler: async (ctx, args) => {
+    await ctx.db.patch(args.attachmentId, {
+      corAttachmentId: args.corAttachmentId,
+      corUrl: args.corUrl,
+    });
+  },
+});
+
+// Query interna para obtener attachments pendientes de sync (sin corAttachmentId)
+export const getPendingAttachments = internalQuery({
+  args: {
+    taskId: v.id("tasks"),
+  },
+  handler: async (ctx, args) => {
+    const attachments = await ctx.db
+      .query("taskAttachments")
+      .withIndex("by_task", (q) => q.eq("taskId", args.taskId))
+      .collect();
+    return attachments.filter((a) => !a.corAttachmentId);
+  },
+});
+
+// Query interna para obtener todos los attachments de una task
+export const getTaskAttachments = internalQuery({
+  args: {
+    taskId: v.id("tasks"),
+  },
+  handler: async (ctx, args) => {
+    return await ctx.db
+      .query("taskAttachments")
+      .withIndex("by_task", (q) => q.eq("taskId", args.taskId))
+      .collect();
+  },
+});
+
+// Query pública para que la UI pueda mostrar los attachments
+export const getTaskAttachmentsPublic = query({
+  args: {
+    taskId: v.id("tasks"),
+  },
+  handler: async (ctx, args) => {
+    const attachments = await ctx.db
+      .query("taskAttachments")
+      .withIndex("by_task", (q) => q.eq("taskId", args.taskId))
+      .collect();
+
+    // Resolver URLs para cada attachment
+    const results = [];
+    for (const att of attachments) {
+      const url = await ctx.storage.getUrl(att.storageId as any);
+      results.push({
+        _id: att._id,
+        filename: att.filename,
+        mimeType: att.mimeType,
+        size: att.size,
+        url,
+        corAttachmentId: att.corAttachmentId,
+        createdAt: att.createdAt,
+      });
+    }
+    return results;
   },
 });
 
@@ -398,8 +439,10 @@ export const getFileInfoInternal = internalQuery({
       
       return {
         fileId: args.fileId,
+        storageId: fileDoc.storageId,
         filename: fileDoc.filename || `archivo_${args.fileId}`,
-        mimeType: fileDoc.mimeType,
+        mimeType: fileDoc.mimeType || "application/octet-stream",
+        size: (fileDoc as any).size as number | undefined,
         url,
       };
     } catch (error) {
@@ -409,19 +452,7 @@ export const getFileInfoInternal = internalQuery({
   },
 });
 
-// Mutation interna para actualizar fileIds de una task
-export const updateTaskFileIds = internalMutation({
-  args: {
-    taskId: v.string(),
-    fileIds: v.array(v.string()),
-  },
-  handler: async (ctx, args) => {
-    await ctx.db.patch(args.taskId as any, {
-      fileIds: args.fileIds,
-    });
-    return args.taskId;
-  },
-});
+
 
 // ==================== QUERIES ====================
 
@@ -688,30 +719,35 @@ export const syncEditToCORAction = internalAction({
 
       if (syncableChanges.length === 0) {
         console.log("[SyncEdit] ℹ️ No hay campos sincronizables con COR (cambios son solo locales)");
-        return;
+      } else {
+        console.log(`[SyncEdit] 📝 Campos a sincronizar: ${syncableChanges.join(", ")}`);
+
+        // Mapeo directo 1:1
+        if (syncableChanges.includes("title")) updatePayload.title = task.title;
+        if (syncableChanges.includes("description")) updatePayload.description = task.description || "";
+        if (syncableChanges.includes("deadline")) updatePayload.deadline = task.deadline;
+        if (syncableChanges.includes("priority")) updatePayload.priority = task.priority;
+        if (syncableChanges.includes("status")) updatePayload.status = task.status;
+
+        // 4. Actualizar la task en COR
+        console.log(`[SyncEdit] 🚀 Enviando actualización a COR task ${corTaskId}:`, Object.keys(updatePayload));
+        
+        const result = await provider.updateTask(parseInt(corTaskId), updatePayload as any);
+
+        if (!result.success) {
+          console.error(`[SyncEdit] ❌ Error actualizando COR: ${result.error}`);
+          throw new Error(result.error || "Error desconocido de COR");
+        }
       }
 
-      console.log(`[SyncEdit] 📝 Campos a sincronizar: ${syncableChanges.join(", ")}`);
-
-      // Mapeo directo 1:1
-      if (syncableChanges.includes("title")) updatePayload.title = task.title;
-      if (syncableChanges.includes("description")) updatePayload.description = task.description || "";
-      if (syncableChanges.includes("deadline")) updatePayload.deadline = task.deadline;
-      if (syncableChanges.includes("priority")) updatePayload.priority = task.priority;
-      if (syncableChanges.includes("status")) updatePayload.status = task.status;
-
-      // 4. Actualizar la task en COR
-      console.log(`[SyncEdit] 🚀 Enviando actualización a COR task ${corTaskId}:`, Object.keys(updatePayload));
-      
-      const result = await provider.updateTask(parseInt(corTaskId), updatePayload as any);
-
-      if (!result.success) {
-        console.error(`[SyncEdit] ❌ Error actualizando COR: ${result.error}`);
-        // Tratar como error recuperable → intentar reintentar
-        throw new Error(result.error || "Error desconocido de COR");
+      // 5. Subir archivos pendientes a COR (no-fatal)
+      try {
+        await uploadPendingAttachmentsToCOR(ctx, args.taskId, parseInt(corTaskId));
+      } catch (fileError) {
+        console.error("[SyncEdit] ⚠️ Error subiendo archivos pendientes:", fileError);
       }
 
-      // 5. Marcar como synced, actualizar hash y timestamp — TODO en una sola mutation
+      // 6. Marcar como synced, actualizar hash y timestamp
       const successUpdate: Record<string, unknown> = {
         taskId: args.taskId,
         corSyncStatus: "synced",
@@ -872,6 +908,72 @@ export const retryTaskSync = mutation({
 });
 
 // ==================== PUBLICAR TASK EN SISTEMA EXTERNO (COR) ====================
+
+/**
+ * Sube los attachments pendientes (sin corAttachmentId) de una task a COR.
+ * Función reutilizable llamada desde publishTaskToExternalAction y syncEditToCORAction.
+ * 
+ * Flujo por attachment:
+ * 1. Descarga el blob desde Convex storage
+ * 2. Sube a COR via provider.uploadTaskAttachment (multipart/form-data)
+ * 3. Marca como sincronizado (corAttachmentId + corUrl)
+ * 
+ * No lanza excepciones — los errores individuales se logean y se continúa.
+ */
+async function uploadPendingAttachmentsToCOR(
+  ctx: ActionCtx,
+  taskId: string,
+  corTaskId: number,
+): Promise<void> {
+  const pendingAttachments = await ctx.runQuery(
+    internal.data.tasks.getPendingAttachments,
+    { taskId: taskId as any }
+  );
+
+  if (pendingAttachments.length === 0) return;
+
+  console.log(`[Attachments] 📎 Subiendo ${pendingAttachments.length} archivos pendientes a COR task ${corTaskId}...`);
+  const provider = getProjectManagementProvider();
+  let uploaded = 0;
+
+  for (const att of pendingAttachments) {
+    try {
+      // Descargar blob desde Convex storage
+      const blob = await ctx.storage.get(att.storageId as any);
+      if (!blob) {
+        console.error(`[Attachments] ⚠️ Blob no encontrado para storageId ${att.storageId}, omitiendo`);
+        continue;
+      }
+
+      const fileBuffer = await blob.arrayBuffer();
+
+      // Subir a COR via multipart/form-data
+      const result = await provider.uploadTaskAttachment({
+        taskId: corTaskId,
+        fileBuffer,
+        filename: att.filename,
+        mimeType: att.mimeType,
+      });
+
+      if (result.success && result.attachment) {
+        // Marcar como sincronizado
+        await ctx.runMutation(internal.data.tasks.updateAttachmentCORSync, {
+          attachmentId: att._id,
+          corAttachmentId: result.attachment.id,
+          corUrl: result.attachment.url,
+        });
+        uploaded++;
+        console.log(`[Attachments] ✅ ${att.filename} → COR attachment ${result.attachment.id}`);
+      } else {
+        console.error(`[Attachments] ⚠️ Error subiendo ${att.filename}: ${result.error}`);
+      }
+    } catch (fileError) {
+      console.error(`[Attachments] ⚠️ Error con archivo ${att.filename}:`, fileError);
+    }
+  }
+
+  console.log(`[Attachments] 📎 ${uploaded}/${pendingAttachments.length} archivos subidos exitosamente`);
+}
 
 /**
  * Mutation pública que inicia la publicación de una task en el sistema externo.
@@ -1103,40 +1205,11 @@ export const publishTaskToExternalAction = internalAction({
 
       console.log(`[PublishTask] ✅ IDs guardados — corTaskId: ${externalTask.id}, corProjectId: ${corProjectId}, clientId: ${clientId}, hash: ${descriptionHash}`);
 
-      // 6. Asociar archivos si existen
-      if (task.fileIds && task.fileIds.length > 0) {
-        console.log(`[PublishTask] 📎 Enviando ${task.fileIds.length} archivos a COR...`);
-        try {
-          // Preparar attachments
-          const attachments: { name: string; url: string; type: string; source: string }[] = [];
-          
-          for (const fileId of task.fileIds) {
-            try {
-              const fileInfo = await ctx.runQuery(internal.data.tasks.getFileInfoInternal, { fileId });
-              if (fileInfo && fileInfo.url) {
-                attachments.push({
-                  name: fileInfo.filename || `archivo_${fileId}`,
-                  url: fileInfo.url,
-                  type: fileInfo.mimeType || "application/octet-stream",
-                  source: "convex",
-                });
-              }
-            } catch (fileError) {
-              console.error(`[PublishTask] ⚠️ Error obteniendo archivo ${fileId}:`, fileError);
-            }
-          }
-          
-          if (attachments.length > 0) {
-            await provider.postTaskMessage({
-              taskId: externalTask.id,
-              message: `📎 Archivos adjuntos del brief (${attachments.length} archivo${attachments.length > 1 ? 's' : ''})`,
-              attachments,
-            });
-            console.log(`[PublishTask] ✅ ${attachments.length} archivos enviados`);
-          }
-        } catch (fileError) {
-          console.error("[PublishTask] ⚠️ Error enviando archivos (task ya publicada):", fileError);
-        }
+      // 6. Subir archivos pendientes a COR (no-fatal: la task ya está publicada)
+      try {
+        await uploadPendingAttachmentsToCOR(ctx, args.taskId, externalTask.id);
+      } catch (fileError) {
+        console.error("[PublishTask] ⚠️ Error subiendo archivos (task ya publicada):", fileError);
       }
 
       console.log("\n========================================");

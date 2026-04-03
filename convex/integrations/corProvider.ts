@@ -18,7 +18,8 @@ import type {
   CreateTaskInput,
   UpdateTaskInput,
   UpdateProjectInput,
-  PostTaskMessageInput,
+  UploadTaskAttachmentInput,
+  ExternalAttachmentResult,
 } from "./types";
 
 // ==================== CONFIGURACIÓN ====================
@@ -553,46 +554,63 @@ export function createCORProvider(): ProjectManagementProvider {
       }
     },
 
-    // ==================== POST TASK MESSAGE ====================
+    // ==================== UPLOAD TASK ATTACHMENT ====================
 
-    async postTaskMessage(
-      data: PostTaskMessageInput
-    ): Promise<{ success: boolean; error?: string }> {
-      console.log(`[COR Provider] 📎 Enviando mensaje a task: ${data.taskId}`);
-      console.log(`[COR Provider]   Mensaje: ${data.message}`);
-      console.log(`[COR Provider]   Attachments: ${data.attachments?.length || 0}`);
+    async uploadTaskAttachment(
+      data: UploadTaskAttachmentInput
+    ): Promise<{ success: boolean; attachment?: ExternalAttachmentResult; error?: string }> {
+      console.log(`[COR Provider] 📎 Subiendo attachment a task: ${data.taskId}`);
+      console.log(`[COR Provider]   Archivo: ${data.filename} (${data.mimeType}, ${(data.fileBuffer.byteLength / 1024).toFixed(1)}KB)`);
 
       try {
-        const body: Record<string, unknown> = {
-          message: data.message,
-        };
+        const accessToken = await getCORAccessToken();
 
-        if (data.attachments && data.attachments.length > 0) {
-          body.attachments = data.attachments.map((att, index) => ({
-            id: index + 1,
-            name: att.name,
-            url: att.url,
-            type: att.type,
-            source: att.source || "convex",
-          }));
-        }
+        const formData = new FormData();
+        const blob = new Blob([data.fileBuffer], { type: data.mimeType });
+        formData.append("file", blob, data.filename);
 
-        const response = await corApiFetch(`/tasks/${data.taskId}/messages`, {
-          method: "POST",
-          body: JSON.stringify(body),
-        });
+        const response = await fetch(
+          `${COR_API_BASE_URL}/tasks/${data.taskId}/attachments`,
+          {
+            method: "POST",
+            headers: {
+              Authorization: `Bearer ${accessToken}`,
+              // No Content-Type — FormData lo establece automáticamente con boundary
+            },
+            body: formData,
+          }
+        );
 
         if (!response.ok) {
           const errorText = await response.text();
-          console.error(`[COR Provider] ❌ Error enviando mensaje: ${response.status} - ${errorText}`);
+          console.error(`[COR Provider] ❌ Error subiendo attachment: ${response.status} - ${errorText}`);
           return {
             success: false,
             error: `COR API error: ${response.status} - ${errorText}`,
           };
         }
 
-        console.log(`[COR Provider] ✅ Mensaje enviado a task ${data.taskId}`);
-        return { success: true };
+        const result = await response.json();
+        const uploadedFile = result.files?.[0];
+
+        if (!uploadedFile) {
+          return {
+            success: false,
+            error: "COR no retornó información del archivo subido",
+          };
+        }
+
+        console.log(`[COR Provider] ✅ Attachment subido: ID ${uploadedFile.id}, nombre: ${uploadedFile.originalname || data.filename}`);
+
+        return {
+          success: true,
+          attachment: {
+            id: uploadedFile.id,
+            url: uploadedFile.url,
+            name: uploadedFile.originalname || data.filename,
+            size: uploadedFile.size || data.fileBuffer.byteLength,
+          },
+        };
       } catch (error) {
         return {
           success: false,

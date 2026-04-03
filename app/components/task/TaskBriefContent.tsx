@@ -3,7 +3,7 @@
 import { useState, useRef, useEffect } from "react";
 import type { Task } from "./types";
 import { formatDate, getStatusColor } from "./types";
-import { useConvex, useMutation } from "convex/react";
+import { useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { Pencil, Check, X as XIcon, Cloud, Loader2 } from "lucide-react";
 import type { Id } from "@/convex/_generated/dataModel";
@@ -435,8 +435,10 @@ export function TaskBriefContent({
   editable = false,
   syncStatus,
 }: TaskBriefContentProps) {
-  const convex = useConvex();
   const updateTask = useMutation(api.data.tasks.updateTaskFields);
+  const attachments = useQuery(api.data.tasks.getTaskAttachmentsPublic, {
+    taskId: task._id,
+  });
 
   // Handler genérico para guardar un campo
   const handleSaveField = async (fieldKey: string, newValue: string) => {
@@ -485,22 +487,6 @@ export function TaskBriefContent({
       if (syncFeedbackTimer.current) clearTimeout(syncFeedbackTimer.current);
     };
   }, []);
-
-  // Handler para abrir archivo
-  const handleOpenFile = async (fileId: string) => {
-    try {
-      const url = await convex.query(api.data.files.getFileUrl, { fileId });
-      if (url) {
-        window.open(url, "_blank");
-      } else {
-        console.error("No se pudo obtener la URL del archivo");
-        alert("No se pudo abrir el archivo");
-      }
-    } catch (error) {
-      console.error("Error abriendo archivo:", error);
-      alert("Error al abrir el archivo");
-    }
-  };
 
   // Estado de edición de la descripción
   const [isEditingDesc, setIsEditingDesc] = useState(false);
@@ -672,21 +658,23 @@ export function TaskBriefContent({
         )}
 
         {/* Archivos adjuntos */}
-        {task.fileIds && task.fileIds.length > 0 && (
+        {attachments && attachments.length > 0 && (
           <div className="mt-4 pt-4 border-t border-border">
             <p className="text-xs text-muted-foreground uppercase tracking-wider mb-2">
-              📎 Archivos adjuntos ({task.fileIds.length})
+              📎 Archivos adjuntos ({attachments.length})
             </p>
             <div className="grid grid-cols-2 gap-2">
-              {task.fileIds.map((fileId, index) => (
+              {attachments.map((att) => (
                 <button
-                  key={fileId}
-                  onClick={() => handleOpenFile(fileId)}
+                  key={att._id}
+                  onClick={() => att.url && window.open(att.url, "_blank")}
                   className="bg-muted rounded-lg p-2 flex items-center gap-2 border border-border hover:bg-muted/80 transition-colors cursor-pointer"
                 >
-                  <span className="text-muted-foreground">📄</span>
+                  <span className="text-muted-foreground">
+                    {att.mimeType.startsWith("image/") ? "🖼️" : "📄"}
+                  </span>
                   <span className="text-xs text-foreground truncate">
-                    Archivo {index + 1}
+                    {att.filename}
                   </span>
                 </button>
               ))}

@@ -90,7 +90,7 @@ Fecha límite: ${task.deadline || "No especificado"}
 Descripción del Brief:
 ${task.description || "Sin descripción"}
 
-Archivos de referencia adjuntos: ${task.fileIds && task.fileIds.length > 0 ? `Sí (${task.fileIds.length} archivo(s))` : "No"}
+Archivos de referencia adjuntos: Se verificarán en el thread original
 Thread ID original: ${task.threadId}`;
   },
 });

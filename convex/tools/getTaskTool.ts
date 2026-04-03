@@ -92,7 +92,7 @@ ${corInfo}
 **Descripción del Brief:**
 ${task.description || "Sin descripción"}
 
-**Archivos adjuntos:** ${task.fileIds?.length || 0}
+**Archivos adjuntos:** Consultar vía taskAttachments
 `;
       console.log("[GetTask] Task encontrada y formateada exitosamente");
       console.log("========================================\n");

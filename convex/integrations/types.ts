@@ -95,20 +95,23 @@ export interface UpdateProjectInput {
   estimatedTime?: number;
 }
 
-export interface TaskMessageAttachment {
-  name: string;
-  url: string;
-  type: string;
-  source?: string;
-}
-
-export interface PostTaskMessageInput {
+export interface UploadTaskAttachmentInput {
   /** ID de la task en el sistema externo */
   taskId: number;
-  /** Texto del mensaje */
-  message: string;
-  /** Archivos adjuntos */
-  attachments?: TaskMessageAttachment[];
+  /** Contenido binario del archivo */
+  fileBuffer: ArrayBuffer;
+  /** Nombre original del archivo */
+  filename: string;
+  /** Tipo MIME del archivo */
+  mimeType: string;
+}
+
+/** Resultado de un attachment subido exitosamente al sistema externo */
+export interface ExternalAttachmentResult {
+  id: number;
+  url: string;
+  name: string;
+  size: number;
 }
 
 // ==================== INTERFACE PRINCIPAL ====================
@@ -180,13 +183,12 @@ export interface ProjectManagementProvider {
   ): Promise<{ success: boolean; error?: string }>;
 
   /**
-   * Enviar un mensaje con attachments opcionales a una task.
-   * En COR: POST /tasks/{task_id}/messages
-   * Útil para adjuntar archivos del brief a la task publicada.
+   * Subir un archivo como attachment de una task.
+   * En COR: POST /tasks/{task_id}/attachments (multipart/form-data)
    */
-  postTaskMessage(
-    data: PostTaskMessageInput
-  ): Promise<{ success: boolean; error?: string }>;
+  uploadTaskAttachment(
+    data: UploadTaskAttachmentInput
+  ): Promise<{ success: boolean; attachment?: ExternalAttachmentResult; error?: string }>;
 
   /**
    * Listar TODOS los usuarios del sistema externo.

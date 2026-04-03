@@ -10,7 +10,6 @@ export type Task = {
   priority?: number;       // 0=Low, 1=Medium, 2=High, 3=Urgent
   status: string;
   threadId: string;
-  fileIds?: string[];
   createdBy?: string;
 };
 

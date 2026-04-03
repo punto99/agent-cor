@@ -52,7 +52,6 @@ export default defineSchema({
     status: v.string(),
     // === Campos internos (no van a COR) ===
     threadId: v.string(),
-    fileIds: v.optional(v.array(v.string())),
     createdBy: v.optional(v.string()),
     projectId: v.optional(v.id("projects")),   // Referencia al proyecto LOCAL en Convex
     // === Campos de sincronización con herramienta externa (COR, Trello, etc.) ===
@@ -74,6 +73,26 @@ export default defineSchema({
     .index("by_createdBy", ["createdBy"])
     .index("by_corTaskId", ["corTaskId"])
     .index("by_corSyncStatus", ["corSyncStatus"]),
+
+  // === Task Attachments: Archivos adjuntos de tasks ===
+  // Estructura espejada con COR para sincronización directa.
+  // Reemplaza el campo fileIds[] de tasks con una tabla dedicada.
+  taskAttachments: defineTable({
+    taskId: v.id("tasks"),
+    // === Datos del archivo ===
+    storageId: v.string(),            // ID del blob en Convex storage (del agent component)
+    fileId: v.string(),               // ID del archivo en el agent component (para queries)
+    filename: v.string(),             // Nombre original del archivo
+    mimeType: v.string(),             // Tipo MIME (image/png, application/pdf, etc.)
+    size: v.optional(v.number()),     // Tamaño en bytes
+    // === Sincronización con COR ===
+    corAttachmentId: v.optional(v.number()),  // ID del attachment en COR (null = no sincronizado)
+    corUrl: v.optional(v.string()),           // URL del archivo en COR
+    // === Metadata ===
+    createdAt: v.number(),
+  })
+    .index("by_task", ["taskId"])
+    .index("by_task_and_cor", ["taskId", "corAttachmentId"]),
 
   evaluationThreads: defineTable({
     taskId: v.id("tasks"),
