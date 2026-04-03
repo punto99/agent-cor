@@ -28,6 +28,8 @@ export function buildBriefDescription(fields: {
   objective?: string;
   keyMessage?: string;
   kpis?: string;
+  deadline?: string;
+  deliverables?: string;
   budget?: string;
   approvers?: string;
   additionalNotes?: string;
@@ -37,6 +39,8 @@ export function buildBriefDescription(fields: {
 
   lines.push(`Tipo de requerimiento: ${fields.requestType}`);
   lines.push(`Marca: ${fields.brand}`);
+  if (fields.deadline) lines.push(`Fecha límite: ${fields.deadline}`);
+  if (fields.deliverables) lines.push(`Entregables: ${fields.deliverables}`);
   if (fields.objective) lines.push(`Objetivo: ${fields.objective}`);
   if (fields.keyMessage) lines.push(`Mensaje clave: ${fields.keyMessage}`);
   if (fields.kpis) lines.push(`KPIs: ${fields.kpis}`);

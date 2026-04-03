@@ -53,8 +53,8 @@ import type * as tools_index from "../tools/index.js";
 import type * as tools_nowTool from "../tools/nowTool.js";
 import type * as tools_reviewBriefTool from "../tools/reviewBriefTool.js";
 import type * as tools_searchClientInCORTool from "../tools/searchClientInCORTool.js";
+import type * as tools_validateUserForClientTool from "../tools/validateUserForClientTool.js";
 import type * as workflows_index from "../workflows/index.js";
-import type * as workflows_taskCreation from "../workflows/taskCreation.js";
 
 import type {
   ApiFromModules,
@@ -108,8 +108,8 @@ declare const fullApi: ApiFromModules<{
   "tools/nowTool": typeof tools_nowTool;
   "tools/reviewBriefTool": typeof tools_reviewBriefTool;
   "tools/searchClientInCORTool": typeof tools_searchClientInCORTool;
+  "tools/validateUserForClientTool": typeof tools_validateUserForClientTool;
   "workflows/index": typeof workflows_index;
-  "workflows/taskCreation": typeof workflows_taskCreation;
 }>;
 
 /**

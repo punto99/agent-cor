@@ -981,3 +981,16 @@ export const updateCORSyncStatus = internalMutation({
     return args.taskId;
   },
 });
+
+/**
+ * Actualiza el timestamp de sincronización con COR.
+ * Migrado desde workflows/taskCreation.ts.
+ */
+export const updateCORSyncTimestamp = internalMutation({
+  args: { taskId: v.string() },
+  handler: async (ctx, args) => {
+    await ctx.db.patch(args.taskId as any, {
+      corSyncedAt: Date.now(),
+    });
+  },
+});

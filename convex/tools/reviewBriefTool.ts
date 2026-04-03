@@ -16,12 +16,13 @@ export const reviewBriefTool = createTool({
   Usar esta herramienta ANTES de mostrar el resumen final al usuario.
   Verifica que los campos obligatorios esten completos y evalua la calidad general.`,
   args: z.object({
-    requestType: z.string().describe("Tipo de requerimiento recolectado"),
-    brand: z.string().describe("Marca o empresa recolectada"),
+    requestType: z.string().describe("Tipo de requerimiento recolectado - OBLIGATORIO"),
+    brand: z.string().describe("Marca o empresa recolectada - OBLIGATORIO"),
+    deadline: z.string().describe("Fecha limite o timeline del proyecto - OBLIGATORIO"),
+    deliverables: z.string().describe("Entregables concretos del proyecto - OBLIGATORIO"),
     objective: z.string().optional().describe("Objetivo del proyecto (si se proporciono)"),
     keyMessage: z.string().optional().describe("Mensaje clave (si se proporciono)"),
     kpis: z.string().optional().describe("KPIs (si se proporcionaron)"),
-    deadline: z.string().optional().describe("Timing o fecha limite (si se proporciono)"),
     budget: z.string().optional().describe("Presupuesto (si se proporciono)"),
     approvers: z.string().optional().describe("Aprobadores (si se proporcionaron)"),
     hasFiles: z.boolean().optional().describe("Si el usuario adjunto archivos"),
@@ -33,10 +34,11 @@ export const reviewBriefTool = createTool({
     const briefSummary = [
       `Tipo de requerimiento: ${args.requestType}`,
       `Marca: ${args.brand}`,
+      `Deadline/Fecha límite: ${args.deadline}`,
+      `Entregables: ${args.deliverables}`,
       `Objetivo: ${args.objective || "No proporcionado"}`,
       `Mensaje clave: ${args.keyMessage || "No proporcionado"}`,
       `KPIs: ${args.kpis || "No proporcionados"}`,
-      `Timing/Deadline: ${args.deadline || "No proporcionado"}`,
       `Presupuesto: ${args.budget || "No proporcionado"}`,
       `Aprobadores: ${args.approvers || "No proporcionados"}`,
       `Archivos adjuntos: ${args.hasFiles ? "Sí" : "No"}`,
@@ -55,10 +57,17 @@ export const reviewBriefTool = createTool({
     } catch (error) {
       console.error("[ReviewTool] ❌ Error al llamar reviewerAgent:", error);
       // Fallback: si el reviewer falla, hacer validación básica
-      const camposObligatoriosCompletos = !!(args.requestType && args.brand);
+      const camposObligatoriosCompletos = !!(
+        args.requestType &&
+        args.brand &&
+        args.deadline &&
+        args.deliverables
+      );
       const sugerencias: string[] = [];
       if (!args.requestType) sugerencias.push("Falta el tipo de requerimiento");
       if (!args.brand) sugerencias.push("Falta la marca");
+      if (!args.deadline) sugerencias.push("Falta la fecha límite (deadline)");
+      if (!args.deliverables) sugerencias.push("Faltan los entregables (deliverables)");
       const fallback = {
         aprobado: camposObligatoriosCompletos,
         campos_obligatorios_completos: camposObligatoriosCompletos,
