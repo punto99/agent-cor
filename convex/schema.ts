@@ -251,7 +251,7 @@ export default defineSchema({
     brief: v.optional(v.string()),
     startDate: v.optional(v.string()),         // YYYY-MM-DD
     endDate: v.optional(v.string()),           // YYYY-MM-DD (deadline)
-    status: v.string(),                        // "active" | "finished" | "suspended"
+    status: v.string(),                        // "active" | "in_process" | "suspended" | "finished"
     estimatedTime: v.optional(v.number()),     // Horas estimadas
     billable: v.optional(v.boolean()),
     incomeType: v.optional(v.string()),        // "fee" | "one_time" | "hourly_rate" | "contract"
