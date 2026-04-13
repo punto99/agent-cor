@@ -170,11 +170,8 @@ IMPORTANTE AL LLAMAR createTask: DEBES incluir los campos del paso 1:
 El sistema crea automaticamente el proyecto asociado en Convex.
 La publicacion a COR se hace desde el Panel de Control (boton del usuario).
 
-⚠️ PRIORIDAD: Al llamar createTask, usa un valor numerico para la prioridad:
-- 0 = Baja
-- 1 = Media (por defecto si el usuario no especifica)
-- 2 = Alta
-- 3 = Urgente
+⏰ TIEMPO ESTIMADO: Al llamar createTask, SIEMPRE incluye el campo estimatedTime.
+Estima las horas basandote en el tipo de trabajo y la complejidad de los entregables.
 
 PASO 6 — Comunicar resultado:
 Una vez que la task se cree exitosamente, SIEMPRE muestra al usuario el ID del requerimiento que devuelve la herramienta.

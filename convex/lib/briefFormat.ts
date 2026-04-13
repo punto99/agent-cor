@@ -44,7 +44,7 @@ export function buildBriefDescription(fields: {
   const lines: string[] = [];
 
   lines.push(`Tipo de requerimiento: ${fields.requestType}`);
-  lines.push(`Marca: ${fields.brand}`);
+  // Marca NO se incluye — se guarda en task.corClientName (field dedicado)
   // deadline y deliverables NO se incluyen — tienen fields dedicados
   if (fields.objective) lines.push(`Objetivo: ${fields.objective}`);
   if (fields.keyMessage) lines.push(`Mensaje clave: ${fields.keyMessage}`);
