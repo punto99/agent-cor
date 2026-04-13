@@ -39,4 +39,11 @@ export const briefAgent = new Agent(components.agent, {
   tools: agentTools,
   
   maxSteps: 15,
+
+  // Limitar contexto para evitar sobrecargar la ventana de tokens
+  // (el default es 100 mensajes recientes, lo cual con imágenes pesadas
+  // puede agotar la capacidad del modelo)
+  contextOptions: {
+    recentMessages: 20,
+  },
 });

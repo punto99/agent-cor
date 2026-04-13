@@ -81,3 +81,16 @@ export const getFileIcon = (type: string): string => {
   if (type.startsWith("audio/")) return "🎵";
   return "📎";
 };
+
+/**
+ * Convierte un data URL (base64) a Blob binario.
+ * Usado para el upload directo a Convex Storage via generateUploadUrl.
+ */
+export function base64ToBlob(dataUrl: string): Blob {
+  const matches = dataUrl.match(/^data:([^;]+);base64,(.+)$/);
+  if (!matches) throw new Error("Formato de data URL inválido");
+  const mimeType = matches[1];
+  const base64Data = matches[2];
+  const bytes = Uint8Array.from(atob(base64Data), (c) => c.charCodeAt(0));
+  return new Blob([bytes], { type: mimeType });
+}

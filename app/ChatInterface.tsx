@@ -85,13 +85,13 @@ const SUPPORTED_FILE_TYPES = [
 ];
 
 const MAX_FILES = 3;
-const MAX_FILE_SIZE_MB = 5;
+const MAX_FILE_SIZE_MB = 20;
 const MAX_FILE_SIZE_BYTES = MAX_FILE_SIZE_MB * 1024 * 1024;
 
 // =============================================================================
 // Utilidades
 // =============================================================================
-import { compressImage } from "./lib/imageCompression";
+import { compressImage, base64ToBlob } from "./lib/imageCompression";
 
 // =============================================================================
 // Props
@@ -135,7 +135,8 @@ export default function ChatInterface({
   // Mutations y queries
   const createThread = useMutation(api.messaging.threads.createThread);
   const sendMessage = useMutation(api.messaging.chat.sendMessage);
-  const uploadFile = useAction(api.data.files.uploadFile);
+  const generateUploadUrl = useMutation(api.data.files.generateUploadUrl);
+  const registerUploadedFile = useAction(api.data.files.registerUploadedFile);
   const latestThreadId = useQuery(api.messaging.chat.getLatestThread, {
     userId: undefined,
   });
@@ -202,9 +203,27 @@ export default function ChatInterface({
       if (currentFiles.length > 0) {
         setIsUploadingFile(true);
         for (const file of currentFiles) {
-          const result = await uploadFile({
-            fileBase64: file.base64,
+          // 1. Convertir base64 (preview) a Blob binario
+          const blob = base64ToBlob(file.base64);
+          // Para imágenes, blob.type refleja el formato real tras compresión (JPEG)
+          const actualMimeType = blob.type || file.type;
+
+          // 2. Subir binario directo a Convex Storage (sin límite de args)
+          const uploadUrl = await generateUploadUrl();
+          const uploadResp = await fetch(uploadUrl, {
+            method: "POST",
+            headers: { "Content-Type": actualMimeType },
+            body: blob,
+          });
+          if (!uploadResp.ok)
+            throw new Error("Error subiendo archivo a storage");
+          const { storageId } = await uploadResp.json();
+
+          // 3. Registrar en el sistema de archivos del agente
+          const result = await registerUploadedFile({
+            storageId,
             filename: file.name,
+            mimeType: actualMimeType,
             extractedMarkdown: file.extractedMarkdown,
             extractedImages: file.extractedImages,
           });

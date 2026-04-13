@@ -8,7 +8,7 @@ import { VoiceRecorderPanel } from "./VoiceRecorderPanel";
 const FILE_ACCEPT =
   "image/*,application/pdf,.docx,.doc,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/msword,audio/*,.mp3,.wav,.ogg,.m4a,.aac,.flac";
 const MAX_FILES = 3;
-const MAX_FILE_SIZE_MB = 5;
+const MAX_FILE_SIZE_MB = 20;
 const MAX_FILE_SIZE_BYTES = MAX_FILE_SIZE_MB * 1024 * 1024;
 
 // Tipos permitidos vía drag & drop

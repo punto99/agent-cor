@@ -252,16 +252,96 @@ export const getFileUrl = query({
 });
 
 // ============================================================
-// UPLOAD DIRECTO A STORAGE (para scripts)
+// UPLOAD DIRECTO A STORAGE
 // ============================================================
 
 /**
- * Genera una URL para subir archivos directamente al storage
- * Usado por scripts externos como process-pdf-multimodal.ts
+ * Genera una URL pre-firmada para subir archivos directamente al storage.
+ * El frontend hace POST con el body binario a esta URL → obtiene storageId.
  */
 export const generateUploadUrl = mutation({
   args: {},
   handler: async (ctx) => {
     return await ctx.storage.generateUploadUrl();
+  },
+});
+
+/**
+ * Registra un archivo ya subido al storage (via generateUploadUrl) en el
+ * sistema de archivos del agente (@convex-dev/agent).
+ *
+ * Flujo: generateUploadUrl → fetch POST (binario) → storageId → registerUploadedFile
+ *
+ * Esto evita el límite de 16 MiB en argumentos de action que afectaba al
+ * antiguo uploadFile (que recibía el archivo entero como base64 string).
+ */
+export const registerUploadedFile = action({
+  args: {
+    storageId: v.id("_storage"),
+    filename: v.string(),
+    mimeType: v.string(),
+    // Contenido extraído de Word (procesado en el frontend)
+    extractedMarkdown: v.optional(v.string()),
+    extractedImages: v.optional(v.array(v.object({
+      data: v.string(), // base64 sin prefijo
+      mimeType: v.string(),
+    }))),
+  },
+  handler: async (ctx, args) => {
+    console.log(`[Files] 📤 registerUploadedFile: ${args.filename} (${args.mimeType})`);
+
+    // 1. Obtener el blob desde storage (transferencia server-side, rápida)
+    const url = await ctx.storage.getUrl(args.storageId);
+    if (!url) throw new Error("Archivo no encontrado en storage");
+
+    const response = await fetch(url);
+    const arrayBuffer = await response.arrayBuffer();
+    const blob = new Blob([arrayBuffer], { type: args.mimeType });
+    const fileSizeKB = (arrayBuffer.byteLength / 1024).toFixed(2);
+    console.log(`[Files] 📊 Tamaño real: ${fileSizeKB}KB (${arrayBuffer.byteLength} bytes)`);
+
+    // 2. Guardar imágenes extraídas de Word (si las hay)
+    const extractedImageFileIds: string[] = [];
+    if (args.extractedImages && args.extractedImages.length > 0) {
+      console.log(`[Files] 📄 Guardando ${args.extractedImages.length} imágenes de documento Word...`);
+      for (let i = 0; i < args.extractedImages.length; i++) {
+        const img = args.extractedImages[i];
+        const imgBytes = Uint8Array.from(atob(img.data), c => c.charCodeAt(0));
+        const { file: imgFile } = await storeFile(
+          ctx,
+          components.agent,
+          new Blob([imgBytes], { type: img.mimeType }),
+          { filename: `${args.filename}-img-${i}.${img.mimeType.split('/')[1] || 'png'}` }
+        );
+        extractedImageFileIds.push(imgFile.fileId);
+        console.log(`[Files] 🖼️ Imagen Word ${i + 1} guardada: ${imgFile.fileId}`);
+      }
+    }
+
+    // 3. Registrar archivo principal en el sistema de archivos del agente
+    const { file } = await storeFile(
+      ctx,
+      components.agent,
+      blob,
+      { filename: args.filename }
+    );
+    console.log(`[Files] ✅ Archivo registrado: ${file.fileId}`);
+
+    // 4. Limpiar el upload temporal (storeFile creó su propia copia)
+    await ctx.storage.delete(args.storageId);
+
+    const mimeType = args.mimeType;
+    return {
+      fileId: file.fileId,
+      url: file.url,
+      mimeType,
+      isImage: isImageType(mimeType),
+      isDocument: isDocumentType(mimeType),
+      isWordDocument: isWordDocument(mimeType),
+      isAudio: isAudioFile(mimeType),
+      filename: args.filename,
+      extractedMarkdown: args.extractedMarkdown,
+      extractedImageFileIds,
+    };
   },
 });

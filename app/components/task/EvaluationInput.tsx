@@ -5,7 +5,7 @@ import type { SelectedFile } from "./types";
 import { getFileIcon, MAX_FILES, SUPPORTED_EVAL_FILE_TYPES } from "./types";
 import { compressImage } from "@/app/lib/imageCompression";
 
-const MAX_FILE_SIZE_MB = 5;
+const MAX_FILE_SIZE_MB = 20;
 const MAX_FILE_SIZE_BYTES = MAX_FILE_SIZE_MB * 1024 * 1024;
 
 interface FilePreviewProps {

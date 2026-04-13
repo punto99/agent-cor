@@ -11,6 +11,7 @@ import { EvaluationInput } from "../task/EvaluationInput";
 import { getStatusColor, getStatusDisplay } from "../task/types";
 import type { Task, SelectedFile, EvaluationMessage } from "../task/types";
 import { clientConfig } from "@/config/tenant.config";
+import { base64ToBlob } from "@/app/lib/imageCompression";
 import {
   X,
   ExternalLink,
@@ -58,7 +59,8 @@ export function TaskDetailDialog({
   const sendEvaluationFile = useMutation(
     api.data.evaluation.sendEvaluationFile,
   );
-  const uploadFile = useAction(api.data.files.uploadFile);
+  const generateUploadUrl = useMutation(api.data.files.generateUploadUrl);
+  const registerUploadedFile = useAction(api.data.files.registerUploadedFile);
   const [publishError, setPublishError] = useState<string | null>(null);
   const [isPublishing, setIsPublishing] = useState(false);
   const [isRetrying, setIsRetrying] = useState(false);
@@ -177,9 +179,26 @@ export function TaskDetailDialog({
     try {
       const fileIds: string[] = [];
       for (const file of selectedFiles) {
-        const uploadResult = await uploadFile({
-          fileBase64: file.base64,
+        // 1. Convertir base64 (preview) a Blob binario
+        const blob = base64ToBlob(file.base64);
+        // Para imágenes, blob.type refleja el formato real tras compresión (JPEG)
+        const actualMimeType = blob.type || file.type;
+
+        // 2. Subir binario directo a Convex Storage
+        const uploadUrl = await generateUploadUrl();
+        const uploadResp = await fetch(uploadUrl, {
+          method: "POST",
+          headers: { "Content-Type": actualMimeType },
+          body: blob,
+        });
+        if (!uploadResp.ok) throw new Error("Error subiendo archivo a storage");
+        const { storageId } = await uploadResp.json();
+
+        // 3. Registrar en el sistema de archivos del agente
+        const uploadResult = await registerUploadedFile({
+          storageId,
           filename: file.name,
+          mimeType: actualMimeType,
         });
         fileIds.push(uploadResult.fileId);
       }
