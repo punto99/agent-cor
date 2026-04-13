@@ -1,13 +1,15 @@
 "use client";
 
 import { useState, useEffect, useRef } from "react";
-import { useMutation, useQuery } from "convex/react";
+import { useMutation, useQuery, useAction } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import { TaskBriefContent } from "../task/TaskBriefContent";
 import { ProjectBriefContent } from "../task/ProjectBriefContent";
+import { EvaluationMessageList } from "../task/EvaluationMessages";
+import { EvaluationInput } from "../task/EvaluationInput";
 import { getStatusColor, getStatusDisplay } from "../task/types";
-import type { Task } from "../task/types";
+import type { Task, SelectedFile, EvaluationMessage } from "../task/types";
 import { clientConfig } from "@/config/tenant.config";
 import {
   X,
@@ -50,11 +52,27 @@ export function TaskDetailDialog({
   const retryTask = useMutation(api.data.tasks.retryTaskSync);
   const retryProject = useMutation(api.data.projects.retryProjectSync);
   const pullFromCOR = useMutation(api.data.corInboundSync.startPullFromCOR);
+  const createEvaluationThread = useMutation(
+    api.data.evaluation.createEvaluationThread,
+  );
+  const sendEvaluationFile = useMutation(
+    api.data.evaluation.sendEvaluationFile,
+  );
+  const uploadFile = useAction(api.data.files.uploadFile);
   const [publishError, setPublishError] = useState<string | null>(null);
   const [isPublishing, setIsPublishing] = useState(false);
   const [isRetrying, setIsRetrying] = useState(false);
   const [isPulling, setIsPulling] = useState(false);
-  const [activeTab, setActiveTab] = useState<"task" | "project">("task");
+  const [activeTab, setActiveTab] = useState<"task" | "project" | "evaluation">(
+    "task",
+  );
+
+  // === Evaluation state ===
+  const [evaluationThreadId, setEvaluationThreadId] = useState<string | null>(
+    null,
+  );
+  const [selectedFiles, setSelectedFiles] = useState<SelectedFile[]>([]);
+  const [isSubmittingEval, setIsSubmittingEval] = useState(false);
 
   // Suscripción reactiva a la task para detectar cambios en corSyncStatus
   const liveTask = useQuery(api.data.tasks.getTask, { taskId: task._id });
@@ -67,6 +85,29 @@ export function TaskDetailDialog({
     api.data.projects.getProject,
     task.projectId ? { projectId: task.projectId } : "skip",
   );
+
+  // === Evaluation: thread existente + mensajes ===
+  const existingEvalThread = useQuery(
+    api.data.evaluation.getEvaluationThreadByTask,
+    { taskId: task._id },
+  );
+
+  const evaluationMessages = useQuery(
+    api.data.evaluation.listEvaluationMessages,
+    evaluationThreadId
+      ? {
+          threadId: evaluationThreadId,
+          paginationOpts: { cursor: null, numItems: 50 },
+        }
+      : "skip",
+  );
+
+  // Sincronizar evaluationThreadId cuando el query resuelve
+  useEffect(() => {
+    if (existingEvalThread) {
+      setEvaluationThreadId(existingEvalThread.evaluationThreadId);
+    }
+  }, [existingEvalThread]);
 
   const showPublishButton = clientConfig.ui.showPublishToExternalTool;
   const toolName = clientConfig.ui.externalToolName;
@@ -114,6 +155,75 @@ export function TaskDetailDialog({
       setPublishError(err.message || "Error al iniciar la publicación");
     }
   };
+
+  // === Evaluation handlers ===
+  const handleStartEvaluation = async () => {
+    try {
+      const result = await createEvaluationThread({
+        briefThreadId: task.threadId,
+        taskId: task._id,
+      });
+      setEvaluationThreadId(result.evaluationThreadId);
+      setActiveTab("evaluation");
+    } catch (error) {
+      console.error("Error creando thread de evaluación:", error);
+    }
+  };
+
+  const handleSubmitEvaluation = async () => {
+    if (selectedFiles.length === 0 || !evaluationThreadId) return;
+
+    setIsSubmittingEval(true);
+    try {
+      const fileIds: string[] = [];
+      for (const file of selectedFiles) {
+        const uploadResult = await uploadFile({
+          fileBase64: file.base64,
+          filename: file.name,
+        });
+        fileIds.push(uploadResult.fileId);
+      }
+
+      await sendEvaluationFile({
+        evaluationThreadId,
+        briefThreadId: task.threadId,
+        taskId: task._id,
+        prompt:
+          "Por favor evalúa este producto final y compáralo con el requerimiento original.",
+        fileIds,
+      });
+
+      setSelectedFiles([]);
+    } catch (error) {
+      console.error("Error enviando evaluación:", error);
+    } finally {
+      setIsSubmittingEval(false);
+    }
+  };
+
+  // Transformar mensajes de evaluación para el componente
+  const evalMessageList: EvaluationMessage[] = (evaluationMessages?.page || [])
+    .map((msg: any) => ({
+      key: msg.key,
+      role: msg.role,
+      content: msg.parts || msg.text || "",
+      text: msg.text,
+      agentName: msg.agentName,
+      status: msg.status,
+    }))
+    .filter((msg: EvaluationMessage) => {
+      if (msg.role === "assistant") {
+        const hasContent = Array.isArray(msg.content)
+          ? msg.content.some((p) => p.text || p.url)
+          : typeof msg.content === "string" && msg.content.trim() !== "";
+        return hasContent || msg.status === "streaming";
+      }
+      return true;
+    });
+
+  const isEvaluatorThinking =
+    evalMessageList.length > 0 &&
+    evalMessageList[evalMessageList.length - 1]?.role === "user";
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center">
@@ -176,10 +286,35 @@ export function TaskDetailDialog({
               )}
             </button>
           )}
+          <button
+            onClick={() => {
+              if (!evaluationThreadId) {
+                handleStartEvaluation();
+              } else {
+                setActiveTab("evaluation");
+              }
+            }}
+            className={`px-4 py-2.5 text-sm font-medium transition-colors relative cursor-pointer ${
+              activeTab === "evaluation"
+                ? "text-primary"
+                : "text-muted-foreground hover:text-foreground"
+            }`}
+          >
+            ✨ Evaluar
+            {activeTab === "evaluation" && (
+              <span className="absolute bottom-0 left-0 right-0 h-0.5 bg-primary rounded-full" />
+            )}
+          </button>
         </div>
 
         {/* Body — Tab content */}
-        <div className="flex-1 min-h-0 overflow-y-auto">
+        <div
+          className={`flex-1 min-h-0 ${
+            activeTab === "evaluation"
+              ? "flex flex-col overflow-hidden"
+              : "overflow-y-auto"
+          }`}
+        >
           {activeTab === "task" && (
             <TaskBriefContent
               task={liveTask ?? task}
@@ -241,10 +376,25 @@ export function TaskDetailDialog({
               />
             </div>
           )}
+
+          {activeTab === "evaluation" && (
+            <>
+              <EvaluationMessageList
+                messages={evalMessageList}
+                isThinking={isEvaluatorThinking}
+              />
+              <EvaluationInput
+                selectedFiles={selectedFiles}
+                setSelectedFiles={setSelectedFiles}
+                onSubmit={handleSubmitEvaluation}
+                isSubmitting={isSubmittingEval}
+              />
+            </>
+          )}
         </div>
 
-        {/* Footer — Publish action */}
-        {showPublishButton && (
+        {/* Footer — Publish action (hidden on evaluation tab) */}
+        {showPublishButton && activeTab !== "evaluation" && (
           <div className="px-6 py-4 border-t border-border flex-shrink-0 bg-muted/30">
             {/* Sync status info */}
             {syncStatus === "synced" && (
