@@ -37,6 +37,13 @@ export interface ExternalProject {
   id: number;
   name: string;
   clientId: number;
+  // Campos de lectura (opcionales — presentes al hacer GET, no necesarios al crear)
+  brief?: string;
+  startDate?: string;
+  endDate?: string;
+  deliverables?: string;
+  status?: string;
+  estimatedTime?: number;
 }
 
 /** Task tal como existe en el sistema externo */
@@ -161,6 +168,12 @@ export interface ProjectManagementProvider {
    * Retorna null si no se encuentra.
    */
   getTask(taskId: number): Promise<ExternalTask | null>;
+
+  /**
+   * Obtener los datos de un proyecto desde el sistema externo.
+   * Retorna null si no se encuentra.
+   */
+  getProject(projectId: number): Promise<ExternalProject | null>;
 
   /**
    * Actualizar una task existente en el sistema externo.

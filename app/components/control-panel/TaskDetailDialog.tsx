@@ -16,6 +16,7 @@ import {
   CheckCircle2,
   AlertCircle,
   RefreshCw,
+  RefreshCcw,
 } from "lucide-react";
 
 interface TaskDetailDialogProps {
@@ -48,9 +49,11 @@ export function TaskDetailDialog({
   const startPublish = useMutation(api.data.tasks.startPublishTaskToExternal);
   const retryTask = useMutation(api.data.tasks.retryTaskSync);
   const retryProject = useMutation(api.data.projects.retryProjectSync);
+  const pullFromCOR = useMutation(api.data.corInboundSync.startPullFromCOR);
   const [publishError, setPublishError] = useState<string | null>(null);
   const [isPublishing, setIsPublishing] = useState(false);
   const [isRetrying, setIsRetrying] = useState(false);
+  const [isPulling, setIsPulling] = useState(false);
   const [activeTab, setActiveTab] = useState<"task" | "project">("task");
 
   // Suscripción reactiva a la task para detectar cambios en corSyncStatus
@@ -369,6 +372,32 @@ export function TaskDetailDialog({
               >
                 Cerrar
               </button>
+
+              {/* Botón pull inbound: actualizar desde COR */}
+              {syncStatus === "synced" && task.corTaskId && (
+                <button
+                  onClick={async () => {
+                    try {
+                      setIsPulling(true);
+                      setPublishError(null);
+                      await pullFromCOR({ taskId: task._id });
+                    } catch (err: any) {
+                      setPublishError(
+                        err.message || `Error al actualizar desde ${toolName}`,
+                      );
+                    } finally {
+                      setIsPulling(false);
+                    }
+                  }}
+                  disabled={isPulling}
+                  title={`Actualizar desde ${toolName}`}
+                  className="p-2 border border-border rounded-lg hover:bg-muted transition-colors text-muted-foreground hover:text-foreground disabled:opacity-50 cursor-pointer ml-auto"
+                >
+                  <RefreshCcw
+                    className={`h-4 w-4 ${isPulling ? "animate-spin" : ""}`}
+                  />
+                </button>
+              )}
             </div>
           </div>
         )}

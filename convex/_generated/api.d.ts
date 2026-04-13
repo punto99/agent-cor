@@ -17,6 +17,7 @@ import type * as agents_reviewerAgent from "../agents/reviewerAgent.js";
 import type * as auth from "../auth.js";
 import type * as data_backfill from "../data/backfill.js";
 import type * as data_corClients from "../data/corClients.js";
+import type * as data_corInboundSync from "../data/corInboundSync.js";
 import type * as data_corUsers from "../data/corUsers.js";
 import type * as data_corUsersActions from "../data/corUsersActions.js";
 import type * as data_evaluation from "../data/evaluation.js";
@@ -75,6 +76,7 @@ declare const fullApi: ApiFromModules<{
   auth: typeof auth;
   "data/backfill": typeof data_backfill;
   "data/corClients": typeof data_corClients;
+  "data/corInboundSync": typeof data_corInboundSync;
   "data/corUsers": typeof data_corUsers;
   "data/corUsersActions": typeof data_corUsersActions;
   "data/evaluation": typeof data_evaluation;

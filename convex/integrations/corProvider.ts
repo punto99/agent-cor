@@ -419,6 +419,41 @@ export function createCORProvider(): ProjectManagementProvider {
       }
     },
 
+    // ==================== GET PROJECT ====================
+
+    async getProject(projectId: number): Promise<ExternalProject | null> {
+      console.log(`[COR Provider] 🔍 Obteniendo proyecto: ${projectId}`);
+
+      try {
+        const response = await corApiFetch(`/projects/${projectId}`);
+
+        if (!response.ok) {
+          console.error(`[COR Provider] ❌ Error obteniendo proyecto: ${response.status}`);
+          return null;
+        }
+
+        const project = await response.json();
+
+        return {
+          id: project.id,
+          name: project.name,
+          clientId: project.client_id,
+          brief: project.brief,
+          startDate: project.start,
+          endDate: project.end,
+          // COR puede retornar deliverables como número (ej: 0.0) — coerce a string
+          deliverables: project.deliverables != null && project.deliverables !== 0
+            ? String(project.deliverables)
+            : undefined,
+          status: project.status,
+          estimatedTime: project.estimated_time,
+        };
+      } catch (error) {
+        console.error(`[COR Provider] ❌ Error en getProject:`, error);
+        return null;
+      }
+    },
+
     // ==================== UPDATE TASK ====================
 
     async updateTask(
