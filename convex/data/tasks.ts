@@ -10,7 +10,7 @@ import { internal, components } from "../_generated/api";
 import { getProjectManagementProvider } from "../integrations/registry";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { hashText } from "../lib/briefFormat";
-import { shouldRetry, getRetryDelay, formatRetryError, MAX_RETRY_ATTEMPTS } from "../lib/corRetry";
+import { shouldRetry, getRetryDelay, formatRetryError, isClientError, MAX_RETRY_ATTEMPTS } from "../lib/corRetry";
 import type { ActionCtx } from "../_generated/server";
 
 // ==================== MUTATIONS ====================
@@ -1105,7 +1105,10 @@ export const syncEditToCORAction = internalAction({
       const errorMsg = formatRetryError(error);
       console.error(`[SyncEdit] ❌ Error en sincronización (intento ${attempt + 1}):`, errorMsg);
 
-      if (shouldRetry(attempt)) {
+      // Errores 4xx son de validación/cliente — nunca se resuelven reintentando
+      const canRetry = !isClientError(error) && shouldRetry(attempt);
+
+      if (canRetry) {
         const delay = getRetryDelay(attempt)!;
         console.log(`[SyncEdit] 🔄 Reintentando en ${delay / 1000}s (intento ${attempt + 2}/${MAX_RETRY_ATTEMPTS})`);
 
@@ -1127,12 +1130,18 @@ export const syncEditToCORAction = internalAction({
           attempt: attempt + 1,
         });
       } else {
-        // Se agotaron los reintentos → marcar como error definitivo
-        console.error(`[SyncEdit] 🚫 Reintentos agotados para task ${args.taskId}`);
+        // Error de cliente (4xx) o reintentos agotados → marcar como error definitivo
+        if (isClientError(error)) {
+          console.error(`[SyncEdit] 🚫 Error de cliente (4xx) — no se reintenta: ${errorMsg}`);
+        } else {
+          console.error(`[SyncEdit] 🚫 Reintentos agotados para task ${args.taskId}`);
+        }
         await ctx.runMutation(internal.data.tasks.updatePublishStatus, {
           taskId: args.taskId,
           corSyncStatus: "error",
-          corSyncError: `Falló después de ${MAX_RETRY_ATTEMPTS} intentos. Último error: ${errorMsg}`,
+          corSyncError: isClientError(error)
+            ? `Error de validación COR (no reintentable): ${errorMsg}`
+            : `Falló después de ${MAX_RETRY_ATTEMPTS} intentos. Último error: ${errorMsg}`,
         });
         await ctx.runMutation(internal.data.tasks.updateSyncMetadata, {
           taskId: args.taskId,
@@ -1558,7 +1567,10 @@ export const publishTaskToExternalAction = internalAction({
       const errorMsg = formatRetryError(error);
       console.error(`[PublishTask] ❌ Error publicando (intento ${attempt + 1}):`, errorMsg);
       
-      if (shouldRetry(attempt)) {
+      // Errores 4xx son de validación/cliente — nunca se resuelven reintentando
+      const canRetry = !isClientError(error) && shouldRetry(attempt);
+
+      if (canRetry) {
         const delay = getRetryDelay(attempt)!;
         console.log(`[PublishTask] 🔄 Reintentando en ${delay / 1000}s (intento ${attempt + 2}/${MAX_RETRY_ATTEMPTS})`);
 
@@ -1577,11 +1589,17 @@ export const publishTaskToExternalAction = internalAction({
           attempt: attempt + 1,
         });
       } else {
-        console.error(`[PublishTask] 🚫 Reintentos agotados para task ${args.taskId}`);
+        if (isClientError(error)) {
+          console.error(`[PublishTask] 🚫 Error de cliente (4xx) — no se reintenta: ${errorMsg}`);
+        } else {
+          console.error(`[PublishTask] 🚫 Reintentos agotados para task ${args.taskId}`);
+        }
         await ctx.runMutation(internal.data.tasks.updatePublishStatus, {
           taskId: args.taskId,
           corSyncStatus: "error",
-          corSyncError: `Falló después de ${MAX_RETRY_ATTEMPTS} intentos. Último error: ${errorMsg}`,
+          corSyncError: isClientError(error)
+            ? `Error de validación COR (no reintentable): ${errorMsg}`
+            : `Falló después de ${MAX_RETRY_ATTEMPTS} intentos. Último error: ${errorMsg}`,
         });
         await ctx.runMutation(internal.data.tasks.updateSyncMetadata, {
           taskId: args.taskId,

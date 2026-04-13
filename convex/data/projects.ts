@@ -17,7 +17,7 @@ import {
 import { internal } from "../_generated/api";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { getProjectManagementProvider } from "../integrations/registry";
-import { shouldRetry, getRetryDelay, formatRetryError, MAX_RETRY_ATTEMPTS } from "../lib/corRetry";
+import { shouldRetry, getRetryDelay, formatRetryError, isClientError, MAX_RETRY_ATTEMPTS } from "../lib/corRetry";
 
 // ==================== QUERIES ====================
 
@@ -370,7 +370,10 @@ export const syncProjectEditToCORAction = internalAction({
       const errorMsg = formatRetryError(error);
       console.error(`[SyncProjectEdit] ❌ Error (intento ${attempt + 1}):`, errorMsg);
 
-      if (shouldRetry(attempt)) {
+      // Errores 4xx son de validación/cliente — nunca se resuelven reintentando
+      const canRetry = !isClientError(error) && shouldRetry(attempt);
+
+      if (canRetry) {
         const delay = getRetryDelay(attempt)!;
         console.log(`[SyncProjectEdit] 🔄 Reintentando en ${delay / 1000}s (intento ${attempt + 2}/${MAX_RETRY_ATTEMPTS})`);
 
@@ -387,11 +390,17 @@ export const syncProjectEditToCORAction = internalAction({
           attempt: attempt + 1,
         });
       } else {
-        console.error(`[SyncProjectEdit] 🚫 Reintentos agotados para proyecto ${args.projectId}`);
+        if (isClientError(error)) {
+          console.error(`[SyncProjectEdit] 🚫 Error de cliente (4xx) — no se reintenta: ${errorMsg}`);
+        } else {
+          console.error(`[SyncProjectEdit] 🚫 Reintentos agotados para proyecto ${args.projectId}`);
+        }
         await ctx.runMutation(internal.data.projects.updateProjectSyncMetadata, {
           projectId: args.projectId,
           corSyncStatus: "error",
-          corSyncError: `Falló después de ${MAX_RETRY_ATTEMPTS} intentos. Último error: ${errorMsg}`,
+          corSyncError: isClientError(error)
+            ? `Error de validación COR (no reintentable): ${errorMsg}`
+            : `Falló después de ${MAX_RETRY_ATTEMPTS} intentos. Último error: ${errorMsg}`,
           corSyncAttempt: attempt,
         });
       }

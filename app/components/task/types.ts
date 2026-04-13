@@ -51,6 +51,10 @@ export const getStatusColor = (status: string) => {
       "bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400 border-blue-200 dark:border-blue-800",
     en_proceso:
       "bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-400 border-amber-200 dark:border-amber-800",
+    en_revision:
+      "bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-400 border-purple-200 dark:border-purple-800",
+    en_diseno:
+      "bg-orange-100 dark:bg-orange-900/30 text-orange-700 dark:text-orange-400 border-orange-200 dark:border-orange-800",
     estancada:
       "bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400 border-red-200 dark:border-red-800",
     finalizada:
@@ -75,7 +79,9 @@ export const getStatusDisplay = (status: string): string => {
   const map: Record<string, string> = {
     nueva: "Nueva",
     en_proceso: "En Proceso",
-    estancada: "Estancada",
+    en_revision: "En Revisión",
+    en_diseno: "Ajustes",
+    estancada: "Suspendida",
     finalizada: "Finalizada",
   };
   return map[status] || status;

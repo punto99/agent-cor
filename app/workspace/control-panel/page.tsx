@@ -105,8 +105,10 @@ export default function ControlPanelPage() {
   const statusOptions = [
     { value: undefined, label: "Todas" },
     { value: "nueva", label: "Nueva" },
-    { value: "en_proceso", label: "En proceso" },
-    { value: "estancada", label: "Estancada" },
+    { value: "en_proceso", label: "En Proceso" },
+    { value: "en_revision", label: "En Revisión" },
+    { value: "en_diseno", label: "Ajustes" },
+    { value: "estancada", label: "Suspendida" },
     { value: "finalizada", label: "Finalizada" },
   ];
 

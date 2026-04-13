@@ -411,10 +411,13 @@ const getPriorityColor = (value: string): string => {
 };
 
 // Opciones de estado para COR
+// Códigos reales del API: nueva, en_proceso, en_revision, en_diseno, estancada, finalizada
 const STATUS_OPTIONS: { value: string; label: string }[] = [
   { value: "nueva", label: "Nueva" },
   { value: "en_proceso", label: "En Proceso" },
-  { value: "estancada", label: "Estancada" },
+  { value: "en_revision", label: "En Revisión" },
+  { value: "en_diseno", label: "Ajustes" },
+  { value: "estancada", label: "Suspendida" },
   { value: "finalizada", label: "Finalizada" },
 ];
 
@@ -422,7 +425,9 @@ const STATUS_OPTIONS: { value: string; label: string }[] = [
 const STATUS_DISPLAY: Record<string, string> = {
   nueva: "Nueva",
   en_proceso: "En Proceso",
-  estancada: "Estancada",
+  en_revision: "En Revisión",
+  en_diseno: "Ajustes",
+  estancada: "Suspendida",
   finalizada: "Finalizada",
 };
 

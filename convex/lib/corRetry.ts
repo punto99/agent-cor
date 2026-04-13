@@ -36,6 +36,21 @@ export function shouldRetry(attempt: number): boolean {
 }
 
 /**
+ * Detecta si un error es un error de cliente (4xx) que nunca se va a resolver reintentando.
+ * Busca patrones como "COR API error: 4xx" o "COR auth failed: 4xx" en el mensaje.
+ */
+export function isClientError(error: unknown): boolean {
+  const msg = error instanceof Error ? error.message : String(error);
+  // Matchea "COR API error: 4xx" o "COR auth failed: 4xx" o "Error creando ... en COR: 4xx"
+  const httpStatusMatch = msg.match(/:\s*(\d{3})\s*-/);
+  if (httpStatusMatch) {
+    const status = parseInt(httpStatusMatch[1]);
+    return status >= 400 && status < 500;
+  }
+  return false;
+}
+
+/**
  * Extrae un mensaje limpio de un error para guardar en corSyncError.
  * Nunca expone stack traces ni info sensible.
  */

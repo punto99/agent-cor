@@ -1,5 +1,7 @@
 "use client";
 
+import { getStatusDisplay } from "./types";
+
 interface TaskPanelHeaderProps {
   title: string;
   isExpanded: boolean;
@@ -98,7 +100,7 @@ export function StatusBadge({ status, colorClass }: StatusBadgeProps) {
     <span
       className={`px-2 py-0.5 rounded-full text-xs font-medium border ${colorClass}`}
     >
-      {status.replace("_", " ").toUpperCase()}
+      {getStatusDisplay(status)}
     </span>
   );
 }
