@@ -306,6 +306,10 @@ export function createCORProvider(): ProjectManagementProvider {
         body.brief = data.description;
       }
 
+      if (data.estimatedTime) {
+        body.estimated_time = data.estimatedTime;
+      }
+
       if (data.deadline) {
         const deadlineDate = parseDateFlexible(data.deadline);
         if (deadlineDate) {

@@ -1492,6 +1492,7 @@ export const publishTaskToExternalAction = internalAction({
             clientId,
             description: localProject?.brief || task.description,
             deadline: localProject?.endDate || task.deadline,
+            estimatedTime: localProject?.estimatedTime,
           });
 
           corProjectId = project.id;
