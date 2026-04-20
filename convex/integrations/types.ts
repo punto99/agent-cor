@@ -70,6 +70,8 @@ export interface CreateProjectInput {
   deadline?: string;
   /** ID del fee/tarifa del cliente (requerido por COR, se auto-resuelve si no se pasa) */
   feeId?: number;
+  /** Horas estimadas del proyecto */
+  estimatedTime?: number;
 }
 
 export interface CreateTaskInput {

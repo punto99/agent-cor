@@ -516,9 +516,10 @@ export const validateAndPrepareTask = internalQuery({
 
       // cliente local
       if (args.corClientId) {
+        const corClientId = args.corClientId;
         const localClient = await ctx.db
           .query("corClients")
-          .withIndex("by_corClientId", (q) => q.eq("corClientId", args.corClientId))
+          .withIndex("by_corClientId", (q) => q.eq("corClientId", corClientId))
           .unique();
         if (!localClient) {
           return { ok: false as const, error: "❌ El cliente no está registrado localmente. Usa primero la herramienta 'validateUserForClient'." };
@@ -555,9 +556,10 @@ export const validateAndPrepareTask = internalQuery({
 
     // Si no hay integración y no resolvimos localClientId, intentar buscar
     if (!localClientId && args.corClientId) {
+      const corClientId = args.corClientId;
       const localClient = await ctx.db
         .query("corClients")
-        .withIndex("by_corClientId", (q) => q.eq("corClientId", args.corClientId))
+        .withIndex("by_corClientId", (q) => q.eq("corClientId", corClientId))
         .unique();
       if (localClient) localClientId = localClient._id;
     }
@@ -1490,6 +1492,7 @@ export const publishTaskToExternalAction = internalAction({
             clientId,
             description: localProject?.brief || task.description,
             deadline: localProject?.endDate || task.deadline,
+            estimatedTime: localProject?.estimatedTime,
           });
 
           corProjectId = project.id;

@@ -1,11 +1,11 @@
 // convex/tools/reviewBriefTool.ts
 // Tool de validación del brief usando el reviewerAgent (agente supervisor de calidad)
-// NOTA: Se llama a reviewerAgent.generateText() directamente en lugar de via runAction,
+// Usa el patrón agent.start() + AI SDK generateText() (mismo que chat.ts y evaluatorAgentAction.ts)
 // porque el tool handler ya corre dentro de un ActionCtx (mismo runtime, sin necesidad de cruzar).
-// Esto evita el overhead de un action anidado que congela el parent y duplica recursos.
 // Ref: https://docs.convex.dev/functions/actions#await-ctxrunaction-should-only-be-used-for-crossing-js-runtimes
 import { createTool } from "@convex-dev/agent";
 import { z } from "zod";
+import { generateText } from "ai";
 import { reviewerAgent } from "../agents/reviewerAgent";
 
 // Tool que el briefAgent usa para validar si la información recolectada es suficiente.
@@ -47,13 +47,20 @@ export const reviewBriefTool = createTool({
     const prompt = `Evalúa el siguiente brief recolectado y responde en el formato JSON especificado en tus instrucciones:\n\n${briefSummary}`;
     
     try {
-      // Llamar al reviewerAgent directamente (sin runAction — mismo runtime)
-      // El ctx del tool ya es un ActionCtx, generateText funciona directamente.
-      const result = await reviewerAgent.generateText(
+      // Usar patrón agent.start() + AI SDK generateText()
+      // (mismo patrón que chat.ts y evaluatorAgentAction.ts — evita problemas de tipos)
+      const { args: preparedArgs, save } = await reviewerAgent.start(
         ctx,
-        { userId: ctx.userId },
-        { prompt }
+        { prompt },
+        { userId: ctx.userId }
       );
+      const result = await generateText({
+        ...preparedArgs,
+      });
+      // Guardar resultado en el thread del reviewer
+      for (const step of result.steps) {
+        await save({ step });
+      }
       console.log("[ReviewTool] ✅ Evaluación del reviewer completada");
       return `EVALUACION DEL SUPERVISOR:\n\n${result.text}`;
     } catch (error) {

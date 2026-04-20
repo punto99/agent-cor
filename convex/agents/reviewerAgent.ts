@@ -14,7 +14,6 @@ const languageModel = google("gemini-3.1-pro-preview");
 export const reviewerAgent = new Agent(components.agent, {
   name: agentConfig.reviewer.name,
   instructions: getReviewerAgentInstructions(),
-  
   languageModel,
   tools: {},
   maxSteps: 3,
