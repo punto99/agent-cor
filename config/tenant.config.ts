@@ -14,8 +14,8 @@
 // TIPOS
 // =====================================================
 
-const CLIENT = "Beyond Prompting"
-const CLIENT_ID = "beyond-prompting"
+const CLIENT = "Punto 99"
+const CLIENT_ID = "pto99"
 
 export interface TenantConfig {
   // ID único del tenant (usado internamente)
