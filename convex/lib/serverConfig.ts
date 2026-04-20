@@ -8,8 +8,8 @@
  * Ver FORK_SETUP_GUIDE.md para instrucciones de configuración por cliente.
  */
 
-const CLIENT = "Beyond Prompting"
-const CLIENT_ID = "beyond-prompting"
+const CLIENT = "Punto 99"
+const CLIENT_ID = "pto99"
 
 // =====================================================
 // TENANT ACTIVO
@@ -42,7 +42,7 @@ export const agentConfig = {
   brief: {
     name: `Asistente de Brief ${CLIENT}`,
     companyName: CLIENT,
-    companyDescription: "una empresa especializada en soluciones de inteligencia artificial y automatización",
+    companyDescription: "una agencia de publicidad integral del Ecuador especializada en estrategia y creatividad",
   },
   orchestrator: {
     name: `Orquestador ${CLIENT}`,
@@ -51,7 +51,7 @@ export const agentConfig = {
   documentSearch: {
     name: `Asistente de Búsqueda ${CLIENT}`,
     companyName: CLIENT,
-    companyDescription: "una empresa especializada en soluciones de inteligencia artificial y automatización",
+    companyDescription: "una agencia de publicidad integral del Ecuador especializada en estrategia y creatividad",
   },
   evaluator: {
     name: `Evaluador de Resultados ${CLIENT}`,
