@@ -10,8 +10,7 @@
 // Ref: https://docs.convex.dev/functions/actions#avoid-await-ctxrunmutation--await-ctxrunquery
 import { createTool } from "@convex-dev/agent";
 import { z } from "zod";
-import { listMessages } from "@convex-dev/agent";
-import { internal, components } from "../_generated/api";
+import { internal } from "../_generated/api";
 import { isProjectManagementEnabled } from "../integrations/registry";
 import { buildBriefDescription } from "../lib/briefFormat";
 import { associateFilesHelper } from "../data/tasks";
@@ -129,36 +128,6 @@ export const createTaskTool = createTool({
     });
 
     // ====================================================
-    // Obtener URLs de archivos del thread para el campo brief del proyecto
-    // ====================================================
-    let fileUrls: string[] = [];
-    try {
-      const messagesResult = await listMessages(ctx, components.agent, {
-        threadId,
-        paginationOpts: { cursor: null, numItems: 50 },
-      });
-
-      for (const msg of messagesResult.page) {
-        const msgAny = msg as any;
-        if (msgAny.fileIds && Array.isArray(msgAny.fileIds)) {
-          for (const fileId of msgAny.fileIds) {
-            try {
-              const fileInfo = await ctx.runQuery(internal.data.tasks.getFileInfoInternal, { fileId });
-              if (fileInfo?.url) {
-                fileUrls.push(fileInfo.url);
-              }
-            } catch {
-              // Skip files that can't be resolved
-            }
-          }
-        }
-      }
-      console.log(`[CreateTask] 📎 URLs de archivos encontradas: ${fileUrls.length}`);
-    } catch (error) {
-      console.log("[CreateTask] ⚠️ No se pudieron obtener URLs de archivos (continuando):", error);
-    }
-
-    // ====================================================
     // CREAR PROYECTO + TASK ATÓMICAMENTE (1 mutation en vez de 2)
     // ====================================================
     console.log("[CreateTask] ⏳ Creando proyecto y task...");
@@ -167,7 +136,6 @@ export const createTaskTool = createTool({
       result = await ctx.runMutation(internal.data.tasks.createProjectAndTask, {
         // Project
         projectName: fullTitle,
-        projectBrief: fileUrls.length > 0 ? fileUrls.join(", ") : undefined,
         projectEndDate: args.deadline,
         projectDeliverables: args.deliverables,
         projectEstimatedTime: args.estimatedTime,
