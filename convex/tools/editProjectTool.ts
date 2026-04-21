@@ -24,7 +24,7 @@ export const editProjectTool = createTool({
     brief: z.string().optional().describe("Nuevo brief del proyecto"),
     startDate: z.string().optional().describe("Nueva fecha de inicio (YYYY-MM-DD)"),
     endDate: z.string().optional().describe("Nueva fecha de fin / deadline (YYYY-MM-DD)"),
-    deliverables: z.string().optional().describe("Nuevos entregables"),
+    deliverables: z.number().optional().describe("Nueva cantidad de entregables"),
     estimatedTime: z.number().optional().describe("Nuevo tiempo estimado en horas"),
   }),
   handler: async (ctx, args): Promise<string> => {
@@ -125,8 +125,8 @@ export const editProjectTool = createTool({
 **Brief:**
 ${project.brief || "Sin brief"}
 
-**Entregables:**
-${project.deliverables || "No especificados"}
+**Cantidad de entregables:**
+${project.deliverables ?? "No especificada"}
 
 ¿Qué cambios quieres hacer?`;
       }
@@ -179,8 +179,8 @@ ${project.deliverables || "No especificados"}
 **Brief:**
 ${final.brief || "Sin brief"}
 
-**Entregables:**
-${final.deliverables || "No especificados"}
+**Cantidad de entregables:**
+${final.deliverables ?? "No especificada"}
 
 ¿Hay algo más que quieras modificar?`;
     } catch (error) {

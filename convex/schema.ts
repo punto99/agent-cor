@@ -255,7 +255,7 @@ export default defineSchema({
     estimatedTime: v.optional(v.number()),     // Horas estimadas
     billable: v.optional(v.boolean()),
     incomeType: v.optional(v.string()),        // "fee" | "one_time" | "hourly_rate" | "contract"
-    deliverables: v.optional(v.string()),
+    deliverables: v.optional(v.number()),      // Cantidad de entregables
     pmId: v.optional(v.number()),              // PM en COR (opcional)
     brandId: v.optional(v.number()),           // Marca en COR (opcional)
     productId: v.optional(v.number()),         // Producto en COR (opcional)

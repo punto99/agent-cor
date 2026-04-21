@@ -41,7 +41,7 @@ export interface ExternalProject {
   brief?: string;
   startDate?: string;
   endDate?: string;
-  deliverables?: string;
+  deliverables?: number;
   status?: string;
   estimatedTime?: number;
 }
@@ -102,7 +102,8 @@ export interface UpdateProjectInput {
   brief?: string;
   startDate?: string;
   endDate?: string;
-  deliverables?: string;
+  deliverables?: number;
+  pmId?: number;
   estimatedTime?: number;
   status?: string;
 }

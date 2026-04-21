@@ -71,8 +71,8 @@ ${corInfo}
 **Brief:**
 ${project.brief || "Sin brief"}
 
-**Entregables:**
-${project.deliverables || "No especificados"}
+**Cantidad de entregables:**
+${project.deliverables ?? "No especificada"}
 `;
 
       console.log("[GetProject] Proyecto encontrado y formateado exitosamente");

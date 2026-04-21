@@ -117,11 +117,57 @@ function mapPriorityToCOR(priority: string | number | undefined): number {
 }
 
 /**
- * Convierte saltos de línea planos (\n) a HTML <br> para que COR
- * los renderice correctamente en la descripción de la task.
- * Nuestro DB almacena \n; COR necesita <br>.
+ * COR espera deliverables como entero. Acepta number o string numérico.
+ * Si el valor no es entero válido, retorna undefined para omitir el campo.
  */
-function plaintextToCorHtml(text: string): string {
+function mapDeliverablesToCOR(value: unknown): number | undefined {
+  if (typeof value === "number" && Number.isInteger(value) && value >= 0) return value;
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (/^\d+$/.test(trimmed)) return parseInt(trimmed, 10);
+  }
+  return undefined;
+}
+
+function parseDeliverablesFromCOR(value: unknown): number | undefined {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    const normalized = Math.trunc(value);
+    return normalized >= 0 ? normalized : undefined;
+  }
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (/^\d+$/.test(trimmed)) return parseInt(trimmed, 10);
+  }
+  return undefined;
+}
+
+function mapPmIdToCOR(value: unknown): number | undefined {
+  if (typeof value === "number" && Number.isInteger(value) && value > 0) return value;
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (/^\d+$/.test(trimmed)) {
+      const parsed = parseInt(trimmed, 10);
+      return parsed > 0 ? parsed : undefined;
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Normaliza description al formato esperado por COR.
+ * Si ya viene como HTML, se envía tal cual.
+ * Si viene como texto plano, se convierte a <br> para mantener saltos de línea.
+ */
+function normalizeDescriptionForCOR(text: string): string {
+  const trimmed = text.trim();
+  if (!trimmed) return "";
+
+  // Si contiene tags HTML, asumir que ya viene en rich text
+  if (/<\/?[a-z][\s\S]*>/i.test(trimmed)) {
+    return text;
+  }
+
+  // Fallback para compatibilidad: plain text → html con <br>
   return text.replace(/\n/g, "<br>\n");
 }
 
@@ -355,7 +401,7 @@ export function createCORProvider(): ProjectManagementProvider {
       };
 
       if (data.description) {
-        body.description = plaintextToCorHtml(data.description);
+        body.description = normalizeDescriptionForCOR(data.description);
       }
 
       if (data.status) {
@@ -449,10 +495,7 @@ export function createCORProvider(): ProjectManagementProvider {
           brief: project.brief,
           startDate: project.start,
           endDate: project.end,
-          // COR puede retornar deliverables como número (ej: 0.0) — coerce a string
-          deliverables: project.deliverables != null && project.deliverables !== 0
-            ? String(project.deliverables)
-            : undefined,
+          deliverables: parseDeliverablesFromCOR(project.deliverables),
           status: project.status,
           estimatedTime: project.estimated_time,
         };
@@ -489,7 +532,7 @@ export function createCORProvider(): ProjectManagementProvider {
         const updateBody: Record<string, unknown> = {
           title: data.title ?? currentTask.title,
           description: data.description != null
-            ? plaintextToCorHtml(data.description)
+            ? normalizeDescriptionForCOR(data.description)
             : currentTask.description,
           priority: data.priority != null
             ? mapPriorityToCOR(data.priority)
@@ -557,12 +600,23 @@ export function createCORProvider(): ProjectManagementProvider {
         const updateBody: Record<string, unknown> = {
           name: data.name ?? currentProject.name,
           brief: data.brief ?? currentProject.brief,
-          deliverables: data.deliverables ?? currentProject.deliverables,
           estimated_time: data.estimatedTime ?? currentProject.estimated_time,
           status: data.status ?? currentProject.status,
           start: currentProject.start,
           end: currentProject.end,
         };
+
+        const deliverablesCandidate = data.deliverables ?? currentProject.deliverables;
+        const deliverables = mapDeliverablesToCOR(deliverablesCandidate);
+        if (deliverables !== undefined) {
+          updateBody.deliverables = deliverables;
+        }
+
+        const pmIdCandidate = data.pmId ?? currentProject.pm_id;
+        const pmId = mapPmIdToCOR(pmIdCandidate);
+        if (pmId !== undefined) {
+          updateBody.pm_id = pmId;
+        }
 
         if (data.startDate) {
           const d = parseDateFlexible(data.startDate);

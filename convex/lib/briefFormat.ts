@@ -16,13 +16,89 @@
 
 // ==================== BUILD BRIEF DESCRIPTION ====================
 
+export const STRATEGIC_PRIORITY_VALUES = ["I_U", "I_NU", "NI_U", "NI_NU"] as const;
+export type StrategicPriority = typeof STRATEGIC_PRIORITY_VALUES[number];
+
+const STRATEGIC_PRIORITY_COLORS: Record<StrategicPriority, string> = {
+  I_U: "#dc2626",   // rojo
+  I_NU: "#d97706",  // ámbar
+  NI_U: "#2563eb",  // azul
+  NI_NU: "#16a34a", // verde
+};
+
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/\"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+function textToParagraphs(text: string): string {
+  return escapeHtml(text).replace(/\n/g, "<br>\n");
+}
+
+export function isStrategicPriority(value: string): value is StrategicPriority {
+  return STRATEGIC_PRIORITY_VALUES.includes(value as StrategicPriority);
+}
+
+export function renderStrategicPriorityHtml(priority: StrategicPriority): string {
+  const color = STRATEGIC_PRIORITY_COLORS[priority];
+  return `<strong>Prioridad Estratégica:</strong> <span style=\"font-weight:600;color:${color};\">${priority}</span>`;
+}
+
+/**
+ * Elimina una línea/párrafo previo de Prioridad Estratégica (plain o HTML)
+ * para evitar duplicados antes de reinsertar el valor actualizado.
+ */
+export function removeStrategicPriority(description: string): string {
+  const withoutHtmlPriority = description
+    .replace(
+      /\s*(?:<strong[^>]*>)?\s*Prioridad\s*Estrat[eé]gica\s*:\s*(?:<\/strong>)?\s*(?:<span[^>]*>)?\s*(?:I_U|I_NU|NI_U|NI_NU)\s*(?:<\/span>)?\s*<br\s*\/?>\s*/gi,
+      ""
+    )
+    .replace(
+      /<p[^>]*>\s*(?:<strong[^>]*>)?\s*Prioridad\s*Estrat[eé]gica\s*:\s*(?:<\/strong>)?\s*(?:<span[^>]*>)?\s*(?:I_U|I_NU|NI_U|NI_NU)\s*(?:<\/span>)?\s*<\/p>\s*/gi,
+      ""
+    )
+    .replace(
+      /(^|\n)\s*(?:<strong[^>]*>)?\s*Prioridad\s*Estrat[eé]gica\s*:\s*(?:<\/strong>)?\s*(?:I_U|I_NU|NI_U|NI_NU)\s*(?=\n|$)/gi,
+      "\n"
+    )
+    .trim();
+
+  return withoutHtmlPriority;
+}
+
+/**
+ * Convierte texto plano a HTML de párrafos para mantener formato rich text.
+ * Si ya parece HTML, lo devuelve igual.
+ */
+export function ensureHtmlDescription(description: string): string {
+  if (/<\/?[a-z][\s\S]*>/i.test(description)) {
+    return description;
+  }
+  return textToParagraphs(description);
+}
+
+/**
+ * Inserta la Prioridad Estratégica al inicio del description (en HTML).
+ */
+export function prependStrategicPriority(description: string, priority: StrategicPriority): string {
+  const clean = removeStrategicPriority(description);
+  const baseHtml = ensureHtmlDescription(clean);
+  const priorityHtml = renderStrategicPriorityHtml(priority);
+  return baseHtml ? `${priorityHtml}<br>\n${baseHtml}` : priorityHtml;
+}
+
 /**
  * Construye el texto de description de la task a partir de los campos
  * individuales del brief. Este texto se guarda tanto en Convex como en COR.
  *
  * IMPORTANTE: Solo incluye campos que NO tienen field dedicado en la task.
  * - deadline → se guarda en task.deadline (NO en description)
- * - deliverables → se guarda en project.deliverables (NO en description)
+ * - deliverables (texto) → se guarda en description
  * - priority → se guarda en task.priority (NO en description)
  * - title → se guarda en task.title (NO en description)
  *
@@ -35,7 +111,7 @@ export function buildBriefDescription(fields: {
   keyMessage?: string;
   kpis?: string;
   deadline?: string;       // Ignorado — se guarda en task.deadline
-  deliverables?: string;   // Ignorado — se guarda en project.deliverables
+  deliverables?: string;   // Incluido como texto en description
   budget?: string;
   approvers?: string;
   additionalNotes?: string;
@@ -43,18 +119,26 @@ export function buildBriefDescription(fields: {
 }): string {
   const lines: string[] = [];
 
-  lines.push(`Tipo de requerimiento: ${fields.requestType}`);
-  // Marca NO se incluye — se guarda en task.corClientName (field dedicado)
-  // deadline y deliverables NO se incluyen — tienen fields dedicados
-  if (fields.objective) lines.push(`Objetivo: ${fields.objective}`);
-  if (fields.keyMessage) lines.push(`Mensaje clave: ${fields.keyMessage}`);
-  if (fields.kpis) lines.push(`KPIs: ${fields.kpis}`);
-  if (fields.budget) lines.push(`Presupuesto: ${fields.budget}`);
-  if (fields.approvers) lines.push(`Aprobadores: ${fields.approvers}`);
-  if (fields.strategicPriority) lines.push(`Prioridad Estratégica: ${fields.strategicPriority}`);
-  if (fields.additionalNotes) lines.push(`\nNotas adicionales:\n${fields.additionalNotes}`);
+  if (fields.strategicPriority && isStrategicPriority(fields.strategicPriority)) {
+    lines.push(renderStrategicPriorityHtml(fields.strategicPriority));
+  }
 
-  return lines.join("\n");
+  lines.push(`<strong>Tipo de requerimiento:</strong> ${escapeHtml(fields.requestType)}`);
+  // Marca NO se incluye — se guarda en task.corClientName (field dedicado)
+  // deadline NO se incluye — tiene field dedicado
+  if (fields.deliverables) {
+    lines.push(`<strong>Entregables:</strong> ${escapeHtml(fields.deliverables).replace(/\n/g, "<br>")}`);
+  }
+  if (fields.objective) lines.push(`<strong>Objetivo:</strong> ${escapeHtml(fields.objective)}`);
+  if (fields.keyMessage) lines.push(`<strong>Mensaje clave:</strong> ${escapeHtml(fields.keyMessage)}`);
+  if (fields.kpis) lines.push(`<strong>KPIs:</strong> ${escapeHtml(fields.kpis)}`);
+  if (fields.budget) lines.push(`<strong>Presupuesto:</strong> ${escapeHtml(fields.budget)}`);
+  if (fields.approvers) lines.push(`<strong>Aprobadores:</strong> ${escapeHtml(fields.approvers)}`);
+  if (fields.additionalNotes) {
+    lines.push(`<strong>Notas adicionales:</strong> ${escapeHtml(fields.additionalNotes).replace(/\n/g, "<br>")}`);
+  }
+
+  return lines.join("<br>\n");
 }
 
 // ==================== MAPEO DE PRIORIDADES ====================

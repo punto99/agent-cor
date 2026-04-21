@@ -222,17 +222,12 @@ export const applyInboundTaskUpdate = internalMutation({
       return;
     }
 
-    // Limpiar HTML de COR → plain text para comparar con Convex
-    const cleanDescription = args.corDescription
-      ? args.corDescription.replace(/<br\s*\/?>/gi, "\n").replace(/<[^>]*>/g, "")
-      : undefined;
-
     // Comparar campos — solo escribir si hay diferencia
     const updates: Record<string, unknown> = {};
 
     if (args.corTitle !== task.title) updates.title = args.corTitle;
-    if (cleanDescription !== undefined && cleanDescription !== (task.description ?? "")) {
-      updates.description = cleanDescription;
+    if (args.corDescription !== undefined && args.corDescription !== (task.description ?? "")) {
+      updates.description = args.corDescription;
     }
     if (args.corDeadline !== undefined && args.corDeadline !== task.deadline) {
       updates.deadline = args.corDeadline;
@@ -275,7 +270,7 @@ export const applyInboundProjectUpdate = internalMutation({
     corBrief: v.optional(v.string()),
     corStartDate: v.optional(v.string()),
     corEndDate: v.optional(v.string()),
-    corDeliverables: v.optional(v.string()),
+    corDeliverables: v.optional(v.number()),
     corStatus: v.optional(v.string()),
     corEstimatedTime: v.optional(v.number()),
   },
@@ -308,7 +303,7 @@ export const applyInboundProjectUpdate = internalMutation({
     if (args.corEndDate !== undefined && args.corEndDate !== project.endDate) {
       updates.endDate = args.corEndDate;
     }
-    if (args.corDeliverables !== undefined && args.corDeliverables !== (project.deliverables ?? "")) {
+    if (args.corDeliverables !== undefined && args.corDeliverables !== project.deliverables) {
       updates.deliverables = args.corDeliverables;
     }
     if (args.corStatus !== undefined && args.corStatus !== project.status) {

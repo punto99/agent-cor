@@ -35,6 +35,11 @@ interface TaskCardProps {
  */
 export function TaskCard({ task, onClick }: TaskCardProps) {
   const priorityConfig = getPriorityConfig(task.priority);
+  const descriptionPreview = task.description
+    ?.replace(/<br\s*\/?>/gi, "\n")
+    .replace(/<[^>]*>/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
 
   // Determinar badge de sincronización
   const getSyncBadge = () => {
@@ -91,9 +96,9 @@ export function TaskCard({ task, onClick }: TaskCardProps) {
 
       {/* Info: Description excerpt */}
       <div className="space-y-1 mb-3">
-        {task.description && (
+        {descriptionPreview && (
           <p className="text-xs text-muted-foreground line-clamp-2">
-            {task.description}
+            {descriptionPreview}
           </p>
         )}
         {task.deadline && (

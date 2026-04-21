@@ -9,7 +9,7 @@ import { listMessages } from "@convex-dev/agent";
 import { internal, components } from "../_generated/api";
 import { getProjectManagementProvider } from "../integrations/registry";
 import { getAuthUserId } from "@convex-dev/auth/server";
-import { hashText } from "../lib/briefFormat";
+import { hashText, isStrategicPriority, prependStrategicPriority } from "../lib/briefFormat";
 import { shouldRetry, getRetryDelay, formatRetryError, isClientError, MAX_RETRY_ATTEMPTS } from "../lib/corRetry";
 import type { ActionCtx } from "../_generated/server";
 
@@ -584,7 +584,7 @@ export const createProjectAndTask = internalMutation({
     projectName: v.string(),
     projectBrief: v.optional(v.string()),
     projectEndDate: v.optional(v.string()),
-    projectDeliverables: v.optional(v.string()),
+    projectDeliverables: v.optional(v.number()),
     projectEstimatedTime: v.optional(v.number()),
     projectPmId: v.optional(v.number()),
     projectCorClientId: v.optional(v.number()),
@@ -713,14 +713,13 @@ export const classifyAndUpdatePriority = internalAction({
         approvers: args.approvers,
       });
 
-      if (classification) {
+      if (classification && isStrategicPriority(classification)) {
         // Leer task actual y re-generar description con la prioridad
         const task = await ctx.runQuery(internal.data.tasks.getTaskByIdInternal, {
           taskId: args.taskId as string,
         });
         if (task?.description) {
-          // Append al final del description existente
-          const updatedDesc = task.description + `\nPrioridad Estratégica: ${classification}`;
+          const updatedDesc = prependStrategicPriority(task.description, classification);
           await ctx.runMutation(internal.data.tasks.updateTaskInternal, {
             taskId: args.taskId as string,
             updates: { description: updatedDesc },
@@ -1470,6 +1469,8 @@ export const publishTaskToExternalAction = internalAction({
 
       // Verificar si existe un proyecto local en la tabla projects
       let corProjectId: number | undefined;
+      let localProjectDeliverables: number | undefined;
+      let localProjectPmId: number | undefined;
       const projectId = (task as any).projectId as string | undefined;
 
       if (projectId) {
@@ -1477,6 +1478,8 @@ export const publishTaskToExternalAction = internalAction({
         const localProject = await ctx.runQuery(internal.data.projects.getProjectInternal, {
           projectId: projectId as any,
         });
+        localProjectDeliverables = localProject?.deliverables;
+        localProjectPmId = localProject?.pmId;
 
         if (localProject?.corProjectId) {
           // El proyecto ya fue publicado en COR — reutilizar
@@ -1486,11 +1489,12 @@ export const publishTaskToExternalAction = internalAction({
           // Crear el proyecto en COR
           console.log(`[PublishTask] 📁 Creando proyecto en COR para cliente ID: ${clientId}...`);
           const projectName = localProject?.name || `${task.corClientName || "Sin cliente"} - ${task.title}`;
+          const corProjectBrief = localProject?.brief ? `Brief: ${localProject.brief}` : undefined;
 
           const project = await provider.createProject({
             name: projectName,
             clientId,
-            description: localProject?.brief || task.description,
+            description: corProjectBrief,
             deadline: localProject?.endDate || task.deadline,
             estimatedTime: localProject?.estimatedTime,
           });
@@ -1513,12 +1517,37 @@ export const publishTaskToExternalAction = internalAction({
         const project = await provider.createProject({
           name: projectName,
           clientId,
-          description: task.description,
           deadline: task.deadline,
         });
 
         corProjectId = project.id;
         console.log(`[PublishTask] ✅ Proyecto creado en COR: ID ${corProjectId}`);
+      }
+
+      // 3.5 Guardar campos soportados solo por update (deliverables, pm_id)
+      if (
+        corProjectId &&
+        (localProjectDeliverables !== undefined || localProjectPmId !== undefined)
+      ) {
+        console.log(
+          `[PublishTask] 📝 Guardando deliverables/pm_id en proyecto COR ${corProjectId}...`
+        );
+
+        const projectUpdate = await provider.updateProject(corProjectId, {
+          deliverables: localProjectDeliverables,
+          pmId: localProjectPmId,
+        });
+
+        if (!projectUpdate.success) {
+          throw new Error(
+            projectUpdate.error ||
+              `No se pudo guardar deliverables/pm_id en proyecto COR ${corProjectId}`
+          );
+        }
+
+        console.log(
+          `[PublishTask] ✅ Deliverables/pm_id guardados en proyecto COR ${corProjectId}`
+        );
       }
 
       console.log(`[PublishTask] ✅ Proyecto listo: corProjectId=${corProjectId}`);

@@ -39,7 +39,7 @@ export interface LLMHealthCheckResult {
  * 120s da margen al thinking model (~30-60s normal) pero evita consumir
  * demasiado del budget de 600s del action.
  */
-export const LLM_CALL_TIMEOUT_MS = 120_000;
+export const LLM_CALL_TIMEOUT_MS = 180_000;
 
 // Modelo principal: Gemini 3 Pro Preview
 export const geminiConfig: LLMConfig = {
