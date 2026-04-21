@@ -11,7 +11,7 @@ import { briefAgent } from "../agents/agent";
 import { orchestratorAgent } from "../agents/orchestratorAgent";
 import { documentSearchAgent } from "../agents/documentSearchAgent";
 import { components, internal } from "../_generated/api";
-import { saveMessage } from "@convex-dev/agent";
+import { listMessages, saveMessage } from "@convex-dev/agent";
 import { enabledAgents } from "../lib/serverConfig";
 import { 
   classifyError, 
@@ -21,6 +21,9 @@ import {
   openaiConfig,
   LLM_CALL_TIMEOUT_MS,
 } from "../lib/llmFallback";
+
+const AUDIO_RESTRICTED_MESSAGE =
+  "En este momento las capacidades de audio se encuentran restringidas. Por favor, continúa la conversación por escrito y con gusto te ayudo.";
 
 // Generar respuesta del agente (interna, llamada async)
 // CON ORQUESTADOR: Clasifica intención → enruta al agente correcto
@@ -55,6 +58,40 @@ export const generateResponseAsync = internalAction({
     let geminiEnabled = await ctx.runQuery(internal.data.llmConfig.isProviderEnabled, { provider: "gemini" });
     const openaiEnabled = await ctx.runQuery(internal.data.llmConfig.isProviderEnabled, { provider: "openai" });
     console.log(`[GenerateResponse] 🔧 Proveedores: Gemini=${geminiEnabled}, OpenAI=${openaiEnabled}`);
+
+    // Detectar si el mensaje actual fue enviado con audio
+    let hasAudioInput = false;
+    try {
+      const messagesResult = await listMessages(ctx, components.agent, {
+        threadId,
+        paginationOpts: { cursor: null, numItems: 50 },
+      });
+
+      const promptMessage = messagesResult.page.find((m: any) => {
+        const id = m?._id || m?.id || m?.messageId;
+        return id === promptMessageId;
+      }) as any;
+
+      const contentParts = Array.isArray(promptMessage?.message?.content)
+        ? promptMessage.message.content
+        : [];
+
+      const hasAudioInContent = contentParts.some((part: any) => {
+        const partType = String(part?.type || "").toLowerCase();
+        const mimeType = String(part?.mimeType || "").toLowerCase();
+        return partType === "file" && mimeType.startsWith("audio/");
+      });
+
+      hasAudioInput =
+        hasAudioInContent ||
+        Boolean(promptMessage?.hasAudioInput ?? promptMessage?.metadata?.hasAudioInput);
+
+      console.log(`[GenerateResponse] 🎤 Input con audio: ${hasAudioInput}`);
+    } catch (error) {
+      console.warn(
+        `[GenerateResponse] ⚠️ No se pudo determinar si el input tiene audio: ${extractErrorMessage(error)}`
+      );
+    }
 
     // =====================================================
     // PASO 1: Determinar agentes habilitados y seleccionar
@@ -135,7 +172,7 @@ export const generateResponseAsync = internalAction({
         }
 
         // Fallback con OpenAI (modelo de openaiConfig)
-        if (!classificationResult && openaiEnabled) {
+        if (!classificationResult && openaiEnabled && !hasAudioInput) {
           const openaiStart = Date.now();
           console.log("[GenerateResponse] 🔄 Intentando clasificación con OpenAI (fallback)...");
           try {
@@ -180,6 +217,10 @@ export const generateResponseAsync = internalAction({
               fallbackUsed: undefined,
             });
           }
+        } else if (!classificationResult && openaiEnabled && hasAudioInput) {
+          console.log(
+            "[GenerateResponse] ⏭️ Fallback de clasificación a OpenAI omitido (input de audio)."
+          );
         }
 
         if (!classificationResult) {
@@ -305,6 +346,26 @@ export const generateResponseAsync = internalAction({
     }
 
     // Fallback con OpenAI (openaiConfig)
+    if (!result && openaiEnabled && hasAudioInput) {
+      console.log("[GenerateResponse] ⏭️ Fallback a OpenAI omitido (input de audio).");
+
+      await saveMessage(ctx, components.agent, {
+        threadId,
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: `⚠️ ${AUDIO_RESTRICTED_MESSAGE}` }],
+        },
+      });
+
+      return {
+        text: AUDIO_RESTRICTED_MESSAGE,
+        promptMessageId,
+        provider: usedProvider,
+        agent: selectedAgentName,
+        intent: orchestratorIntent,
+      };
+    }
+
     if (!result && openaiEnabled) {
       const openaiStart = Date.now();
       console.log("[GenerateResponse] 📍 PASO 3B: Intentando con OpenAI (fallback)...");

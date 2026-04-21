@@ -56,6 +56,7 @@ export const sendMessage = mutation({
     
     // Combinar fileId y fileIds para compatibilidad
     const allFileIds: string[] = [];
+    let hasAudioInput = false;
     if (fileId) allFileIds.push(fileId);
     if (fileIds) allFileIds.push(...fileIds);
     
@@ -65,6 +66,17 @@ export const sendMessage = mutation({
         const fileData = await getFile(ctx, components.agent, fId);
         
         const { imagePart, filePart, file } = fileData;
+        const mimeType =
+          ((filePart as any)?.mimeType as string | undefined) ||
+          ((filePart as any)?.mediaType as string | undefined) ||
+          "";
+        const lowerFilename = (file?.filename || "").toLowerCase();
+        const isAudioByMime = mimeType.toLowerCase().startsWith("audio/");
+        const isAudioByExtension = /\.(mp3|wav|wave|ogg|webm|m4a|aac|flac|mp4)$/i.test(lowerFilename);
+        if (isAudioByMime || isAudioByExtension) {
+          hasAudioInput = true;
+        }
+
         // Verificar si es un archivo Word (Gemini no lo soporta)
         // Usamos la extensión del filename para detectar archivos Word
         const filename = file?.filename || '';
@@ -112,7 +124,13 @@ export const sendMessage = mutation({
         role: "user", 
         content
       },
-      metadata: allFileIds.length > 0 ? { fileIds: allFileIds } : undefined,
+      metadata:
+        allFileIds.length > 0
+          ? {
+              fileIds: allFileIds,
+              ...(hasAudioInput ? { hasAudioInput: true } : {}),
+            }
+          : undefined,
     });
     
     console.log(`[Chat] ✅ Mensaje guardado: ${messageId}`);
