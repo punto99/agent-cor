@@ -16,6 +16,83 @@
 
 // ==================== BUILD BRIEF DESCRIPTION ====================
 
+export const STRATEGIC_PRIORITY_VALUES = ["I_U", "I_NU", "NI_U", "NI_NU"] as const;
+export type StrategicPriority = typeof STRATEGIC_PRIORITY_VALUES[number];
+
+const STRATEGIC_PRIORITY_COLORS: Record<StrategicPriority, string> = {
+  I_U: "#dc2626",   // rojo
+  I_NU: "#d97706",  // ámbar
+  NI_U: "#2563eb",  // azul
+  NI_NU: "#16a34a", // verde
+};
+
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/\"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+function textToParagraphs(text: string): string {
+  return text
+    .split(/\n{2,}/)
+    .map((block) => block.trim())
+    .filter(Boolean)
+    .map((block) => `<p>${escapeHtml(block).replace(/\n/g, "<br>")}</p>`)
+    .join("\n");
+}
+
+export function isStrategicPriority(value: string): value is StrategicPriority {
+  return STRATEGIC_PRIORITY_VALUES.includes(value as StrategicPriority);
+}
+
+export function renderStrategicPriorityHtml(priority: StrategicPriority): string {
+  const color = STRATEGIC_PRIORITY_COLORS[priority];
+  return `<p>Prioridad Estratégica: <span style=\"font-weight:600;color:${color};\">${priority}</span></p>`;
+}
+
+/**
+ * Elimina una línea/párrafo previo de Prioridad Estratégica (plain o HTML)
+ * para evitar duplicados antes de reinsertar el valor actualizado.
+ */
+export function removeStrategicPriority(description: string): string {
+  const withoutHtmlPriority = description
+    .replace(
+      /<p[^>]*>\s*Prioridad\s*Estrat[eé]gica\s*:\s*(?:<span[^>]*>)?\s*(?:I_U|I_NU|NI_U|NI_NU)\s*(?:<\/span>)?\s*<\/p>\s*/gi,
+      ""
+    )
+    .replace(
+      /(^|\n)\s*Prioridad\s*Estrat[eé]gica\s*:\s*(?:I_U|I_NU|NI_U|NI_NU)\s*(?=\n|$)/gi,
+      "\n"
+    )
+    .trim();
+
+  return withoutHtmlPriority;
+}
+
+/**
+ * Convierte texto plano a HTML de párrafos para mantener formato rich text.
+ * Si ya parece HTML, lo devuelve igual.
+ */
+export function ensureHtmlDescription(description: string): string {
+  if (/<\/?[a-z][\s\S]*>/i.test(description)) {
+    return description;
+  }
+  return textToParagraphs(description);
+}
+
+/**
+ * Inserta la Prioridad Estratégica al inicio del description (en HTML).
+ */
+export function prependStrategicPriority(description: string, priority: StrategicPriority): string {
+  const clean = removeStrategicPriority(description);
+  const baseHtml = ensureHtmlDescription(clean);
+  const priorityHtml = renderStrategicPriorityHtml(priority);
+  return baseHtml ? `${priorityHtml}\n${baseHtml}` : priorityHtml;
+}
+
 /**
  * Construye el texto de description de la task a partir de los campos
  * individuales del brief. Este texto se guarda tanto en Convex como en COR.
@@ -41,20 +118,25 @@ export function buildBriefDescription(fields: {
   additionalNotes?: string;
   strategicPriority?: string;
 }): string {
-  const lines: string[] = [];
+  const paragraphs: string[] = [];
 
-  lines.push(`Tipo de requerimiento: ${fields.requestType}`);
+  if (fields.strategicPriority && isStrategicPriority(fields.strategicPriority)) {
+    paragraphs.push(renderStrategicPriorityHtml(fields.strategicPriority));
+  }
+
+  paragraphs.push(`<p>Tipo de requerimiento: ${escapeHtml(fields.requestType)}</p>`);
   // Marca NO se incluye — se guarda en task.corClientName (field dedicado)
   // deadline y deliverables NO se incluyen — tienen fields dedicados
-  if (fields.objective) lines.push(`Objetivo: ${fields.objective}`);
-  if (fields.keyMessage) lines.push(`Mensaje clave: ${fields.keyMessage}`);
-  if (fields.kpis) lines.push(`KPIs: ${fields.kpis}`);
-  if (fields.budget) lines.push(`Presupuesto: ${fields.budget}`);
-  if (fields.approvers) lines.push(`Aprobadores: ${fields.approvers}`);
-  if (fields.strategicPriority) lines.push(`Prioridad Estratégica: ${fields.strategicPriority}`);
-  if (fields.additionalNotes) lines.push(`\nNotas adicionales:\n${fields.additionalNotes}`);
+  if (fields.objective) paragraphs.push(`<p>Objetivo: ${escapeHtml(fields.objective)}</p>`);
+  if (fields.keyMessage) paragraphs.push(`<p>Mensaje clave: ${escapeHtml(fields.keyMessage)}</p>`);
+  if (fields.kpis) paragraphs.push(`<p>KPIs: ${escapeHtml(fields.kpis)}</p>`);
+  if (fields.budget) paragraphs.push(`<p>Presupuesto: ${escapeHtml(fields.budget)}</p>`);
+  if (fields.approvers) paragraphs.push(`<p>Aprobadores: ${escapeHtml(fields.approvers)}</p>`);
+  if (fields.additionalNotes) {
+    paragraphs.push(`<p>Notas adicionales:<br>${escapeHtml(fields.additionalNotes).replace(/\n/g, "<br>")}</p>`);
+  }
 
-  return lines.join("\n");
+  return paragraphs.join("\n");
 }
 
 // ==================== MAPEO DE PRIORIDADES ====================

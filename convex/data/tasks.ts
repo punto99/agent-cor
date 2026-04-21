@@ -9,7 +9,7 @@ import { listMessages } from "@convex-dev/agent";
 import { internal, components } from "../_generated/api";
 import { getProjectManagementProvider } from "../integrations/registry";
 import { getAuthUserId } from "@convex-dev/auth/server";
-import { hashText } from "../lib/briefFormat";
+import { hashText, isStrategicPriority, prependStrategicPriority } from "../lib/briefFormat";
 import { shouldRetry, getRetryDelay, formatRetryError, isClientError, MAX_RETRY_ATTEMPTS } from "../lib/corRetry";
 import type { ActionCtx } from "../_generated/server";
 
@@ -713,14 +713,13 @@ export const classifyAndUpdatePriority = internalAction({
         approvers: args.approvers,
       });
 
-      if (classification) {
+      if (classification && isStrategicPriority(classification)) {
         // Leer task actual y re-generar description con la prioridad
         const task = await ctx.runQuery(internal.data.tasks.getTaskByIdInternal, {
           taskId: args.taskId as string,
         });
         if (task?.description) {
-          // Append al final del description existente
-          const updatedDesc = task.description + `\nPrioridad Estratégica: ${classification}`;
+          const updatedDesc = prependStrategicPriority(task.description, classification);
           await ctx.runMutation(internal.data.tasks.updateTaskInternal, {
             taskId: args.taskId as string,
             updates: { description: updatedDesc },
@@ -1490,7 +1489,6 @@ export const publishTaskToExternalAction = internalAction({
           const project = await provider.createProject({
             name: projectName,
             clientId,
-            description: localProject?.brief || task.description,
             deadline: localProject?.endDate || task.deadline,
             estimatedTime: localProject?.estimatedTime,
           });
@@ -1513,7 +1511,6 @@ export const publishTaskToExternalAction = internalAction({
         const project = await provider.createProject({
           name: projectName,
           clientId,
-          description: task.description,
           deadline: task.deadline,
         });
 

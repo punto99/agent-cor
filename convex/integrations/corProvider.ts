@@ -117,11 +117,20 @@ function mapPriorityToCOR(priority: string | number | undefined): number {
 }
 
 /**
- * Convierte saltos de línea planos (\n) a HTML <br> para que COR
- * los renderice correctamente en la descripción de la task.
- * Nuestro DB almacena \n; COR necesita <br>.
+ * Normaliza description al formato esperado por COR.
+ * Si ya viene como HTML, se envía tal cual.
+ * Si viene como texto plano, se convierte a <br> para mantener saltos de línea.
  */
-function plaintextToCorHtml(text: string): string {
+function normalizeDescriptionForCOR(text: string): string {
+  const trimmed = text.trim();
+  if (!trimmed) return "";
+
+  // Si contiene tags HTML, asumir que ya viene en rich text
+  if (/<\/?[a-z][\s\S]*>/i.test(trimmed)) {
+    return text;
+  }
+
+  // Fallback para compatibilidad: plain text → html con <br>
   return text.replace(/\n/g, "<br>\n");
 }
 
@@ -355,7 +364,7 @@ export function createCORProvider(): ProjectManagementProvider {
       };
 
       if (data.description) {
-        body.description = plaintextToCorHtml(data.description);
+        body.description = normalizeDescriptionForCOR(data.description);
       }
 
       if (data.status) {
@@ -489,7 +498,7 @@ export function createCORProvider(): ProjectManagementProvider {
         const updateBody: Record<string, unknown> = {
           title: data.title ?? currentTask.title,
           description: data.description != null
-            ? plaintextToCorHtml(data.description)
+            ? normalizeDescriptionForCOR(data.description)
             : currentTask.description,
           priority: data.priority != null
             ? mapPriorityToCOR(data.priority)

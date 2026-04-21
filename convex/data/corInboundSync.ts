@@ -222,17 +222,12 @@ export const applyInboundTaskUpdate = internalMutation({
       return;
     }
 
-    // Limpiar HTML de COR → plain text para comparar con Convex
-    const cleanDescription = args.corDescription
-      ? args.corDescription.replace(/<br\s*\/?>/gi, "\n").replace(/<[^>]*>/g, "")
-      : undefined;
-
     // Comparar campos — solo escribir si hay diferencia
     const updates: Record<string, unknown> = {};
 
     if (args.corTitle !== task.title) updates.title = args.corTitle;
-    if (cleanDescription !== undefined && cleanDescription !== (task.description ?? "")) {
-      updates.description = cleanDescription;
+    if (args.corDescription !== undefined && args.corDescription !== (task.description ?? "")) {
+      updates.description = args.corDescription;
     }
     if (args.corDeadline !== undefined && args.corDeadline !== task.deadline) {
       updates.deadline = args.corDeadline;

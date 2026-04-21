@@ -5,7 +5,7 @@ export type Task = {
   _id: Id<"tasks">;
   _creationTime: number;
   title: string;
-  description?: string;    // Contiene toda la info del brief formateada
+  description?: string;    // Contiene todo el brief como HTML rich text
   deadline?: string;
   priority?: number;       // 0=Low, 1=Medium, 2=High, 3=Urgent
   status: string;

@@ -5,8 +5,14 @@ import type { Task } from "./types";
 import { formatDate, getStatusColor } from "./types";
 import { useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
-import { Pencil, Check, X as XIcon, Cloud, Loader2 } from "lucide-react";
+import { Pencil, Check, X as XIcon, Cloud } from "lucide-react";
 import type { Id } from "@/convex/_generated/dataModel";
+import DOMPurify from "dompurify";
+import { EditorContent, useEditor } from "@tiptap/react";
+import StarterKit from "@tiptap/starter-kit";
+import Link from "@tiptap/extension-link";
+import { TextStyle } from "@tiptap/extension-text-style";
+import { Color } from "@tiptap/extension-color";
 
 // ==================== EditableInfoItem ====================
 
@@ -431,6 +437,115 @@ const STATUS_DISPLAY: Record<string, string> = {
   finalizada: "Finalizada",
 };
 
+const sanitizeHtml = (html: string) =>
+  DOMPurify.sanitize(html, {
+    ALLOWED_TAGS: [
+      "p",
+      "br",
+      "strong",
+      "em",
+      "u",
+      "s",
+      "ul",
+      "ol",
+      "li",
+      "a",
+      "span",
+    ],
+    ALLOWED_ATTR: ["href", "target", "rel", "style"],
+  });
+
+const escapeHtmlText = (value: string) =>
+  value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+
+const plainTextToHtml = (text: string) =>
+  text
+    .split(/\n{2,}/)
+    .map((block) => block.trim())
+    .filter(Boolean)
+    .map((block) => `<p>${escapeHtmlText(block).replace(/\n/g, "<br>")}</p>`)
+    .join("\n");
+
+function DescriptionRichTextEditor({
+  value,
+  onChange,
+}: {
+  value: string;
+  onChange: (nextHtml: string) => void;
+}) {
+  const editor = useEditor({
+    immediatelyRender: false,
+    extensions: [
+      StarterKit,
+      TextStyle,
+      Color,
+      Link.configure({
+        openOnClick: false,
+        autolink: true,
+      }),
+    ],
+    content: value,
+    onUpdate: ({ editor }) => {
+      onChange(editor.getHTML());
+    },
+  });
+
+  useEffect(() => {
+    if (!editor) return;
+    if (editor.getHTML() !== value) {
+      editor.commands.setContent(value || "<p></p>", { emitUpdate: false });
+    }
+  }, [editor, value]);
+
+  if (!editor) return null;
+
+  return (
+    <div className="rounded-md border border-primary/40">
+      <div className="flex flex-wrap items-center gap-1 border-b border-border p-2 bg-muted/40">
+        <button
+          type="button"
+          onClick={() => editor.chain().focus().toggleBold().run()}
+          className={`px-2 py-1 text-xs rounded ${editor.isActive("bold") ? "bg-primary text-primary-foreground" : "hover:bg-muted"}`}
+        >
+          B
+        </button>
+        <button
+          type="button"
+          onClick={() => editor.chain().focus().toggleItalic().run()}
+          className={`px-2 py-1 text-xs rounded italic ${editor.isActive("italic") ? "bg-primary text-primary-foreground" : "hover:bg-muted"}`}
+        >
+          I
+        </button>
+        <button
+          type="button"
+          onClick={() => editor.chain().focus().toggleStrike().run()}
+          className={`px-2 py-1 text-xs rounded line-through ${editor.isActive("strike") ? "bg-primary text-primary-foreground" : "hover:bg-muted"}`}
+        >
+          S
+        </button>
+        <button
+          type="button"
+          onClick={() => editor.chain().focus().toggleBulletList().run()}
+          className={`px-2 py-1 text-xs rounded ${editor.isActive("bulletList") ? "bg-primary text-primary-foreground" : "hover:bg-muted"}`}
+        >
+          • List
+        </button>
+        <button
+          type="button"
+          onClick={() => editor.chain().focus().toggleOrderedList().run()}
+          className={`px-2 py-1 text-xs rounded ${editor.isActive("orderedList") ? "bg-primary text-primary-foreground" : "hover:bg-muted"}`}
+        >
+          1. List
+        </button>
+      </div>
+      <EditorContent
+        editor={editor}
+        className="min-h-[120px] p-3 text-sm text-foreground bg-background [&_.ProseMirror]:outline-none [&_.ProseMirror_p.is-editor-empty:first-child::before]:text-muted-foreground [&_.ProseMirror_p.is-editor-empty:first-child::before]:content-[attr(data-placeholder)]"
+      />
+    </div>
+  );
+}
+
 /**
  * Contenido del brief de una tarea.
  * Si editable=true, cada campo tiene un ícono de lápiz para editar en línea.
@@ -495,25 +610,28 @@ export function TaskBriefContent({
 
   // Estado de edición de la descripción
   const [isEditingDesc, setIsEditingDesc] = useState(false);
-  const [descValue, setDescValue] = useState(task.description || "");
+  const [descValue, setDescValue] = useState(
+    task.description
+      ? /<\/?[a-z][\s\S]*>/i.test(task.description)
+        ? task.description
+        : plainTextToHtml(task.description)
+      : "<p></p>",
+  );
   const [isSavingDesc, setIsSavingDesc] = useState(false);
-  const descRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
-    if (isEditingDesc && descRef.current) {
-      descRef.current.focus();
-      const len = descValue.length;
-      descRef.current.setSelectionRange(len, len);
+    if (!isEditingDesc) {
+      const source = task.description || "";
+      const normalized = /<\/?[a-z][\s\S]*>/i.test(source)
+        ? source
+        : plainTextToHtml(source);
+      setDescValue(normalized || "<p></p>");
     }
-  }, [isEditingDesc]);
-
-  useEffect(() => {
-    if (!isEditingDesc) setDescValue(task.description || "");
   }, [task.description, isEditingDesc]);
 
   const handleSaveDesc = async () => {
     const trimmed = descValue.trim();
-    if (trimmed === (task.description || "")) {
+    if (trimmed === (task.description || "").trim()) {
       setIsEditingDesc(false);
       return;
     }
@@ -527,6 +645,14 @@ export function TaskBriefContent({
       setIsSavingDesc(false);
     }
   };
+
+  const renderedDescriptionHtml = task.description
+    ? sanitizeHtml(
+        /<\/?[a-z][\s\S]*>/i.test(task.description)
+          ? task.description
+          : plainTextToHtml(task.description),
+      )
+    : "<p>No especificado</p>";
 
   return (
     <div className="flex-1 min-h-0 overflow-y-auto p-4 space-y-4 bg-background">
@@ -615,22 +741,9 @@ export function TaskBriefContent({
             </div>
             {isEditingDesc ? (
               <div>
-                <textarea
-                  ref={descRef}
+                <DescriptionRichTextEditor
                   value={descValue}
-                  onChange={(e) => setDescValue(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
-                      e.preventDefault();
-                      handleSaveDesc();
-                    }
-                    if (e.key === "Escape") {
-                      setDescValue(task.description || "");
-                      setIsEditingDesc(false);
-                    }
-                  }}
-                  rows={5}
-                  className="w-full text-sm text-foreground bg-background border border-primary/40 rounded-md px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-primary/50 resize-none"
+                  onChange={setDescValue}
                 />
                 <div className="flex items-center gap-1.5 mt-1.5">
                   <button
@@ -643,7 +756,11 @@ export function TaskBriefContent({
                   </button>
                   <button
                     onClick={() => {
-                      setDescValue(task.description || "");
+                      const source = task.description || "";
+                      const normalized = /<\/?[a-z][\s\S]*>/i.test(source)
+                        ? source
+                        : plainTextToHtml(source);
+                      setDescValue(normalized || "<p></p>");
                       setIsEditingDesc(false);
                     }}
                     disabled={isSavingDesc}
@@ -655,9 +772,10 @@ export function TaskBriefContent({
                 </div>
               </div>
             ) : (
-              <p className="text-sm text-foreground whitespace-pre-wrap">
-                {task.description || "No especificado"}
-              </p>
+              <div
+                className="text-sm text-foreground whitespace-pre-wrap [&_p]:mb-2 [&_p:last-child]:mb-0 [&_a]:text-primary [&_a]:underline"
+                dangerouslySetInnerHTML={{ __html: renderedDescriptionHtml }}
+              />
             )}
           </div>
         )}
