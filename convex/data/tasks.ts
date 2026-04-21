@@ -584,7 +584,7 @@ export const createProjectAndTask = internalMutation({
     projectName: v.string(),
     projectBrief: v.optional(v.string()),
     projectEndDate: v.optional(v.string()),
-    projectDeliverables: v.optional(v.string()),
+    projectDeliverables: v.optional(v.number()),
     projectEstimatedTime: v.optional(v.number()),
     projectPmId: v.optional(v.number()),
     projectCorClientId: v.optional(v.number()),
@@ -1469,6 +1469,7 @@ export const publishTaskToExternalAction = internalAction({
 
       // Verificar si existe un proyecto local en la tabla projects
       let corProjectId: number | undefined;
+      let localProjectDeliverables: number | undefined;
       const projectId = (task as any).projectId as string | undefined;
 
       if (projectId) {
@@ -1476,6 +1477,7 @@ export const publishTaskToExternalAction = internalAction({
         const localProject = await ctx.runQuery(internal.data.projects.getProjectInternal, {
           projectId: projectId as any,
         });
+        localProjectDeliverables = localProject?.deliverables;
 
         if (localProject?.corProjectId) {
           // El proyecto ya fue publicado en COR — reutilizar
@@ -1518,6 +1520,23 @@ export const publishTaskToExternalAction = internalAction({
 
         corProjectId = project.id;
         console.log(`[PublishTask] ✅ Proyecto creado en COR: ID ${corProjectId}`);
+      }
+
+      // 3.5 Guardar deliverables en COR (solo soportado por endpoint de update)
+      if (corProjectId && localProjectDeliverables !== undefined) {
+        console.log(`[PublishTask] 📝 Guardando deliverables en proyecto COR ${corProjectId}...`);
+        const deliverablesUpdate = await provider.updateProject(corProjectId, {
+          deliverables: localProjectDeliverables,
+        });
+
+        if (!deliverablesUpdate.success) {
+          throw new Error(
+            deliverablesUpdate.error ||
+              `No se pudo guardar deliverables en proyecto COR ${corProjectId}`
+          );
+        }
+
+        console.log(`[PublishTask] ✅ Deliverables guardados en proyecto COR ${corProjectId}`);
       }
 
       console.log(`[PublishTask] ✅ Proyecto listo: corProjectId=${corProjectId}`);

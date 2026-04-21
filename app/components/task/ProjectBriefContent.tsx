@@ -413,6 +413,16 @@ export function ProjectBriefContent({
       return;
     }
 
+    if (fieldKey === "deliverables") {
+      const numValue = parseInt(newValue, 10);
+      await updateProject({
+        projectId: project._id,
+        deliverables: isNaN(numValue) ? undefined : numValue,
+      });
+      showSyncFeedback();
+      return;
+    }
+
     if (fieldKey === "status") {
       await updateProject({
         projectId: project._id,
@@ -522,13 +532,17 @@ export function ProjectBriefContent({
       )}
 
       {/* Entregables */}
-      {(project.deliverables || editable) && (
+      {(project.deliverables !== undefined || editable) && (
         <EditableField
           icon="📦"
-          label="Entregables"
-          value={project.deliverables || ""}
+          label="Cantidad de Entregables"
+          value={
+            project.deliverables !== undefined
+              ? String(project.deliverables)
+              : ""
+          }
           fieldKey="deliverables"
-          multiline
+          inputType="number"
           editable={editable}
           onSave={handleSaveField}
         />

@@ -93,7 +93,7 @@ export const createProjectInternal = internalMutation({
     threadId: v.optional(v.string()),
     corClientId: v.optional(v.number()),
     pmId: v.optional(v.number()),
-    deliverables: v.optional(v.string()),
+    deliverables: v.optional(v.number()),
     estimatedTime: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
@@ -134,7 +134,7 @@ export const updateProjectFields = mutation({
     estimatedTime: v.optional(v.number()),
     billable: v.optional(v.boolean()),
     incomeType: v.optional(v.string()),
-    deliverables: v.optional(v.string()),
+    deliverables: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
@@ -217,7 +217,7 @@ export const updateProjectInternal = internalMutation({
       brief: v.optional(v.string()),
       startDate: v.optional(v.string()),
       endDate: v.optional(v.string()),
-      deliverables: v.optional(v.string()),
+      deliverables: v.optional(v.number()),
       estimatedTime: v.optional(v.number()),
     }),
   },

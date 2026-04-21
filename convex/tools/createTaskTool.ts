@@ -16,6 +16,30 @@ import { isProjectManagementEnabled } from "../integrations/registry";
 import { buildBriefDescription } from "../lib/briefFormat";
 import { associateFilesHelper } from "../data/tasks";
 
+function inferDeliverablesCount(deliverablesText: string): number {
+  const trimmed = deliverablesText.trim();
+  if (!trimmed) return 0;
+
+  // Si el usuario ya dio un número explícito
+  if (/^\d+$/.test(trimmed)) {
+    return parseInt(trimmed, 10);
+  }
+
+  // Contar ítems en formatos comunes (líneas, viñetas, comas, punto y coma)
+  const normalized = trimmed
+    .replace(/\r\n/g, "\n")
+    .replace(/[•·▪◦●]/g, "\n")
+    .replace(/\n\s*\d+[\.)]\s+/g, "\n")
+    .replace(/\n\s*[-*]\s+/g, "\n");
+
+  const parts = normalized
+    .split(/\n|,|;|\|/)
+    .map((p) => p.trim())
+    .filter(Boolean);
+
+  return parts.length > 0 ? parts.length : 1;
+}
+
 // SOLO crea en Convex — la publicación en COR/externo se hace desde el Panel de Control
 export const createTaskTool = createTool({
   description: `Crear una nueva task/requerimiento en la base de datos. 
@@ -30,7 +54,8 @@ export const createTaskTool = createTool({
   
   Los campos se guardan automaticamente en sus fields correspondientes:
   - title, deadline, priority → fields dedicados de la task
-  - deliverables → field del proyecto asociado
+  - deliverables (texto) → description de la task
+  - deliverables (cantidad) → field numérico del proyecto asociado
   - El resto (requestType, brand, objective, keyMessage, kpis, budget, approvers) → se combinan en el campo description
   No necesitas preocuparte por la distribucion, el sistema lo maneja automaticamente.`,
   args: z.object({
@@ -128,6 +153,8 @@ export const createTaskTool = createTool({
       approvers: args.approvers,
     });
 
+    const deliverablesCount = inferDeliverablesCount(args.deliverables);
+
     // ====================================================
     // Obtener URLs de archivos del thread para el campo brief del proyecto
     // ====================================================
@@ -169,7 +196,7 @@ export const createTaskTool = createTool({
         projectName: fullTitle,
         projectBrief: fileUrls.length > 0 ? fileUrls.join(", ") : undefined,
         projectEndDate: args.deadline,
-        projectDeliverables: args.deliverables,
+        projectDeliverables: deliverablesCount,
         projectEstimatedTime: args.estimatedTime,
         projectPmId: pmId,
         projectCorClientId: args.corClientId,

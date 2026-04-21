@@ -117,6 +117,31 @@ function mapPriorityToCOR(priority: string | number | undefined): number {
 }
 
 /**
+ * COR espera deliverables como entero. Acepta number o string numérico.
+ * Si el valor no es entero válido, retorna undefined para omitir el campo.
+ */
+function mapDeliverablesToCOR(value: unknown): number | undefined {
+  if (typeof value === "number" && Number.isInteger(value) && value >= 0) return value;
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (/^\d+$/.test(trimmed)) return parseInt(trimmed, 10);
+  }
+  return undefined;
+}
+
+function parseDeliverablesFromCOR(value: unknown): number | undefined {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    const normalized = Math.trunc(value);
+    return normalized >= 0 ? normalized : undefined;
+  }
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (/^\d+$/.test(trimmed)) return parseInt(trimmed, 10);
+  }
+  return undefined;
+}
+
+/**
  * Normaliza description al formato esperado por COR.
  * Si ya viene como HTML, se envía tal cual.
  * Si viene como texto plano, se convierte a <br> para mantener saltos de línea.
@@ -458,10 +483,7 @@ export function createCORProvider(): ProjectManagementProvider {
           brief: project.brief,
           startDate: project.start,
           endDate: project.end,
-          // COR puede retornar deliverables como número (ej: 0.0) — coerce a string
-          deliverables: project.deliverables != null && project.deliverables !== 0
-            ? String(project.deliverables)
-            : undefined,
+          deliverables: parseDeliverablesFromCOR(project.deliverables),
           status: project.status,
           estimatedTime: project.estimated_time,
         };
@@ -566,12 +588,17 @@ export function createCORProvider(): ProjectManagementProvider {
         const updateBody: Record<string, unknown> = {
           name: data.name ?? currentProject.name,
           brief: data.brief ?? currentProject.brief,
-          deliverables: data.deliverables ?? currentProject.deliverables,
           estimated_time: data.estimatedTime ?? currentProject.estimated_time,
           status: data.status ?? currentProject.status,
           start: currentProject.start,
           end: currentProject.end,
         };
+
+        const deliverablesCandidate = data.deliverables ?? currentProject.deliverables;
+        const deliverables = mapDeliverablesToCOR(deliverablesCandidate);
+        if (deliverables !== undefined) {
+          updateBody.deliverables = deliverables;
+        }
 
         if (data.startDate) {
           const d = parseDateFlexible(data.startDate);

@@ -98,7 +98,7 @@ export function prependStrategicPriority(description: string, priority: Strategi
  *
  * IMPORTANTE: Solo incluye campos que NO tienen field dedicado en la task.
  * - deadline → se guarda en task.deadline (NO en description)
- * - deliverables → se guarda en project.deliverables (NO en description)
+ * - deliverables (texto) → se guarda en description
  * - priority → se guarda en task.priority (NO en description)
  * - title → se guarda en task.title (NO en description)
  *
@@ -111,7 +111,7 @@ export function buildBriefDescription(fields: {
   keyMessage?: string;
   kpis?: string;
   deadline?: string;       // Ignorado — se guarda en task.deadline
-  deliverables?: string;   // Ignorado — se guarda en project.deliverables
+  deliverables?: string;   // Incluido como texto en description
   budget?: string;
   approvers?: string;
   additionalNotes?: string;
@@ -125,7 +125,10 @@ export function buildBriefDescription(fields: {
 
   lines.push(`Tipo de requerimiento: ${escapeHtml(fields.requestType)}`);
   // Marca NO se incluye — se guarda en task.corClientName (field dedicado)
-  // deadline y deliverables NO se incluyen — tienen fields dedicados
+  // deadline NO se incluye — tiene field dedicado
+  if (fields.deliverables) {
+    lines.push(`Entregables: ${escapeHtml(fields.deliverables).replace(/\n/g, "<br>")}`);
+  }
   if (fields.objective) lines.push(`Objetivo: ${escapeHtml(fields.objective)}`);
   if (fields.keyMessage) lines.push(`Mensaje clave: ${escapeHtml(fields.keyMessage)}`);
   if (fields.kpis) lines.push(`KPIs: ${escapeHtml(fields.kpis)}`);

@@ -270,7 +270,7 @@ export const applyInboundProjectUpdate = internalMutation({
     corBrief: v.optional(v.string()),
     corStartDate: v.optional(v.string()),
     corEndDate: v.optional(v.string()),
-    corDeliverables: v.optional(v.string()),
+    corDeliverables: v.optional(v.number()),
     corStatus: v.optional(v.string()),
     corEstimatedTime: v.optional(v.number()),
   },
@@ -303,7 +303,7 @@ export const applyInboundProjectUpdate = internalMutation({
     if (args.corEndDate !== undefined && args.corEndDate !== project.endDate) {
       updates.endDate = args.corEndDate;
     }
-    if (args.corDeliverables !== undefined && args.corDeliverables !== (project.deliverables ?? "")) {
+    if (args.corDeliverables !== undefined && args.corDeliverables !== project.deliverables) {
       updates.deliverables = args.corDeliverables;
     }
     if (args.corStatus !== undefined && args.corStatus !== project.status) {
