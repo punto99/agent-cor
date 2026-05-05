@@ -15,9 +15,11 @@ import type {
   ExternalClient,
   ExternalProject,
   ExternalTask,
+  ExternalTaskAttachment,
   CreateProjectInput,
   CreateTaskInput,
   UpdateTaskInput,
+  SetTaskLabelInput,
   UpdateProjectInput,
   UploadTaskAttachmentInput,
 } from "./types";
@@ -62,6 +64,11 @@ export function createNoopProvider(): ProjectManagementProvider {
       return null;
     },
 
+    async getTaskAttachments(_taskId: number): Promise<ExternalTaskAttachment[]> {
+      console.log("[Noop Provider] getTaskAttachments — no hay integración externa configurada");
+      return [];
+    },
+
     async getProject(_projectId: number): Promise<ExternalProject | null> {
       console.log("[Noop Provider] getProject — no hay integración externa configurada");
       return null;
@@ -70,6 +77,15 @@ export function createNoopProvider(): ProjectManagementProvider {
     async updateTask(
       _taskId: number,
       _data: UpdateTaskInput
+    ): Promise<{ success: boolean; error?: string }> {
+      return {
+        success: false,
+        error: "No hay integración de gestión de proyectos configurada.",
+      };
+    },
+
+    async setTaskLabel(
+      _data: SetTaskLabelInput
     ): Promise<{ success: boolean; error?: string }> {
       return {
         success: false,

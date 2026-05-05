@@ -8,6 +8,7 @@ import { TaskBriefContent } from "../task/TaskBriefContent";
 import { ProjectBriefContent } from "../task/ProjectBriefContent";
 import { EvaluationMessageList } from "../task/EvaluationMessages";
 import { EvaluationInput } from "../task/EvaluationInput";
+import { ConfirmDialog } from "@/app/components/ui/ConfirmDialog";
 import { getStatusColor, getStatusDisplay } from "../task/types";
 import type { Task, SelectedFile, EvaluationMessage } from "../task/types";
 import { clientConfig } from "@/config/tenant.config";
@@ -33,6 +34,8 @@ interface TaskDetailDialogProps {
     corClientName?: string;
     corSyncError?: string;
     projectId?: Id<"projects">;
+    corTaskMissingInCOR?: boolean;
+    corProjectMissingInCOR?: boolean;
   };
   onClose: () => void;
   /** Callback cuando la publicación se completa (éxito o error) */
@@ -54,6 +57,7 @@ export function TaskDetailDialog({
   const startPublish = useMutation(api.data.tasks.startPublishTaskToExternal);
   const retryTask = useMutation(api.data.tasks.retryTaskSync);
   const retryProject = useMutation(api.data.projects.retryProjectSync);
+  const softDeleteProject = useMutation(api.data.projects.softDeleteProject);
   const pullFromCOR = useMutation(api.data.corInboundSync.startPullFromCOR);
   const createEvaluationThread = useMutation(
     api.data.evaluation.createEvaluationThread,
@@ -67,6 +71,10 @@ export function TaskDetailDialog({
   const [isPublishing, setIsPublishing] = useState(false);
   const [isRetrying, setIsRetrying] = useState(false);
   const [isPulling, setIsPulling] = useState(false);
+  const [isDeletingLocal, setIsDeletingLocal] = useState(false);
+  const [confirmDeleteTaskOpen, setConfirmDeleteTaskOpen] = useState(false);
+  const [confirmDeleteProjectOpen, setConfirmDeleteProjectOpen] =
+    useState(false);
   const [activeTab, setActiveTab] = useState<"task" | "project" | "evaluation">(
     "task",
   );
@@ -126,6 +134,14 @@ export function TaskDetailDialog({
 
   // Obtener syncStatus en vivo (preferir liveTask, fallback a task prop)
   const syncStatus = liveTask?.corSyncStatus || task.corSyncStatus || "pending";
+  const taskMissingInCOR = Boolean(
+    (liveTask as any)?.corTaskMissingInCOR ?? task.corTaskMissingInCOR,
+  );
+  const projectMissingInCOR = Boolean(
+    (project as any)?.corMissingInCOR ??
+    (liveTask as any)?.corProjectMissingInCOR ??
+    task.corProjectMissingInCOR,
+  );
 
   // Detectar cuando la publicación finaliza (synced o error)
   useEffect(() => {
@@ -253,6 +269,52 @@ export function TaskDetailDialog({
   const isEvaluatorThinking =
     evalMessageList.length > 0 &&
     evalMessageList[evalMessageList.length - 1]?.role === "user";
+  const shouldDeleteBoth = taskMissingInCOR && projectMissingInCOR && !!project;
+
+  const handleConfirmDeleteTask = async () => {
+    try {
+      setIsDeletingLocal(true);
+      if (shouldDeleteBoth && project) {
+        await softDeleteProject({ projectId: project._id });
+        onPublishResult?.({
+          success: true,
+          message: "Tarea y proyecto eliminados localmente del panel.",
+        });
+        onClose();
+      } else {
+        onPublishResult?.({
+          success: true,
+          message:
+            "La tarea no se elimina del panel para conservar acceso al proyecto.",
+        });
+      }
+    } catch (err: any) {
+      setPublishError(err.message || "Error al eliminar la tarea localmente");
+    } finally {
+      setIsDeletingLocal(false);
+      setConfirmDeleteTaskOpen(false);
+    }
+  };
+
+  const handleConfirmDeleteProject = async () => {
+    if (!project) return;
+    try {
+      setIsDeletingLocal(true);
+      await softDeleteProject({ projectId: project._id });
+      onPublishResult?.({
+        success: true,
+        message: "Proyecto eliminado localmente del panel.",
+      });
+      onClose();
+    } catch (err: any) {
+      setPublishError(
+        err.message || "Error al eliminar el proyecto localmente",
+      );
+    } finally {
+      setIsDeletingLocal(false);
+      setConfirmDeleteProjectOpen(false);
+    }
+  };
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center">
@@ -346,34 +408,87 @@ export function TaskDetailDialog({
         >
           {activeTab === "task" && (
             <div>
-              {/* ID de la task para edición via agente */}
-              <div className="mx-6 mt-4 mb-2 flex items-center gap-2 text-xs text-muted-foreground bg-muted/50 rounded-lg px-3 py-2">
-                <span className="font-medium">ID para edición:</span>
-                <code className="font-mono text-foreground/80 select-all">
-                  {task._id}
-                </code>
-                <button
-                  onClick={() => handleCopyId(task._id)}
-                  className="ml-auto p-1 hover:bg-muted rounded transition-colors cursor-pointer"
-                  title="Copiar ID"
-                >
-                  {copiedId === task._id ? (
-                    <Check className="h-3.5 w-3.5 text-green-500" />
-                  ) : (
-                    <Copy className="h-3.5 w-3.5" />
-                  )}
-                </button>
-              </div>
-              <TaskBriefContent
-                task={liveTask ?? task}
-                editable={syncStatus !== "syncing"}
-                syncStatus={syncStatus}
-              />
+              {taskMissingInCOR && (
+                <div className="mx-6 mt-4 mb-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+                  <span>
+                    Esta tarea no fue encontrada en {toolName}, posiblemente fue
+                    eliminada.
+                    {shouldDeleteBoth ? (
+                      <>
+                        {" "}
+                        Como el proyecto también no fue encontrado, puedes
+                        <button
+                          type="button"
+                          onClick={() => setConfirmDeleteTaskOpen(true)}
+                          className="ml-1 underline underline-offset-2 hover:text-red-800 cursor-pointer"
+                        >
+                          eliminar ambos aquí
+                        </button>
+                        .
+                      </>
+                    ) : (
+                      <>
+                        {" "}
+                        Se mantiene en el panel para conservar acceso al
+                        proyecto.
+                      </>
+                    )}
+                  </span>
+                </div>
+              )}
+              {taskMissingInCOR ? (
+                <div className="mx-6 mt-4 rounded-lg border border-dashed border-border bg-muted/40 px-4 py-6 text-sm text-muted-foreground">
+                  El contenido de esta tarea no está disponible porque no fue
+                  encontrada en {toolName}.
+                </div>
+              ) : (
+                <>
+                  {/* ID de la task para edición via agente */}
+                  <div className="mx-6 mt-4 mb-2 flex items-center gap-2 text-xs text-muted-foreground bg-muted/50 rounded-lg px-3 py-2">
+                    <span className="font-medium">ID para edición:</span>
+                    <code className="font-mono text-foreground/80 select-all">
+                      {task._id}
+                    </code>
+                    <button
+                      onClick={() => handleCopyId(task._id)}
+                      className="ml-auto p-1 hover:bg-muted rounded transition-colors cursor-pointer"
+                      title="Copiar ID"
+                    >
+                      {copiedId === task._id ? (
+                        <Check className="h-3.5 w-3.5 text-green-500" />
+                      ) : (
+                        <Copy className="h-3.5 w-3.5" />
+                      )}
+                    </button>
+                  </div>
+                  <TaskBriefContent
+                    task={liveTask ?? task}
+                    editable={syncStatus !== "syncing"}
+                    syncStatus={syncStatus}
+                  />
+                </>
+              )}
             </div>
           )}
 
           {activeTab === "project" && project && (
             <div className="p-4">
+              {projectMissingInCOR && (
+                <div className="mb-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+                  <span>
+                    Este proyecto no fue encontrado en {toolName}, posiblemente
+                    fue eliminado. Puedes
+                    <button
+                      type="button"
+                      onClick={() => setConfirmDeleteProjectOpen(true)}
+                      className="ml-1 underline underline-offset-2 hover:text-red-800 cursor-pointer"
+                    >
+                      Eliminar aquí
+                    </button>
+                    .
+                  </span>
+                </div>
+              )}
               {/* ID del proyecto para edición via agente */}
               <div className="mb-3 flex items-center gap-2 text-xs text-muted-foreground bg-muted/50 rounded-lg px-3 py-2">
                 <span className="font-medium">ID para edición:</span>
@@ -619,6 +734,34 @@ export function TaskDetailDialog({
           </div>
         )}
       </div>
+
+      <ConfirmDialog
+        open={confirmDeleteTaskOpen}
+        onClose={() => setConfirmDeleteTaskOpen(false)}
+        title={
+          shouldDeleteBoth
+            ? "Eliminar tarea y proyecto del panel"
+            : "Conservar tarea para acceso al proyecto"
+        }
+        description={
+          shouldDeleteBoth
+            ? `Se eliminarán esta tarea y su proyecto localmente en una sola operación. No modifica ${toolName}.`
+            : `La tarea se mantendrá visible en el panel para conservar acceso al proyecto, porque el proyecto sí existe en ${toolName}.`
+        }
+        confirmLabel={shouldDeleteBoth ? "Eliminar ambos" : "Entendido"}
+        isLoading={isDeletingLocal}
+        onConfirm={handleConfirmDeleteTask}
+      />
+
+      <ConfirmDialog
+        open={confirmDeleteProjectOpen}
+        onClose={() => setConfirmDeleteProjectOpen(false)}
+        title="Eliminar proyecto del panel"
+        description={`Esta acción elimina el proyecto solo en esta aplicación. No modifica ${toolName}.`}
+        confirmLabel="Eliminar proyecto"
+        isLoading={isDeletingLocal}
+        onConfirm={handleConfirmDeleteProject}
+      />
     </div>
   );
 }

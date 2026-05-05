@@ -14,9 +14,11 @@ import type {
   ExternalClient,
   ExternalProject,
   ExternalTask,
+  ExternalTaskAttachment,
   CreateProjectInput,
   CreateTaskInput,
   UpdateTaskInput,
+  SetTaskLabelInput,
   UpdateProjectInput,
   UploadTaskAttachmentInput,
   ExternalAttachmentResult,
@@ -33,6 +35,18 @@ interface CORTokenResponse {
   token_type: string;
   expires_in: number;
   refresh_token?: string;
+}
+
+export class CORNotFoundError extends Error {
+  readonly entity: "task" | "project";
+  readonly externalId: number;
+
+  constructor(entity: "task" | "project", externalId: number) {
+    super(`${entity} not found in COR (${externalId})`);
+    this.name = "CORNotFoundError";
+    this.entity = entity;
+    this.externalId = externalId;
+  }
 }
 
 // ==================== HELPERS HTTP ====================
@@ -452,11 +466,19 @@ export function createCORProvider(): ProjectManagementProvider {
         const response = await corApiFetch(`/tasks/${taskId}`);
 
         if (!response.ok) {
+          if (response.status === 404) {
+            throw new CORNotFoundError("task", taskId);
+          }
           console.error(`[COR Provider] ❌ Error obteniendo task: ${response.status}`);
           return null;
         }
 
-        const task = await response.json();
+        const rawTask = await response.text();
+        if (!rawTask.trim()) {
+          throw new CORNotFoundError("task", taskId);
+        }
+
+        const task = JSON.parse(rawTask);
 
         return {
           id: task.id,
@@ -468,8 +490,58 @@ export function createCORProvider(): ProjectManagementProvider {
           priority: task.priority,
         };
       } catch (error) {
+        if (error instanceof CORNotFoundError) throw error;
         console.error(`[COR Provider] ❌ Error en getTask:`, error);
         return null;
+      }
+    },
+
+    // ==================== GET TASK ATTACHMENTS ====================
+
+    async getTaskAttachments(taskId: number): Promise<ExternalTaskAttachment[]> {
+      console.log(`[COR Provider] 📎 Obteniendo attachments de task: ${taskId}`);
+
+      try {
+        const response = await corApiFetch(`/tasks/${taskId}/attachments`);
+
+        if (!response.ok) {
+          console.error(`[COR Provider] ❌ Error obteniendo attachments: ${response.status}`);
+          return [];
+        }
+
+        const raw = await response.text();
+        if (!raw.trim()) return [];
+
+        const parsed = JSON.parse(raw);
+        const files = Array.isArray(parsed)
+          ? parsed
+          : Array.isArray(parsed?.files)
+            ? parsed.files
+            : Array.isArray(parsed?.data)
+              ? parsed.data
+              : [];
+
+        const attachments: ExternalTaskAttachment[] = files
+          .map((f: Record<string, unknown>) => ({
+            id: Number(f.id),
+            name:
+              (f.originalname as string) ||
+              (f.name as string) ||
+              (f.filename as string) ||
+              `attachment_${String(f.id || "unknown")}`,
+            url: (f.url as string) || undefined,
+            mimeType: (f.mimetype as string) || (f.mimeType as string) || undefined,
+            size:
+              typeof f.size === "number"
+                ? (f.size as number)
+                : undefined,
+          }))
+          .filter((f: ExternalTaskAttachment) => Number.isFinite(f.id));
+
+        return attachments;
+      } catch (error) {
+        console.error(`[COR Provider] ❌ Error en getTaskAttachments:`, error);
+        return [];
       }
     },
 
@@ -482,11 +554,19 @@ export function createCORProvider(): ProjectManagementProvider {
         const response = await corApiFetch(`/projects/${projectId}`);
 
         if (!response.ok) {
+          if (response.status === 404) {
+            throw new CORNotFoundError("project", projectId);
+          }
           console.error(`[COR Provider] ❌ Error obteniendo proyecto: ${response.status}`);
           return null;
         }
 
-        const project = await response.json();
+        const rawProject = await response.text();
+        if (!rawProject.trim()) {
+          throw new CORNotFoundError("project", projectId);
+        }
+
+        const project = JSON.parse(rawProject);
 
         return {
           id: project.id,
@@ -500,6 +580,7 @@ export function createCORProvider(): ProjectManagementProvider {
           estimatedTime: project.estimated_time,
         };
       } catch (error) {
+        if (error instanceof CORNotFoundError) throw error;
         console.error(`[COR Provider] ❌ Error en getProject:`, error);
         return null;
       }
@@ -566,6 +647,49 @@ export function createCORProvider(): ProjectManagementProvider {
         }
 
         console.log(`[COR Provider] ✅ Task ${taskId} actualizada correctamente`);
+        return { success: true };
+      } catch (error) {
+        return {
+          success: false,
+          error: error instanceof Error ? error.message : String(error),
+        };
+      }
+    },
+
+    // ==================== SET TASK LABEL ====================
+
+    async setTaskLabel(
+      data: SetTaskLabelInput
+    ): Promise<{ success: boolean; error?: string }> {
+      console.log(
+        `[COR Provider] 🏷️ ${data.unassign ? "Desasignando" : "Asignando"} etiqueta ${data.labelId} en task ${data.taskId}`
+      );
+
+      try {
+        const body: Record<string, unknown> = {
+          label_id: data.labelId,
+        };
+
+        if (data.unassign) {
+          body.unassign = true;
+        }
+
+        const response = await corApiFetch(`/tasks/${data.taskId}/labels`, {
+          method: "PUT",
+          body: JSON.stringify(body),
+        });
+
+        if (!response.ok) {
+          const errorText = await response.text();
+          return {
+            success: false,
+            error: `COR API error: ${response.status} - ${errorText}`,
+          };
+        }
+
+        console.log(
+          `[COR Provider] ✅ Etiqueta ${data.labelId} ${data.unassign ? "desasignada" : "asignada"} en task ${data.taskId}`
+        );
         return { success: true };
       } catch (error) {
         return {

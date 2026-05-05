@@ -9,9 +9,50 @@ import { listMessages } from "@convex-dev/agent";
 import { internal, components } from "../_generated/api";
 import { getProjectManagementProvider } from "../integrations/registry";
 import { getAuthUserId } from "@convex-dev/auth/server";
-import { hashText, isStrategicPriority, prependStrategicPriority } from "../lib/briefFormat";
+import { hashText, isStrategicPriority, type StrategicPriority } from "../lib/briefFormat";
 import { shouldRetry, getRetryDelay, formatRetryError, isClientError, MAX_RETRY_ATTEMPTS } from "../lib/corRetry";
 import type { ActionCtx } from "../_generated/server";
+
+const STRATEGIC_PRIORITY_LABEL_IDS: Record<StrategicPriority, number> = {
+  I_NU: 370185,
+  I_U: 370186,
+  NI_NU: 370188,
+  NI_U: 370187,
+};
+
+async function syncStrategicPriorityLabelInCOR(
+  taskId: number,
+  strategicPriority: StrategicPriority,
+): Promise<void> {
+  const provider = getProjectManagementProvider();
+  const targetLabelId = STRATEGIC_PRIORITY_LABEL_IDS[strategicPriority];
+
+  for (const labelId of Object.values(STRATEGIC_PRIORITY_LABEL_IDS)) {
+    if (labelId === targetLabelId) continue;
+    const unassignResult = await provider.setTaskLabel({
+      taskId,
+      labelId,
+      unassign: true,
+    });
+    if (!unassignResult.success) {
+      throw new Error(
+        unassignResult.error ||
+          `No se pudo desasignar etiqueta ${labelId} en task COR ${taskId}`,
+      );
+    }
+  }
+
+  const assignResult = await provider.setTaskLabel({
+    taskId,
+    labelId: targetLabelId,
+  });
+  if (!assignResult.success) {
+    throw new Error(
+      assignResult.error ||
+        `No se pudo asignar etiqueta ${targetLabelId} en task COR ${taskId}`,
+    );
+  }
+}
 
 // ==================== MUTATIONS ====================
 
@@ -46,6 +87,7 @@ export const createTaskInternal = internalMutation({
       priority: args.priority ?? 1,
       threadId: args.threadId,
       status: args.status,
+      convexStatus: "active",
       createdBy: args.createdBy,
       // Referencia al proyecto local
       projectId: args.projectId as any,
@@ -73,6 +115,12 @@ export const updateTaskInternal = internalMutation({
       description: v.optional(v.string()),
       deadline: v.optional(v.string()),
       priority: v.optional(v.number()),     // 0=Low, 1=Medium, 2=High, 3=Urgent
+      strategicPriority: v.optional(v.union(
+        v.literal("I_U"),
+        v.literal("I_NU"),
+        v.literal("NI_U"),
+        v.literal("NI_NU"),
+      )),
     }),
   },
   handler: async (ctx, args) => {
@@ -96,6 +144,23 @@ export const updateTaskInternal = internalMutation({
   },
 });
 
+export const setTaskStrategicPriorityInternal = internalMutation({
+  args: {
+    taskId: v.id("tasks"),
+    strategicPriority: v.union(
+      v.literal("I_U"),
+      v.literal("I_NU"),
+      v.literal("NI_U"),
+      v.literal("NI_NU"),
+    ),
+  },
+  handler: async (ctx, args) => {
+    await ctx.db.patch(args.taskId, {
+      strategicPriority: args.strategicPriority,
+    });
+  },
+});
+
 // Query interna para obtener task por threadId
 export const getTaskByThreadInternal = internalQuery({
   args: {
@@ -106,6 +171,7 @@ export const getTaskByThreadInternal = internalQuery({
       .query("tasks")
       .withIndex("by_thread", (q) => q.eq("threadId", args.threadId))
       .first();
+    if (task?.convexStatus === "deleted") return null;
     return task;
   },
 });
@@ -122,7 +188,9 @@ export const getTaskByIdInternal = internalQuery({
         .query("tasks")
         .filter((q) => q.eq(q.field("_id"), args.taskId))
         .collect();
-      return tasks[0] || null;
+      const task = tasks[0] || null;
+      if (task?.convexStatus === "deleted") return null;
+      return task;
     } catch {
       return null;
     }
@@ -140,6 +208,7 @@ export const getTaskByCORIdInternal = internalQuery({
       .query("tasks")
       .filter((q) => q.eq(q.field("corTaskId"), args.corTaskId))
       .first();
+    if (task?.convexStatus === "deleted") return null;
     return task;
   },
 });
@@ -169,6 +238,12 @@ export const updateTaskFields = mutation({
       deadline: v.optional(v.string()),
       priority: v.optional(v.number()),     // 0=Low, 1=Medium, 2=High, 3=Urgent
       status: v.optional(v.string()),       // nueva, en_proceso, estancada, finalizada
+      strategicPriority: v.optional(v.union(
+        v.literal("I_U"),
+        v.literal("I_NU"),
+        v.literal("NI_U"),
+        v.literal("NI_NU"),
+      )),
     }),
   },
   handler: async (ctx, args) => {
@@ -357,6 +432,16 @@ export const updateAttachmentCORSync = internalMutation({
       corAttachmentId: args.corAttachmentId,
       corUrl: args.corUrl,
     });
+  },
+});
+
+// Mutation interna para eliminar un attachment local de task
+export const deleteTaskAttachment = internalMutation({
+  args: {
+    attachmentId: v.id("taskAttachments"),
+  },
+  handler: async (ctx, args) => {
+    await ctx.db.delete(args.attachmentId);
   },
 });
 
@@ -616,6 +701,7 @@ export const createProjectAndTask = internalMutation({
         startDate: new Date().toISOString().split("T")[0],
         endDate: args.projectEndDate,
         status: "active",
+        convexStatus: "active",
         pmId: args.projectPmId,
         deliverables: args.projectDeliverables,
         estimatedTime: args.projectEstimatedTime,
@@ -636,6 +722,7 @@ export const createProjectAndTask = internalMutation({
       priority: args.taskPriority ?? 1,
       threadId: args.threadId,
       status: args.taskStatus,
+      convexStatus: "active",
       createdBy: args.taskCreatedBy,
       projectId: projectId as any,
       corSyncStatus: "pending",
@@ -714,18 +801,28 @@ export const classifyAndUpdatePriority = internalAction({
       });
 
       if (classification && isStrategicPriority(classification)) {
-        // Leer task actual y re-generar description con la prioridad
+        // Guardar prioridad estratégica en campo dedicado (no en description)
+        await ctx.runMutation(internal.data.tasks.setTaskStrategicPriorityInternal, {
+          taskId: args.taskId,
+          strategicPriority: classification,
+        });
+
+        // Si ya está publicada en COR, sincronizar etiqueta inmediatamente
         const task = await ctx.runQuery(internal.data.tasks.getTaskByIdInternal, {
           taskId: args.taskId as string,
         });
-        if (task?.description) {
-          const updatedDesc = prependStrategicPriority(task.description, classification);
-          await ctx.runMutation(internal.data.tasks.updateTaskInternal, {
-            taskId: args.taskId as string,
-            updates: { description: updatedDesc },
-          });
-          console.log(`[ClassifyAndUpdate] ✅ Prioridad ${classification} añadida a task ${args.taskId}`);
+
+        if (task?.corTaskId) {
+          const corTaskId = parseInt(task.corTaskId, 10);
+          if (Number.isFinite(corTaskId)) {
+            await syncStrategicPriorityLabelInCOR(corTaskId, classification);
+            console.log(
+              `[ClassifyAndUpdate] ✅ Prioridad ${classification} sincronizada como etiqueta en task COR ${corTaskId}`,
+            );
+          }
         }
+
+        console.log(`[ClassifyAndUpdate] ✅ Prioridad ${classification} guardada en task ${args.taskId}`);
       }
     } catch (error) {
       console.log(`[ClassifyAndUpdate] ⚠️ No se pudo clasificar prioridad (task ${args.taskId}):`, error);
@@ -805,6 +902,7 @@ export const getTaskByThread = query({
       .query("tasks")
       .withIndex("by_thread", (q) => q.eq("threadId", args.threadId))
       .first();
+    if (task?.convexStatus === "deleted") return null;
     
     return task;
   },
@@ -816,7 +914,9 @@ export const getTask = query({
     taskId: v.id("tasks"),
   },
   handler: async (ctx, args) => {
-    return await ctx.db.get(args.taskId);
+    const task = await ctx.db.get(args.taskId);
+    if (task?.convexStatus === "deleted") return null;
+    return task;
   },
 });
 
@@ -827,12 +927,14 @@ export const listTasks = query({
   },
   handler: async (ctx, args) => {
     if (args.status) {
-      return await ctx.db
+      const tasks = await ctx.db
         .query("tasks")
         .withIndex("by_status", (q) => q.eq("status", args.status!))
         .collect();
+      return tasks.filter((t) => t.convexStatus !== "deleted");
     }
-    return await ctx.db.query("tasks").collect();
+    const allTasks = await ctx.db.query("tasks").collect();
+    return allTasks.filter((t) => t.convexStatus !== "deleted");
   },
 });
 
@@ -842,10 +944,11 @@ export const listByThread = query({
     threadId: v.string(),
   },
   handler: async (ctx, args) => {
-    return await ctx.db
+    const tasks = await ctx.db
       .query("tasks")
       .withIndex("by_thread", (q) => q.eq("threadId", args.threadId))
       .collect();
+    return tasks.filter((t) => t.convexStatus !== "deleted");
   },
 });
 
@@ -876,6 +979,8 @@ export const listMyTasks = query({
       .withIndex("by_createdBy", (q) => q.eq("createdBy", userIdStr))
       .order("desc")
       .collect();
+
+    tasks = tasks.filter((t) => t.convexStatus !== "deleted");
     
     // Filtrar por status si se proporcionó
     if (args.status) {
@@ -883,6 +988,33 @@ export const listMyTasks = query({
     }
     
     return tasks;
+  },
+});
+
+/**
+ * Soft delete de task local (Convex): marca convexStatus="deleted".
+ * No elimina ni modifica nada en COR.
+ */
+export const softDeleteTask = mutation({
+  args: {
+    taskId: v.id("tasks"),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) throw new Error("No autenticado");
+
+    const task = await ctx.db.get(args.taskId);
+    if (!task) throw new Error("Task no encontrada");
+
+    if (task.convexStatus === "deleted") {
+      return { success: true, message: "La task ya estaba eliminada." };
+    }
+
+    await ctx.db.patch(args.taskId, {
+      convexStatus: "deleted",
+    });
+
+    return { success: true, message: "Task eliminada del panel." };
   },
 });
 
@@ -899,7 +1031,7 @@ export const listMyTasks = query({
  *   priority      →  priority
  *   status        →  status
  */
-const COR_SYNCABLE_FIELDS = new Set(["title", "description", "deadline", "priority", "status"]);
+const COR_SYNCABLE_FIELDS = new Set(["title", "description", "deadline", "priority", "status", "strategicPriority"]);
 
 /**
  * Mutation interna: programa la sincronización de ediciones locales hacia COR.
@@ -1061,21 +1193,41 @@ export const syncEditToCORAction = internalAction({
       } else {
         console.log(`[SyncEdit] 📝 Campos a sincronizar: ${syncableChanges.join(", ")}`);
 
+        const strategicPriorityChanged = syncableChanges.includes("strategicPriority");
+        const shouldSyncStrategicLabel =
+          strategicPriorityChanged &&
+          !!task.strategicPriority &&
+          isStrategicPriority(task.strategicPriority);
+
+        const taskFieldChanges = syncableChanges.filter((f) => f !== "strategicPriority");
+
         // Mapeo directo 1:1
-        if (syncableChanges.includes("title")) updatePayload.title = task.title;
-        if (syncableChanges.includes("description")) updatePayload.description = task.description || "";
-        if (syncableChanges.includes("deadline")) updatePayload.deadline = task.deadline;
-        if (syncableChanges.includes("priority")) updatePayload.priority = task.priority;
-        if (syncableChanges.includes("status")) updatePayload.status = task.status;
+        if (taskFieldChanges.includes("title")) updatePayload.title = task.title;
+        if (taskFieldChanges.includes("description")) updatePayload.description = task.description || "";
+        if (taskFieldChanges.includes("deadline")) updatePayload.deadline = task.deadline;
+        if (taskFieldChanges.includes("priority")) updatePayload.priority = task.priority;
+        if (taskFieldChanges.includes("status")) updatePayload.status = task.status;
 
         // 4. Actualizar la task en COR
-        console.log(`[SyncEdit] 🚀 Enviando actualización a COR task ${corTaskId}:`, Object.keys(updatePayload));
-        
-        const result = await provider.updateTask(parseInt(corTaskId), updatePayload as any);
+        if (Object.keys(updatePayload).length > 0) {
+          console.log(`[SyncEdit] 🚀 Enviando actualización a COR task ${corTaskId}:`, Object.keys(updatePayload));
 
-        if (!result.success) {
-          console.error(`[SyncEdit] ❌ Error actualizando COR: ${result.error}`);
-          throw new Error(result.error || "Error desconocido de COR");
+          const result = await provider.updateTask(parseInt(corTaskId), updatePayload as any);
+
+          if (!result.success) {
+            console.error(`[SyncEdit] ❌ Error actualizando COR: ${result.error}`);
+            throw new Error(result.error || "Error desconocido de COR");
+          }
+        }
+
+        if (shouldSyncStrategicLabel) {
+          console.log(
+            `[SyncEdit] 🏷️ Sincronizando etiqueta estratégica ${task.strategicPriority} en task COR ${corTaskId}`,
+          );
+          await syncStrategicPriorityLabelInCOR(
+            parseInt(corTaskId),
+            task.strategicPriority as StrategicPriority,
+          );
         }
       }
 
@@ -1244,7 +1396,7 @@ export const retryTaskSync = mutation({
     });
 
     // Sincronizar todos los campos sincronizables
-    const allSyncFields = ["title", "description", "deadline", "priority", "status"];
+    const allSyncFields = ["title", "description", "deadline", "priority", "status", "strategicPriority"];
     await ctx.scheduler.runAfter(0, internal.data.tasks.syncEditToCORAction, {
       taskId: args.taskId,
       changedFields: allSyncFields,
@@ -1567,6 +1719,17 @@ export const publishTaskToExternalAction = internalAction({
       });
 
       console.log(`[PublishTask] ✅ Task creada: ID ${externalTask.id}`);
+
+      const strategicPriority = (task as any).strategicPriority;
+      if (strategicPriority && isStrategicPriority(strategicPriority)) {
+        console.log(
+          `[PublishTask] 🏷️ Sincronizando etiqueta estratégica ${strategicPriority} en task COR ${externalTask.id}...`,
+        );
+        await syncStrategicPriorityLabelInCOR(externalTask.id, strategicPriority);
+        console.log(
+          `[PublishTask] ✅ Etiqueta estratégica ${strategicPriority} aplicada en task COR ${externalTask.id}`,
+        );
+      }
 
       // 5. Actualizar task local con IDs externos y estado "synced"
       const descriptionHash = hashText(task.description || "");

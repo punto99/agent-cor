@@ -34,6 +34,8 @@ interface FullTask {
   corSyncStatus?: string;
   corSyncError?: string;
   corSyncedAt?: number;
+  corTaskMissingInCOR?: boolean;
+  corProjectMissingInCOR?: boolean;
   corClientId?: number;
   corClientName?: string;
   corDescriptionHash?: string;

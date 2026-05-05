@@ -22,6 +22,8 @@ interface TaskCardTask {
   corSyncStatus?: string;
   corTaskId?: string;
   corClientName?: string;
+  corTaskMissingInCOR?: boolean;
+  corProjectMissingInCOR?: boolean;
 }
 
 interface TaskCardProps {
@@ -43,6 +45,23 @@ export function TaskCard({ task, onClick }: TaskCardProps) {
 
   // Determinar badge de sincronización
   const getSyncBadge = () => {
+    if (task.corTaskMissingInCOR || task.corProjectMissingInCOR) {
+      const tooltip =
+        task.corTaskMissingInCOR && task.corProjectMissingInCOR
+          ? "La task y su proyecto asociados no fueron encontrados en COR."
+          : task.corTaskMissingInCOR
+            ? "La task no fue encontrada en COR."
+            : "El proyecto asociado no fue encontrado en COR.";
+
+      return {
+        label: "No encontrada en COR",
+        className:
+          "bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400",
+        icon: "⚠️",
+        tooltip,
+      };
+    }
+
     switch (task.corSyncStatus) {
       case "synced":
         return {
@@ -50,6 +69,7 @@ export function TaskCard({ task, onClick }: TaskCardProps) {
           className:
             "bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-400",
           icon: "✅",
+          tooltip: undefined,
         };
       case "syncing":
         return {
@@ -57,6 +77,7 @@ export function TaskCard({ task, onClick }: TaskCardProps) {
           className:
             "bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400",
           icon: "⏳",
+          tooltip: undefined,
         };
       case "error":
         return {
@@ -64,6 +85,7 @@ export function TaskCard({ task, onClick }: TaskCardProps) {
           className:
             "bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400",
           icon: "❌",
+          tooltip: undefined,
         };
       default:
         return {
@@ -71,6 +93,7 @@ export function TaskCard({ task, onClick }: TaskCardProps) {
           className:
             "bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-400",
           icon: "🟡",
+          tooltip: undefined,
         };
     }
   };
@@ -117,6 +140,7 @@ export function TaskCard({ task, onClick }: TaskCardProps) {
         </span>
         <span
           className={`text-xs px-2 py-0.5 rounded-full ${syncBadge.className}`}
+          title={syncBadge.tooltip}
         >
           {syncBadge.icon} {syncBadge.label}
         </span>

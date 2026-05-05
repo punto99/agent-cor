@@ -30,7 +30,9 @@ export const getProject = query({
     const userId = await getAuthUserId(ctx);
     if (!userId) throw new Error("No autenticado");
 
-    return await ctx.db.get(args.projectId);
+    const project = await ctx.db.get(args.projectId);
+    if (project?.convexStatus === "deleted") return null;
+    return project;
   },
 });
 
@@ -43,10 +45,11 @@ export const listMyProjects = query({
     const userId = await getAuthUserId(ctx);
     if (!userId) throw new Error("No autenticado");
 
-    return await ctx.db
+    const projects = await ctx.db
       .query("projects")
       .withIndex("by_createdBy", (q) => q.eq("createdBy", userId))
       .collect();
+    return projects.filter((p) => p.convexStatus !== "deleted");
   },
 });
 
@@ -57,10 +60,12 @@ export const listMyProjects = query({
 export const getProjectByThread = internalQuery({
   args: { threadId: v.string() },
   handler: async (ctx, args) => {
-    return await ctx.db
+    const project = await ctx.db
       .query("projects")
       .withIndex("by_threadId", (q) => q.eq("threadId", args.threadId))
       .unique();
+    if (project?.convexStatus === "deleted") return null;
+    return project;
   },
 });
 
@@ -70,7 +75,9 @@ export const getProjectByThread = internalQuery({
 export const getProjectInternal = internalQuery({
   args: { projectId: v.id("projects") },
   handler: async (ctx, args) => {
-    return await ctx.db.get(args.projectId);
+    const project = await ctx.db.get(args.projectId);
+    if (project?.convexStatus === "deleted") return null;
+    return project;
   },
 });
 
@@ -103,6 +110,7 @@ export const createProjectInternal = internalMutation({
       startDate: args.startDate,
       endDate: args.endDate,
       status: args.status,
+      convexStatus: "active",
       clientId: args.clientId,
       createdBy: args.createdBy,
       threadId: args.threadId,
@@ -115,6 +123,48 @@ export const createProjectInternal = internalMutation({
 
     console.log(`[projects] ✅ Proyecto creado: "${args.name}" (ID: ${projectId})`);
     return projectId;
+  },
+});
+
+/**
+ * Soft delete de proyecto local (Convex): marca convexStatus="deleted".
+ * No elimina ni modifica nada en COR.
+ */
+export const softDeleteProject = mutation({
+  args: {
+    projectId: v.id("projects"),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) throw new Error("No autenticado");
+
+    const project = await ctx.db.get(args.projectId);
+    if (!project) throw new Error("Proyecto no encontrado");
+
+    if (project.convexStatus === "deleted") {
+      return { success: true, message: "El proyecto ya estaba eliminado." };
+    }
+
+    await ctx.db.patch(args.projectId, {
+      convexStatus: "deleted",
+    });
+
+    // Al eliminar proyecto localmente, eliminar también sus tasks locales para evitar huérfanos.
+    const projectTasks = await ctx.db
+      .query("tasks")
+      .withIndex("by_projectId", (q) => q.eq("projectId", args.projectId))
+      .collect();
+
+    for (const task of projectTasks) {
+      await ctx.db.patch(task._id, {
+        convexStatus: "deleted",
+      });
+    }
+
+    return {
+      success: true,
+      message: `Proyecto eliminado del panel junto con ${projectTasks.length} tarea(s).`,
+    };
   },
 });
 

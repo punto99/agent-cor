@@ -49,7 +49,14 @@ export default defineSchema({
     description: v.optional(v.string()),     // Contiene todos los datos del brief formateados
     deadline: v.optional(v.string()),
     priority: v.optional(v.number()),         // 0=Low, 1=Medium, 2=High, 3=Urgent
+    strategicPriority: v.optional(v.union(    // Prioridad estratégica (label en COR)
+      v.literal("I_U"),
+      v.literal("I_NU"),
+      v.literal("NI_U"),
+      v.literal("NI_NU")
+    )),
     status: v.string(),
+    convexStatus: v.optional(v.union(v.literal("active"), v.literal("deleted"))),
     // === Campos internos (no van a COR) ===
     threadId: v.string(),
     createdBy: v.optional(v.string()),
@@ -61,6 +68,8 @@ export default defineSchema({
     corSyncError: v.optional(v.string()),
     corSyncedAt: v.optional(v.number()),
     corSyncAttempt: v.optional(v.number()),    // Intento actual de sync (0-based)
+    corTaskMissingInCOR: v.optional(v.boolean()),
+    corProjectMissingInCOR: v.optional(v.boolean()),
     // === Campos para identificar el cliente en el sistema externo ===
     corClientId: v.optional(v.number()),
     corClientName: v.optional(v.string()),
@@ -71,6 +80,7 @@ export default defineSchema({
     .index("by_thread", ["threadId"])
     .index("by_status", ["status"])
     .index("by_createdBy", ["createdBy"])
+    .index("by_projectId", ["projectId"])
     .index("by_corTaskId", ["corTaskId"])
     .index("by_corSyncStatus", ["corSyncStatus"]),
 
@@ -252,6 +262,7 @@ export default defineSchema({
     startDate: v.optional(v.string()),         // YYYY-MM-DD
     endDate: v.optional(v.string()),           // YYYY-MM-DD (deadline)
     status: v.string(),                        // "active" | "in_process" | "suspended" | "finished"
+    convexStatus: v.optional(v.union(v.literal("active"), v.literal("deleted"))),
     estimatedTime: v.optional(v.number()),     // Horas estimadas
     billable: v.optional(v.boolean()),
     incomeType: v.optional(v.string()),        // "fee" | "one_time" | "hourly_rate" | "contract"
@@ -270,6 +281,7 @@ export default defineSchema({
     corSyncError: v.optional(v.string()),
     corSyncedAt: v.optional(v.number()),
     corSyncAttempt: v.optional(v.number()),     // Intento actual de sync (0-based)
+    corMissingInCOR: v.optional(v.boolean()),
   })
     .index("by_clientId", ["clientId"])
     .index("by_corProjectId", ["corProjectId"])

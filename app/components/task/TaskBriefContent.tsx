@@ -251,6 +251,7 @@ function EditableSelectItem({
   };
 
   const colorClass = colorFn ? colorFn(isEditing ? editValue : value) : "";
+  const hasChanged = editValue !== value;
 
   return (
     <div className="bg-card rounded-lg p-3 border border-border shadow-sm group/item">
@@ -280,7 +281,7 @@ function EditableSelectItem({
               <div className="flex items-center gap-1.5 mt-1.5">
                 <button
                   onClick={handleSave}
-                  disabled={isSaving}
+                  disabled={isSaving || !hasChanged}
                   className="flex items-center gap-1 text-xs px-2 py-1 rounded-md bg-primary text-primary-foreground hover:bg-primary/90 transition-colors disabled:opacity-50 cursor-pointer"
                 >
                   <Check className="h-3 w-3" />
@@ -415,6 +416,40 @@ const getPriorityColor = (value: string): string => {
   const cfg = PRIORITY_DISPLAY[parseInt(value)];
   return cfg?.color || PRIORITY_DISPLAY[1].color;
 };
+
+const STRATEGIC_PRIORITY_OPTIONS: { value: string; label: string }[] = [
+  { value: "", label: "Sin definir" },
+  { value: "I_U", label: "I_U" },
+  { value: "I_NU", label: "I_NU" },
+  { value: "NI_U", label: "NI_U" },
+  { value: "NI_NU", label: "NI_NU" },
+];
+
+const STRATEGIC_PRIORITY_DISPLAY: Record<
+  string,
+  { label: string; color: string }
+> = {
+  I_NU: {
+    label: "I_NU",
+    color: "bg-[#F5D1A0] text-amber-900 border-amber-300",
+  },
+  I_U: {
+    label: "I_U",
+    color: "bg-[#F4D3D3] text-rose-900 border-rose-300",
+  },
+  NI_NU: {
+    label: "NI_NU",
+    color: "bg-[#CAF3E2] text-emerald-900 border-emerald-300",
+  },
+  NI_U: {
+    label: "NI_U",
+    color: "bg-[#C1EEEE] text-cyan-900 border-cyan-300",
+  },
+};
+
+const getStrategicPriorityColor = (value: string): string =>
+  STRATEGIC_PRIORITY_DISPLAY[value]?.color ||
+  "bg-muted text-muted-foreground border-border";
 
 // Opciones de estado para COR
 // Códigos reales del API: nueva, en_proceso, en_revision, en_diseno, estancada, finalizada
@@ -581,6 +616,19 @@ export function TaskBriefContent({
       showSyncFeedback();
       return;
     }
+    if (fieldKey === "strategicPriority") {
+      if (!newValue) {
+        return;
+      }
+      await updateTask({
+        taskId: task._id,
+        updates: {
+          strategicPriority: newValue as "I_U" | "I_NU" | "NI_U" | "NI_NU",
+        },
+      });
+      showSyncFeedback();
+      return;
+    }
     await updateTask({
       taskId: task._id,
       updates: { [fieldKey]: newValue },
@@ -710,6 +758,20 @@ export function TaskBriefContent({
             options={STATUS_OPTIONS}
             editable={editable}
             colorFn={getStatusColor}
+            onSave={handleSaveField}
+          />
+        )}
+
+        {(task.strategicPriority || editable) && (
+          <EditableSelectItem
+            icon="🏷️"
+            label="Prioridad Estratégica"
+            value={task.strategicPriority || ""}
+            displayValue={task.strategicPriority || "No definida"}
+            fieldKey="strategicPriority"
+            options={STRATEGIC_PRIORITY_OPTIONS}
+            editable={editable}
+            colorFn={getStrategicPriorityColor}
             onSave={handleSaveField}
           />
         )}

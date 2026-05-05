@@ -57,6 +57,15 @@ export interface ExternalTask {
   priority?: number;
 }
 
+/** Attachment de una task en sistema externo */
+export interface ExternalTaskAttachment {
+  id: number;
+  name: string;
+  url?: string;
+  mimeType?: string;
+  size?: number;
+}
+
 // ==================== INPUTS ====================
 
 export interface CreateProjectInput {
@@ -95,6 +104,12 @@ export interface UpdateTaskInput {
   deadline?: string;
   priority?: string | number;
   status?: string;
+}
+
+export interface SetTaskLabelInput {
+  taskId: number;
+  labelId: number;
+  unassign?: boolean;
 }
 
 export interface UpdateProjectInput {
@@ -192,6 +207,14 @@ export interface ProjectManagementProvider {
   ): Promise<{ success: boolean; error?: string }>;
 
   /**
+   * Asignar o desasignar una etiqueta de una task.
+   * En COR: PUT /tasks/{task_id}/labels
+   */
+  setTaskLabel(
+    data: SetTaskLabelInput
+  ): Promise<{ success: boolean; error?: string }>;
+
+  /**
    * Actualizar un proyecto existente en el sistema externo.
    * Hace merge seguro: primero obtiene el estado actual y solo
    * sobrescribe los campos proporcionados.
@@ -222,6 +245,11 @@ export interface ProjectManagementProvider {
    * Usado para backfill masivo de corClients.
    */
   listAllClients(): Promise<ExternalClient[]>;
+
+  /**
+   * Listar attachments de una task en el sistema externo.
+   */
+  getTaskAttachments(taskId: number): Promise<ExternalTaskAttachment[]>;
 }
 
 // ==================== TIPO DE CONFIGURACIÓN ====================

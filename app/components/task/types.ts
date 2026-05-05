@@ -8,6 +8,7 @@ export type Task = {
   description?: string;    // Contiene todo el brief como HTML rich text
   deadline?: string;
   priority?: number;       // 0=Low, 1=Medium, 2=High, 3=Urgent
+  strategicPriority?: "I_U" | "I_NU" | "NI_U" | "NI_NU";
   status: string;
   threadId: string;
   createdBy?: string;
