@@ -51,6 +51,7 @@ import type * as rag_ragDocuments from "../rag/ragDocuments.js";
 import type * as rag_ragPages from "../rag/ragPages.js";
 import type * as rag_ragSearch from "../rag/ragSearch.js";
 import type * as rag_ragTools from "../rag/ragTools.js";
+import type * as tools_attachFileToTaskTool from "../tools/attachFileToTaskTool.js";
 import type * as tools_createTaskTool from "../tools/createTaskTool.js";
 import type * as tools_editProjectTool from "../tools/editProjectTool.js";
 import type * as tools_editTaskTool from "../tools/editTaskTool.js";
@@ -114,6 +115,7 @@ declare const fullApi: ApiFromModules<{
   "rag/ragPages": typeof rag_ragPages;
   "rag/ragSearch": typeof rag_ragSearch;
   "rag/ragTools": typeof rag_ragTools;
+  "tools/attachFileToTaskTool": typeof tools_attachFileToTaskTool;
   "tools/createTaskTool": typeof tools_createTaskTool;
   "tools/editProjectTool": typeof tools_editProjectTool;
   "tools/editTaskTool": typeof tools_editTaskTool;

@@ -226,6 +226,10 @@ REGLAS DE EDICION:
 - Si el usuario te da el COR ID de la task, usalo directamente
 - Si el usuario dice "quiero cambiar el presupuesto" o "modifica el deadline", busca la task asociada a esta conversacion
 
+ADJUNTOS EN TASKS EXISTENTES:
+- Si el usuario pide adjuntar, agregar o asociar un archivo a una task ya creada, usa la herramienta "attachFileToTask".
+- NO uses editTask para adjuntar archivos. Los archivos no son campos editables de la task.
+
 REGLAS IMPORTANTES:
 - NUNCA uses createTask sin confirmacion explicita del usuario
 - NUNCA asumas que el usuario confirmo sin que lo diga claramente
