@@ -20,6 +20,78 @@ const STRATEGIC_PRIORITY_LABEL_IDS: Record<StrategicPriority, number> = {
   NI_U: 370187,
 };
 
+const MIN_PUBLISHABLE_DESCRIPTION_LENGTH = 40;
+const DESCRIPTION_MIN_REMAINING_RATIO = 0.35;
+
+function normalizeDescriptionText(value: unknown): string {
+  if (typeof value !== "string") return "";
+  return value
+    .replace(/<[^>]*>/g, " ")
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&amp;/gi, "&")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function normalizeForComparison(value: string): string {
+  return value
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase();
+}
+
+function isPlaceholderDescription(value: unknown): boolean {
+  const normalized = normalizeForComparison(normalizeDescriptionText(value));
+  if (!normalized) return true;
+  return [
+    "sin descripcion",
+    "no especificado",
+    "no especificada",
+    "descripcion pendiente",
+    "pendiente",
+  ].includes(normalized);
+}
+
+function hasBriefStructure(value: unknown): boolean {
+  const normalized = normalizeForComparison(normalizeDescriptionText(value));
+  return (
+    normalized.includes("tipo de requerimiento") &&
+    normalized.includes("entregables")
+  );
+}
+
+function validateDescriptionUpdate(
+  currentDescription: unknown,
+  nextDescription: unknown,
+): string | null {
+  const currentText = normalizeDescriptionText(currentDescription);
+  const nextText = normalizeDescriptionText(nextDescription);
+
+  if (isPlaceholderDescription(nextDescription)) {
+    return "No se puede guardar una descripción vacía o placeholder. La descripción contiene el brief completo.";
+  }
+
+  if (currentText && nextText.length < Math.max(20, currentText.length * DESCRIPTION_MIN_REMAINING_RATIO)) {
+    return "No se puede reemplazar la descripción por una versión mucho más corta. Edita solo la sección necesaria y conserva el resto del brief.";
+  }
+
+  if (hasBriefStructure(currentDescription) && !hasBriefStructure(nextDescription)) {
+    return "No se puede guardar la descripción porque perdió secciones base del brief como tipo de requerimiento o entregables.";
+  }
+
+  return null;
+}
+
+function validatePublishableDescription(description: unknown): string | null {
+  const text = normalizeDescriptionText(description);
+  if (isPlaceholderDescription(description) || text.length < MIN_PUBLISHABLE_DESCRIPTION_LENGTH) {
+    return "No se puede publicar en COR: la descripción/brief está vacía o incompleta.";
+  }
+  return null;
+}
+
 async function syncStrategicPriorityLabelInCOR(
   taskId: number,
   strategicPriority: StrategicPriority,
@@ -122,9 +194,13 @@ export const updateTaskInternal = internalMutation({
         v.literal("NI_NU"),
       )),
     }),
+    allowedFields: v.optional(v.array(v.string())),
   },
   handler: async (ctx, args) => {
     console.log(`[Tasks.updateTaskInternal] Actualizando task ${args.taskId}...`);
+
+    const task: any = await ctx.db.get(args.taskId as any);
+    if (!task) throw new Error("Task no encontrada");
     
     // Filtrar campos undefined
     const updateData: any = {};
@@ -132,6 +208,25 @@ export const updateTaskInternal = internalMutation({
       if (value !== undefined) {
         updateData[key] = value;
       }
+    }
+
+    const updateKeys = Object.keys(updateData);
+    if (args.allowedFields) {
+      const allowedFields = new Set(args.allowedFields);
+      const unexpectedFields = updateKeys.filter((field) => !allowedFields.has(field));
+      if (unexpectedFields.length > 0) {
+        throw new Error(
+          `Edición rechazada: campos no permitidos para esta operación (${unexpectedFields.join(", ")}).`
+        );
+      }
+    }
+
+    if (updateKeys.includes("description")) {
+      const descriptionError = validateDescriptionUpdate(
+        task.description,
+        updateData.description,
+      );
+      if (descriptionError) throw new Error(descriptionError);
     }
     
     // Registrar timestamp de edición local (detección de conflictos bidireccional)
@@ -300,6 +395,15 @@ export const updateTaskFields = mutation({
     }
 
     if (Object.keys(updateData).length === 0) return args.taskId;
+
+    const updateKeys = Object.keys(updateData);
+    if (updateKeys.includes("description")) {
+      const descriptionError = validateDescriptionUpdate(
+        task.description,
+        updateData.description,
+      );
+      if (descriptionError) throw new Error(descriptionError);
+    }
 
     // Agregar timestamp de edición local
     updateData.lastLocalEditAt = Date.now();
@@ -1517,6 +1621,11 @@ export const startPublishTaskToExternal = mutation({
       throw new Error("No se puede publicar: no hay un cliente asociado a esta tarea.");
     }
 
+    const descriptionError = validatePublishableDescription(task.description);
+    if (descriptionError) {
+      throw new Error(descriptionError);
+    }
+
     // Buscar el cliente local por corClientId
     const localClient = await ctx.db
       .query("corClients")
@@ -1599,6 +1708,17 @@ export const publishTaskToExternalAction = internalAction({
           taskId: args.taskId,
           corSyncStatus: "error",
           corSyncError: "Task no encontrada en la base de datos",
+        });
+        return;
+      }
+
+      const descriptionError = validatePublishableDescription(task.description);
+      if (descriptionError) {
+        console.error(`[PublishTask] ❌ ${descriptionError}`);
+        await ctx.runMutation(internal.data.tasks.updatePublishStatus, {
+          taskId: args.taskId,
+          corSyncStatus: "error",
+          corSyncError: descriptionError,
         });
         return;
       }

@@ -218,7 +218,11 @@ DIFERENCIA TASK vs PROYECTO:
 REGLAS DE EDICION:
 - NUNCA editar sin mostrar primero como quedara la task completa
 - NUNCA editar sin confirmacion explicita del usuario
+- Al llamar editTask, fieldsToEdit debe contener SOLO los campos que el usuario pidio cambiar explicitamente.
+- Si el usuario pide cambiar el deadline/fecha limite, edita SOLO el campo deadline. NO edites description para "dejar constancia" de la fecha salvo que el usuario pida explicitamente agregar texto en el brief.
+- Si el usuario pide cambiar titulo, deadline o prioridad, no envies description.
 - Al editar description, solo cambiar la seccion relevante, nunca reescribir todo
+- Si el usuario pide editar description junto con otro campo, puedes hacerlo en una sola llamada declarando ambos campos en fieldsToEdit. Debes preservar en description todo lo que el usuario no pidio cambiar.
 - Si el usuario te da el COR ID de la task, usalo directamente
 - Si el usuario dice "quiero cambiar el presupuesto" o "modifica el deadline", busca la task asociada a esta conversacion
 
