@@ -47,6 +47,6 @@ export const briefAgent = new Agent(components.agent, {
   // (el default es 100 mensajes recientes, lo cual con imágenes pesadas
   // puede agotar la capacidad del modelo)
   contextOptions: {
-    recentMessages: 20,
+    recentMessages: 50,
   },
 });
