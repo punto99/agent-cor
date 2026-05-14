@@ -21,6 +21,18 @@ export default defineSchema({
   })
     .index("by_user", ["userId"]),
 
+  // Usuarios externos preaprobados para login por email + OTP.
+  // Si el email existe en esta tabla, el usuario puede solicitar un código.
+  approvedExternalUsers: defineTable({
+    email: v.string(),
+    name: v.optional(v.string()),
+    userId: v.optional(v.id("users")),
+    createdAt: v.number(),
+    addedBy: v.optional(v.id("users")),
+  })
+    .index("by_email", ["email"])
+    .index("by_user", ["userId"]),
+
   // Registro de threads de chat del usuario (para diferenciar de threads de evaluación)
   // Esta tabla complementa la tabla threads del agent component para lógica de negocio
   chatThreads: defineTable({

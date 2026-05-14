@@ -16,6 +16,7 @@ import type * as agents_priorityAgent from "../agents/priorityAgent.js";
 import type * as agents_reviewerAgent from "../agents/reviewerAgent.js";
 import type * as auth from "../auth.js";
 import type * as crons from "../crons.js";
+import type * as data_approvedExternalUsers from "../data/approvedExternalUsers.js";
 import type * as data_backfill from "../data/backfill.js";
 import type * as data_clientAssignmentsDashboard from "../data/clientAssignmentsDashboard.js";
 import type * as data_corClientRelatedUsersDashboard from "../data/corClientRelatedUsersDashboard.js";
@@ -80,6 +81,7 @@ declare const fullApi: ApiFromModules<{
   "agents/reviewerAgent": typeof agents_reviewerAgent;
   auth: typeof auth;
   crons: typeof crons;
+  "data/approvedExternalUsers": typeof data_approvedExternalUsers;
   "data/backfill": typeof data_backfill;
   "data/clientAssignmentsDashboard": typeof data_clientAssignmentsDashboard;
   "data/corClientRelatedUsersDashboard": typeof data_corClientRelatedUsersDashboard;
