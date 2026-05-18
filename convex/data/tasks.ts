@@ -23,6 +23,14 @@ const STRATEGIC_PRIORITY_LABEL_IDS: Record<StrategicPriority, number> = {
 const MIN_PUBLISHABLE_DESCRIPTION_LENGTH = 40;
 const DESCRIPTION_MIN_REMAINING_RATIO = 0.35;
 
+async function isExternalUser(ctx: any, userId: any) {
+  const approvedExternalUser = await ctx.db
+    .query("approvedExternalUsers")
+    .withIndex("by_user", (q: any) => q.eq("userId", userId))
+    .unique();
+  return Boolean(approvedExternalUser);
+}
+
 function normalizeDescriptionText(value: unknown): string {
   if (typeof value !== "string") return "";
   return value
@@ -340,6 +348,14 @@ export const updateTaskFields = mutation({
     const userId = await getAuthUserId(ctx);
     if (!userId) throw new Error("No autenticado");
 
+    const approvedExternalUser = await ctx.db
+      .query("approvedExternalUsers")
+      .withIndex("by_user", (q) => q.eq("userId", userId))
+      .unique();
+    if (approvedExternalUser) {
+      throw new Error("Los usuarios externos no pueden publicar o sincronizar con COR.");
+    }
+
     const task = await ctx.db.get(args.taskId);
     if (!task) throw new Error("Task no encontrada");
 
@@ -350,34 +366,11 @@ export const updateTaskFields = mutation({
       );
     }
 
-    // ─── Validación de permisos (clientUserAssignments) ───
-    if (task.corClientId) {
-      const client = await ctx.db
-        .query("corClients")
-        .filter((q) => q.eq(q.field("corClientId"), task.corClientId))
-        .first();
-
-      if (client) {
-        const user = await ctx.db
-          .query("users")
-          .filter((q) => q.eq(q.field("_id"), userId))
-          .first();
-
-        if (user) {
-          const assignment = await ctx.db
-            .query("clientUserAssignments")
-            .withIndex("by_client_and_user", (q) =>
-              q.eq("clientId", client._id).eq("userId", user._id)
-            )
-            .first();
-
-          if (!assignment) {
-            throw new Error(
-              `No tienes permisos para editar tasks del cliente "${task.corClientName || client.name}".`
-            );
-          }
-        }
-      }
+    // ─── Validación de permisos ───
+    if (!(await hasTaskAccess(ctx, task, userId))) {
+      throw new Error(
+        `No tienes permisos para editar tasks del cliente "${task.corClientName || "desconocido"}".`
+      );
     }
 
     // Filtrar campos undefined
@@ -576,6 +569,14 @@ export const getTaskAttachmentsPublic = query({
     taskId: v.id("tasks"),
   },
   handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) throw new Error("No autenticado");
+    if (await isExternalUser(ctx, userId)) return [];
+
+    const task = await ctx.db.get(args.taskId);
+    if (!task || task.convexStatus === "deleted") return [];
+    if (!(await hasTaskAccess(ctx, task, userId))) return [];
+
     const attachments = await ctx.db
       .query("taskAttachments")
       .withIndex("by_task", (q) => q.eq("taskId", args.taskId))
@@ -710,13 +711,16 @@ export const validateAndPrepareTask = internalQuery({
         localClientId = localClient._id;
 
         // autorización
-        const assignment = await ctx.db
+        const assignments = await ctx.db
           .query("clientUserAssignments")
           .withIndex("by_client_and_user", (q) =>
             q.eq("clientId", localClient._id).eq("userId", userId)
           )
-          .unique();
-        if (!assignment) {
+          .collect();
+        const hasFullAccess = assignments.some(
+          (assignment) => assignment.brandId === undefined
+        );
+        if (!hasFullAccess) {
           return { ok: false as const, error: `❌ No tienes autorización para crear briefs para este cliente. Contacta al administrador.` };
         }
       }
@@ -758,6 +762,95 @@ export const validateAndPrepareTask = internalQuery({
 });
 
 /**
+ * Validación consolidada para el agente externo.
+ * Verifica usuario externo aprobado, idempotencia del thread y permiso por marca.
+ */
+export const validateAndPrepareExternalTask = internalQuery({
+  args: {
+    threadId: v.string(),
+    clientBrandId: v.id("clientBrands"),
+  },
+  handler: async (ctx, args) => {
+    const chatThread = await ctx.db
+      .query("chatThreads")
+      .withIndex("by_thread", (q) => q.eq("threadId", args.threadId))
+      .first();
+    const userId = chatThread?.userId || null;
+
+    if (!userId) {
+      return { ok: false as const, error: "❌ No se pudo identificar al usuario de esta conversación." };
+    }
+
+    const approvedExternalUser = await ctx.db
+      .query("approvedExternalUsers")
+      .withIndex("by_user", (q) => q.eq("userId", userId))
+      .unique();
+
+    if (!approvedExternalUser) {
+      return { ok: false as const, error: "❌ Este flujo solo está disponible para usuarios externos aprobados." };
+    }
+
+    const existingTask = await ctx.db
+      .query("tasks")
+      .withIndex("by_thread", (q) => q.eq("threadId", args.threadId))
+      .first();
+
+    if (existingTask) {
+      return {
+        ok: false as const,
+        error: `Ya existe un requerimiento para esta conversación.\n\nID del requerimiento: ${existingTask._id}\nEstado: ${existingTask.status}\n\nSi necesitas crear un nuevo requerimiento, por favor inicia una nueva conversación.`,
+      };
+    }
+
+    const brand = await ctx.db.get(args.clientBrandId);
+    if (!brand) {
+      return { ok: false as const, error: "❌ La marca seleccionada no existe." };
+    }
+    if (!brand.clientId) {
+      return { ok: false as const, error: "❌ La marca no está vinculada a un cliente local. Contacta al administrador." };
+    }
+
+    const client = await ctx.db.get(brand.clientId);
+    if (!client) {
+      return { ok: false as const, error: "❌ El cliente asociado a esta marca no existe localmente." };
+    }
+
+    const assignments = await ctx.db
+      .query("clientUserAssignments")
+      .withIndex("by_client_and_user", (q) =>
+        q.eq("clientId", brand.clientId!).eq("userId", userId)
+      )
+      .collect();
+
+    const hasAccess = assignments.some(
+      (assignment) =>
+        assignment.brandId === undefined || assignment.brandId === args.clientBrandId
+    );
+
+    if (!hasAccess) {
+      return { ok: false as const, error: `❌ No tienes autorización para crear briefs para la marca "${brand.name}".` };
+    }
+
+    const existingProject = await ctx.db
+      .query("projects")
+      .withIndex("by_threadId", (q) => q.eq("threadId", args.threadId))
+      .unique();
+
+    return {
+      ok: true as const,
+      userId: String(userId),
+      localClientId: brand.clientId,
+      corClientId: brand.corClientId,
+      corClientName: client.name,
+      clientBrandId: brand._id,
+      corBrandId: brand.corBrandId,
+      brandName: brand.name,
+      existingProjectId: existingProject?._id || undefined,
+    };
+  },
+});
+
+/**
  * Crea proyecto + task atómicamente en una sola mutation.
  * Reemplaza createProjectInternal + createTaskInternal como calls separados.
  */
@@ -773,6 +866,10 @@ export const createProjectAndTask = internalMutation({
     projectCorClientId: v.optional(v.number()),
     projectClientId: v.optional(v.id("corClients")),
     projectCreatedBy: v.optional(v.string()),
+    projectSource: v.optional(v.union(v.literal("internal"), v.literal("external"))),
+    projectClientBrandId: v.optional(v.id("clientBrands")),
+    projectBrandId: v.optional(v.number()),
+    projectBrandName: v.optional(v.string()),
     // Task fields
     taskTitle: v.string(),
     taskDescription: v.optional(v.string()),
@@ -782,6 +879,10 @@ export const createProjectAndTask = internalMutation({
     taskCreatedBy: v.optional(v.string()),
     taskCorClientId: v.optional(v.number()),
     taskCorClientName: v.optional(v.string()),
+    taskSource: v.optional(v.union(v.literal("internal"), v.literal("external"))),
+    taskClientBrandId: v.optional(v.id("clientBrands")),
+    taskBrandId: v.optional(v.number()),
+    taskBrandName: v.optional(v.string()),
     // Shared
     threadId: v.string(),
     existingProjectId: v.optional(v.id("projects")),
@@ -805,6 +906,10 @@ export const createProjectAndTask = internalMutation({
         estimatedTime: args.projectEstimatedTime,
         createdBy: args.projectCreatedBy,
         threadId: args.threadId,
+        source: args.projectSource || "internal",
+        clientBrandId: args.projectClientBrandId,
+        brandId: args.projectBrandId,
+        brandName: args.projectBrandName,
         corClientId: args.projectCorClientId,
         clientId: args.projectClientId,
         corSyncStatus: "pending",
@@ -823,6 +928,10 @@ export const createProjectAndTask = internalMutation({
       convexStatus: "active",
       createdBy: args.taskCreatedBy,
       projectId: projectId as any,
+      source: args.taskSource || "internal",
+      clientBrandId: args.taskClientBrandId,
+      brandId: args.taskBrandId,
+      brandName: args.taskBrandName,
       corSyncStatus: "pending",
       corClientId: args.taskCorClientId,
       corClientName: args.taskCorClientName,
@@ -996,11 +1105,16 @@ export const getTaskByThread = query({
     threadId: v.string(),
   },
   handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) throw new Error("No autenticado");
+    if (await isExternalUser(ctx, userId)) return null;
+
     const task = await ctx.db
       .query("tasks")
       .withIndex("by_thread", (q) => q.eq("threadId", args.threadId))
       .first();
     if (task?.convexStatus === "deleted") return null;
+    if (task && !(await hasTaskAccess(ctx, task, userId))) return null;
     
     return task;
   },
@@ -1012,8 +1126,13 @@ export const getTask = query({
     taskId: v.id("tasks"),
   },
   handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) throw new Error("No autenticado");
+    if (await isExternalUser(ctx, userId)) return null;
+
     const task = await ctx.db.get(args.taskId);
     if (task?.convexStatus === "deleted") return null;
+    if (task && !(await hasTaskAccess(ctx, task, userId))) return null;
     return task;
   },
 });
@@ -1024,15 +1143,46 @@ export const listTasks = query({
     status: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    if (args.status) {
-      const tasks = await ctx.db
+    const userId = await getAuthUserId(ctx);
+    if (!userId) throw new Error("No autenticado");
+    if (await isExternalUser(ctx, userId)) return [];
+
+    const tasksById = new Map<string, any>();
+
+    const ownTasks = await ctx.db
+      .query("tasks")
+      .withIndex("by_createdBy", (q) => q.eq("createdBy", String(userId)))
+      .collect();
+    for (const task of ownTasks) tasksById.set(task._id, task);
+
+    const assignments = await ctx.db
+      .query("clientUserAssignments")
+      .withIndex("by_user", (q) => q.eq("userId", userId))
+      .collect();
+
+    for (const assignment of assignments) {
+      if (assignment.brandId) {
+        const brandTasks = await ctx.db
+          .query("tasks")
+          .withIndex("by_clientBrandId", (q) => q.eq("clientBrandId", assignment.brandId))
+          .collect();
+        for (const task of brandTasks) tasksById.set(task._id, task);
+        continue;
+      }
+
+      const client = await ctx.db.get(assignment.clientId);
+      if (!client) continue;
+      const clientTasks = await ctx.db
         .query("tasks")
-        .withIndex("by_status", (q) => q.eq("status", args.status!))
+        .withIndex("by_corClientId", (q) => q.eq("corClientId", client.corClientId))
         .collect();
-      return tasks.filter((t) => t.convexStatus !== "deleted");
+      for (const task of clientTasks) tasksById.set(task._id, task);
     }
-    const allTasks = await ctx.db.query("tasks").collect();
-    return allTasks.filter((t) => t.convexStatus !== "deleted");
+
+    return Array.from(tasksById.values())
+      .filter((t) => t.convexStatus !== "deleted")
+      .filter((t) => !args.status || t.status === args.status)
+      .sort((a, b) => b._creationTime - a._creationTime);
   },
 });
 
@@ -1042,11 +1192,20 @@ export const listByThread = query({
     threadId: v.string(),
   },
   handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) throw new Error("No autenticado");
+    if (await isExternalUser(ctx, userId)) return [];
+
     const tasks = await ctx.db
       .query("tasks")
       .withIndex("by_thread", (q) => q.eq("threadId", args.threadId))
       .collect();
-    return tasks.filter((t) => t.convexStatus !== "deleted");
+    const visibleTasks = [];
+    for (const task of tasks) {
+      if (task.convexStatus === "deleted") continue;
+      if (await hasTaskAccess(ctx, task, userId)) visibleTasks.push(task);
+    }
+    return visibleTasks;
   },
 });
 
@@ -1069,16 +1228,54 @@ export const listMyTasks = query({
       return [];
     }
 
+    const approvedExternalUser = await ctx.db
+      .query("approvedExternalUsers")
+      .withIndex("by_user", (q) => q.eq("userId", userId))
+      .unique();
+
+    if (approvedExternalUser) return [];
+
     const userIdStr = String(userId);
-    
-    // Buscar tasks creadas por este usuario
-    let tasks = await ctx.db
+    const tasksById = new Map<string, any>();
+
+    const ownTasks = await ctx.db
       .query("tasks")
       .withIndex("by_createdBy", (q) => q.eq("createdBy", userIdStr))
       .order("desc")
       .collect();
 
-    tasks = tasks.filter((t) => t.convexStatus !== "deleted");
+    for (const task of ownTasks) {
+      tasksById.set(task._id, task);
+    }
+
+    const assignments = await ctx.db
+      .query("clientUserAssignments")
+      .withIndex("by_user", (q) => q.eq("userId", userId))
+      .collect();
+
+    for (const assignment of assignments) {
+      if (assignment.brandId) {
+        const brandTasks = await ctx.db
+          .query("tasks")
+          .withIndex("by_clientBrandId", (q) => q.eq("clientBrandId", assignment.brandId))
+          .collect();
+        for (const task of brandTasks) tasksById.set(task._id, task);
+        continue;
+      }
+
+      const client = await ctx.db.get(assignment.clientId);
+      if (!client) continue;
+
+      const clientTasks = await ctx.db
+        .query("tasks")
+        .withIndex("by_corClientId", (q) => q.eq("corClientId", client.corClientId))
+        .collect();
+      for (const task of clientTasks) tasksById.set(task._id, task);
+    }
+
+    let tasks = Array.from(tasksById.values())
+      .filter((t) => t.convexStatus !== "deleted")
+      .sort((a, b) => b._creationTime - a._creationTime);
     
     // Filtrar por status si se proporcionó
     if (args.status) {
@@ -1130,6 +1327,46 @@ export const softDeleteTask = mutation({
  *   status        →  status
  */
 const COR_SYNCABLE_FIELDS = new Set(["title", "description", "deadline", "priority", "status", "strategicPriority"]);
+
+async function hasFullClientAccess(ctx: any, clientId: any, userId: any) {
+  const assignments = await ctx.db
+    .query("clientUserAssignments")
+    .withIndex("by_client_and_user", (q: any) =>
+      q.eq("clientId", clientId).eq("userId", userId)
+    )
+    .collect();
+
+  return assignments.some((assignment: any) => assignment.brandId === undefined);
+}
+
+async function hasTaskAccess(ctx: any, task: any, userId: any) {
+  if (task.clientBrandId) {
+    const brand = await ctx.db.get(task.clientBrandId);
+    if (!brand?.clientId) return false;
+    const assignments = await ctx.db
+      .query("clientUserAssignments")
+      .withIndex("by_client_and_user", (q: any) =>
+        q.eq("clientId", brand.clientId).eq("userId", userId)
+      )
+      .collect();
+
+    return assignments.some(
+      (assignment: any) =>
+        assignment.brandId === undefined || assignment.brandId === task.clientBrandId
+    );
+  }
+
+  if (task.corClientId) {
+    const client = await ctx.db
+      .query("corClients")
+      .withIndex("by_corClientId", (q: any) => q.eq("corClientId", task.corClientId))
+      .unique();
+    if (!client) return false;
+    return await hasFullClientAccess(ctx, client._id, userId);
+  }
+
+  return task.createdBy === String(userId);
+}
 
 /**
  * Mutation interna: programa la sincronización de ediciones locales hacia COR.
@@ -1439,30 +1676,22 @@ export const retryTaskSync = mutation({
     const userId = await getAuthUserId(ctx);
     if (!userId) throw new Error("No autenticado");
 
+    const approvedExternalUser = await ctx.db
+      .query("approvedExternalUsers")
+      .withIndex("by_user", (q) => q.eq("userId", userId))
+      .unique();
+    if (approvedExternalUser) {
+      throw new Error("Los usuarios externos no pueden publicar o sincronizar con COR.");
+    }
+
     const task = await ctx.db.get(args.taskId);
     if (!task) throw new Error("Task no encontrada");
 
     // Verificar permisos (clientUserAssignments)
-    if (task.corClientId) {
-      const client = await ctx.db
-        .query("corClients")
-        .filter((q) => q.eq(q.field("corClientId"), task.corClientId))
-        .first();
-
-      if (client) {
-        const assignment = await ctx.db
-          .query("clientUserAssignments")
-          .withIndex("by_client_and_user", (q) =>
-            q.eq("clientId", client._id).eq("userId", userId)
-          )
-          .first();
-
-        if (!assignment) {
-          throw new Error(
-            `No tienes permisos para reintentar la sincronización de tasks del cliente "${task.corClientName || client.name}".`
-          );
-        }
-      }
+    if (!(await hasTaskAccess(ctx, task, userId))) {
+      throw new Error(
+        "No tienes permisos para reintentar la sincronización de esta task."
+      );
     }
 
     // Solo permitir retry si está en error o retrying
@@ -1594,6 +1823,14 @@ export const startPublishTaskToExternal = mutation({
       throw new Error("No autenticado");
     }
 
+    const approvedExternalUser = await ctx.db
+      .query("approvedExternalUsers")
+      .withIndex("by_user", (q) => q.eq("userId", userId))
+      .unique();
+    if (approvedExternalUser) {
+      throw new Error("Los usuarios externos no pueden publicar en COR.");
+    }
+
     // Obtener la task
     const task = await ctx.db.get(args.taskId);
     if (!task) {
@@ -1637,16 +1874,10 @@ export const startPublishTaskToExternal = mutation({
       throw new Error("No se puede publicar: usuario no encontrado en el sistema.");
     }
 
-    // Verificar que el usuario tiene autorización para este cliente
-    const assignment = await ctx.db
-      .query("clientUserAssignments")
-      .withIndex("by_client_and_user", (q) =>
-        q.eq("clientId", localClient._id).eq("userId", userId)
-      )
-      .unique();
-
-    if (!assignment) {
-      throw new Error(`No tienes autorización para crear tareas para el cliente "${localClient.name}". Contacta al administrador.`);
+    // Verificar que el usuario tiene autorización para esta task.
+    // Si la task tiene marca, alcanza con permiso a esa marca; si no, exige permiso completo al cliente.
+    if (!(await hasTaskAccess(ctx, task, userId))) {
+      throw new Error(`No tienes autorización para publicar esta tarea. Contacta al administrador.`);
     }
 
     // Poner estado "syncing" — la UI lo verá inmediatamente

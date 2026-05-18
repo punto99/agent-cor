@@ -38,6 +38,55 @@ function parseCORTaskId(raw: unknown): number | null {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
+async function isExternalUser(ctx: any, userId: any) {
+  const approvedExternalUser = await ctx.db
+    .query("approvedExternalUsers")
+    .withIndex("by_user", (q: any) => q.eq("userId", userId))
+    .unique();
+  return Boolean(approvedExternalUser);
+}
+
+async function hasFullClientAccess(ctx: any, clientId: any, userId: any) {
+  const assignments = await ctx.db
+    .query("clientUserAssignments")
+    .withIndex("by_client_and_user", (q: any) =>
+      q.eq("clientId", clientId).eq("userId", userId)
+    )
+    .collect();
+
+  return assignments.some((assignment: any) => assignment.brandId === undefined);
+}
+
+async function hasTaskAccess(ctx: any, task: any, userId: any) {
+  if (task.clientBrandId) {
+    const brand = await ctx.db.get(task.clientBrandId);
+    if (!brand?.clientId) return false;
+
+    const assignments = await ctx.db
+      .query("clientUserAssignments")
+      .withIndex("by_client_and_user", (q: any) =>
+        q.eq("clientId", brand.clientId).eq("userId", userId)
+      )
+      .collect();
+
+    return assignments.some(
+      (assignment: any) =>
+        assignment.brandId === undefined || assignment.brandId === task.clientBrandId
+    );
+  }
+
+  if (task.corClientId) {
+    const client = await ctx.db
+      .query("corClients")
+      .withIndex("by_corClientId", (q: any) => q.eq("corClientId", task.corClientId))
+      .unique();
+    if (!client) return false;
+    return await hasFullClientAccess(ctx, client._id, userId);
+  }
+
+  return task.createdBy === String(userId);
+}
+
 async function syncTaskAttachmentsFromCOR(
   ctx: any,
   taskId: Id<"tasks">,
@@ -147,6 +196,9 @@ export const startPullFromCOR = mutation({
     // 1. Auth
     const userId = await getAuthUserId(ctx);
     if (!userId) throw new Error("No autenticado");
+    if (await isExternalUser(ctx, userId)) {
+      throw new Error("Los usuarios externos no pueden actualizar tasks desde COR.");
+    }
 
     // 2. Leer task
     const task = await ctx.db.get(args.taskId);
@@ -163,26 +215,10 @@ export const startPullFromCOR = mutation({
     }
 
     // 4. Verificar permisos (clientUserAssignments)
-    if (task.corClientId) {
-      const client = await ctx.db
-        .query("corClients")
-        .filter((q) => q.eq(q.field("corClientId"), task.corClientId))
-        .first();
-
-      if (client) {
-        const assignment = await ctx.db
-          .query("clientUserAssignments")
-          .withIndex("by_client_and_user", (q) =>
-            q.eq("clientId", client._id).eq("userId", userId)
-          )
-          .first();
-
-        if (!assignment) {
-          throw new Error(
-            `No tienes permisos para actualizar tasks del cliente "${task.corClientName || client.name}".`
-          );
-        }
-      }
+    if (!(await hasTaskAccess(ctx, task, userId))) {
+      throw new Error(
+        `No tienes permisos para actualizar esta task desde COR.`
+      );
     }
 
     // 5. Programar la action (no bloquea UI)

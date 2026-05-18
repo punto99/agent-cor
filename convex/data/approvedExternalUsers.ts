@@ -35,6 +35,16 @@ export const isApprovedExternalEmail = internalQuery({
   },
 });
 
+export const getApprovedExternalUserByUserId = internalQuery({
+  args: { userId: v.id("users") },
+  handler: async (ctx, args) => {
+    return await ctx.db
+      .query("approvedExternalUsers")
+      .withIndex("by_user", (q) => q.eq("userId", args.userId))
+      .unique();
+  },
+});
+
 export const linkApprovedExternalUser = internalMutation({
   args: {
     email: v.string(),

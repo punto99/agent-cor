@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useRef, useEffect } from "react";
-import { useMutation, useQuery, useAction } from "convex/react";
+import { useMutation, useAction } from "convex/react";
 import { useUIMessages } from "@convex-dev/agent/react";
 import { api } from "@/convex/_generated/api";
 import mammoth from "mammoth";
@@ -137,9 +137,6 @@ export default function ChatInterface({
   const sendMessage = useMutation(api.messaging.chat.sendMessage);
   const generateUploadUrl = useMutation(api.data.files.generateUploadUrl);
   const registerUploadedFile = useAction(api.data.files.registerUploadedFile);
-  const latestThreadId = useQuery(api.messaging.chat.getLatestThread, {
-    userId: undefined,
-  });
 
   const { results: uiMessages, status: streamStatus } = useUIMessages(
     api.messaging.chat.listThreadMessages,
@@ -158,14 +155,6 @@ export default function ChatInterface({
       setCurrentThreadId(initialThreadId);
     }
   }, [initialThreadId]);
-
-  // Cargar el último thread (solo si no hay threadId inicial)
-  useEffect(() => {
-    if (!initialThreadId && latestThreadId && !currentThreadId) {
-      setCurrentThreadId(latestThreadId);
-      onThreadChange?.(latestThreadId);
-    }
-  }, [latestThreadId, currentThreadId, onThreadChange, initialThreadId]);
 
   // Notificar cambios de thread
   useEffect(() => {

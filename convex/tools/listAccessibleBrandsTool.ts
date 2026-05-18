@@ -1,0 +1,40 @@
+import { createTool } from "@convex-dev/agent";
+import { z } from "zod";
+import { internal } from "../_generated/api";
+
+export const listAccessibleBrandsTool = createTool({
+  description: `Lista las marcas/boards a las que el usuario externo tiene acceso.
+  Usar al inicio de la conversación o cuando el usuario pregunte con qué marcas puede trabajar.`,
+  args: z.object({}),
+  handler: async (ctx): Promise<string> => {
+    const threadId = ctx.threadId;
+    if (!threadId) {
+      return "No se pudo identificar la conversación.";
+    }
+
+    const profile = await ctx.runQuery(internal.data.userAccess.getAccessProfileByThread, {
+      threadId,
+    });
+
+    if (!profile || profile.kind !== "external") {
+      return "Esta herramienta solo está disponible para usuarios externos aprobados.";
+    }
+
+    const brands = await ctx.runQuery(internal.data.permissions.listAccessibleBrands, {
+      userId: profile.userId as any,
+    });
+
+    if (brands.length === 0) {
+      return "No tienes marcas asignadas todavía. Contacta al equipo para que te habiliten el acceso.";
+    }
+
+    const formatted = brands
+      .map(
+        (brand: any, index: number) =>
+          `${index + 1}. ${brand.name} (clientBrandId: ${brand._id}, corBrandId: ${brand.corBrandId}, corClientId: ${brand.corClientId})`,
+      )
+      .join("\n");
+
+    return `Marcas disponibles para este usuario:\n${formatted}`;
+  },
+});

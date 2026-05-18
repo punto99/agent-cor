@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from "react";
 import { useQuery, usePaginatedQuery } from "convex/react";
+import { useRouter } from "next/navigation";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import { TaskCard } from "../../components/control-panel/TaskCard";
@@ -43,6 +44,7 @@ interface FullTask {
 }
 
 export default function ControlPanelPage() {
+  const router = useRouter();
   const [statusFilter, setStatusFilter] = useState<string | undefined>(
     undefined,
   );
@@ -58,6 +60,14 @@ export default function ControlPanelPage() {
     const timer = setTimeout(() => setToast(null), 5000);
     return () => clearTimeout(timer);
   }, [toast]);
+
+  const accessProfile = useQuery(api.data.userAccess.viewerAccessProfile);
+
+  useEffect(() => {
+    if (accessProfile?.kind === "external") {
+      router.replace("/workspace");
+    }
+  }, [accessProfile?.kind, router]);
 
   const handlePublishResult = (result: {
     success: boolean;
@@ -100,7 +110,11 @@ export default function ControlPanelPage() {
   };
 
   // Loading state
-  if (threadsStatus === "LoadingFirstPage") {
+  if (threadsStatus === "LoadingFirstPage" || accessProfile === undefined) {
+    return <LoadingScreen />;
+  }
+
+  if (accessProfile.kind === "external") {
     return <LoadingScreen />;
   }
 

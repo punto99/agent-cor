@@ -6,31 +6,23 @@ import { mutation, query } from "../_generated/server";
 import { components, internal } from "../_generated/api";
 import { saveMessage, listUIMessages, getFile, syncStreams, vStreamArgs } from "@convex-dev/agent";
 import { paginationOptsValidator } from "convex/server";
+import { getAuthUserId } from "@convex-dev/auth/server";
 
 // NOTA: La creación de threads ahora se hace a través de convex/threads.ts
 // que usa autenticación y crea correctamente el thread del Agent + chatThreads
 
 // Obtener el último thread de CHAT del usuario (no incluye threads de evaluación)
 export const getLatestThread = query({
-  args: {
-    userId: v.optional(v.id("users")),
-  },
+  args: {},
   handler: async (ctx, args) => {
-    // Buscar en nuestra tabla chatThreads (excluye evaluaciones automáticamente)
-    let chatThread;
-    
-    if (args.userId) {
-      chatThread = await ctx.db
-        .query("chatThreads")
-        .withIndex("by_user", (q) => q.eq("userId", args.userId!))
-        .order("desc")
-        .first();
-    } else {
-      chatThread = await ctx.db
-        .query("chatThreads")
-        .order("desc")
-        .first();
-    }
+    const userId = await getAuthUserId(ctx);
+    if (userId === null) return null;
+
+    const chatThread = await ctx.db
+      .query("chatThreads")
+      .withIndex("by_user", (q) => q.eq("userId", userId))
+      .order("desc")
+      .first();
     
     if (chatThread) {
       return chatThread.threadId;
@@ -49,6 +41,20 @@ export const sendMessage = mutation({
     fileIds: v.optional(v.array(v.string())), // Nuevo: múltiples archivos
   },
   handler: async (ctx, { threadId, prompt, fileId, fileIds }) => {
+    const userId = await getAuthUserId(ctx);
+    if (userId === null) {
+      throw new Error("Not authenticated");
+    }
+
+    const chatThread = await ctx.db
+      .query("chatThreads")
+      .withIndex("by_thread", (q) => q.eq("threadId", threadId))
+      .first();
+
+    if (!chatThread || chatThread.userId !== userId) {
+      throw new Error("Thread not found or access denied");
+    }
+
     console.log(`[Chat] 📤 Guardando mensaje en thread ${threadId}`);
     
     // Crear contenido del mensaje
@@ -153,6 +159,30 @@ export const listThreadMessages = query({
     streamArgs: vStreamArgs,
   },
   handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (userId === null) {
+      return {
+        page: [],
+        isDone: true,
+        continueCursor: "",
+        streams: undefined,
+      };
+    }
+
+    const chatThread = await ctx.db
+      .query("chatThreads")
+      .withIndex("by_thread", (q) => q.eq("threadId", args.threadId))
+      .first();
+
+    if (!chatThread || chatThread.userId !== userId) {
+      return {
+        page: [],
+        isDone: true,
+        continueCursor: "",
+        streams: undefined,
+      };
+    }
+
     // Obtener mensajes regulares (no-streaming)
     const paginated = await listUIMessages(ctx, components.agent, args);
 
@@ -165,24 +195,16 @@ export const listThreadMessages = query({
 
 // Listar todos los threads de chat del usuario (para historial)
 export const listChatThreads = query({
-  args: {
-    userId: v.optional(v.id("users")),
-  },
+  args: {},
   handler: async (ctx, args) => {
-    let threads;
-    
-    if (args.userId) {
-      threads = await ctx.db
-        .query("chatThreads")
-        .withIndex("by_user", (q) => q.eq("userId", args.userId!))
-        .order("desc")
-        .collect();
-    } else {
-      threads = await ctx.db
-        .query("chatThreads")
-        .order("desc")
-        .collect();
-    }
+    const userId = await getAuthUserId(ctx);
+    if (userId === null) return [];
+
+    const threads = await ctx.db
+      .query("chatThreads")
+      .withIndex("by_user", (q) => q.eq("userId", userId))
+      .order("desc")
+      .collect();
     
     return threads;
   },
@@ -194,10 +216,17 @@ export const getChatThreadInfo = query({
     threadId: v.string(),
   },
   handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (userId === null) return null;
+
     const chatThread = await ctx.db
       .query("chatThreads")
       .withIndex("by_thread", (q) => q.eq("threadId", args.threadId))
       .first();
+
+    if (!chatThread || chatThread.userId !== userId) {
+      return null;
+    }
     
     return chatThread;
   },

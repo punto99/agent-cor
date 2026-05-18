@@ -73,6 +73,10 @@ export default defineSchema({
     threadId: v.string(),
     createdBy: v.optional(v.string()),
     projectId: v.optional(v.id("projects")),   // Referencia al proyecto LOCAL en Convex
+    source: v.optional(v.union(v.literal("internal"), v.literal("external"))),
+    clientBrandId: v.optional(v.id("clientBrands")),
+    brandId: v.optional(v.number()),            // Marca en COR (brand_id)
+    brandName: v.optional(v.string()),
     // === Campos de sincronización con herramienta externa (COR, Trello, etc.) ===
     corTaskId: v.optional(v.string()),
     corProjectId: v.optional(v.number()),
@@ -93,6 +97,9 @@ export default defineSchema({
     .index("by_status", ["status"])
     .index("by_createdBy", ["createdBy"])
     .index("by_projectId", ["projectId"])
+    .index("by_source", ["source"])
+    .index("by_clientBrandId", ["clientBrandId"])
+    .index("by_corClientId", ["corClientId"])
     .index("by_corTaskId", ["corTaskId"])
     .index("by_corSyncStatus", ["corSyncStatus"]),
 
@@ -274,12 +281,16 @@ export default defineSchema({
   clientUserAssignments: defineTable({
     clientId: v.id("corClients"),           // Referencia al cliente local
     userId: v.id("users"),                  // Referencia al usuario local
+    brandId: v.optional(v.id("clientBrands")), // undefined = acceso a todo el cliente
     assignedAt: v.number(),
     assignedBy: v.optional(v.id("users")),  // Quién lo asignó (admin/PM)
   })
     .index("by_client", ["clientId"])
     .index("by_user", ["userId"])
-    .index("by_client_and_user", ["clientId", "userId"]),
+    .index("by_brand", ["brandId"])
+    .index("by_client_and_user", ["clientId", "userId"])
+    .index("by_client_user_brand", ["clientId", "userId", "brandId"])
+    .index("by_user_and_brand", ["userId", "brandId"]),
 
   // =====================================================
   // Projects — Proyectos locales (Client → Project → Task)
@@ -303,6 +314,9 @@ export default defineSchema({
     clientId: v.optional(v.id("corClients")),  // Referencia al cliente LOCAL
     createdBy: v.optional(v.string()),         // Id<"users"> como string
     threadId: v.optional(v.string()),          // Thread que originó este proyecto
+    source: v.optional(v.union(v.literal("internal"), v.literal("external"))),
+    clientBrandId: v.optional(v.id("clientBrands")),
+    brandName: v.optional(v.string()),
     // === Campos de sincronización con COR ===
     corProjectId: v.optional(v.number()),
     corClientId: v.optional(v.number()),       // Denormalized para fast publish
@@ -313,6 +327,9 @@ export default defineSchema({
     corMissingInCOR: v.optional(v.boolean()),
   })
     .index("by_clientId", ["clientId"])
+    .index("by_source", ["source"])
+    .index("by_clientBrandId", ["clientBrandId"])
+    .index("by_corClientId", ["corClientId"])
     .index("by_corProjectId", ["corProjectId"])
     .index("by_createdBy", ["createdBy"])
     .index("by_threadId", ["threadId"])

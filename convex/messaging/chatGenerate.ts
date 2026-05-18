@@ -8,6 +8,7 @@
 import { v } from "convex/values";
 import { internalAction } from "../_generated/server";
 import { briefAgent } from "../agents/agent";
+import { externalBriefAgent } from "../agents/externalBriefAgent";
 import { orchestratorAgent } from "../agents/orchestratorAgent";
 import { documentSearchAgent } from "../agents/documentSearchAgent";
 import { components, internal } from "../_generated/api";
@@ -96,17 +97,26 @@ export const generateResponseAsync = internalAction({
     // =====================================================
     // PASO 1: Determinar agentes habilitados y seleccionar
     // =====================================================
+    const accessProfile = await ctx.runQuery(internal.data.userAccess.getAccessProfileByThread, {
+      threadId,
+    });
+    const isExternalUser = accessProfile?.kind === "external";
+
     const enabledSpecialized = {
       brief: enabledAgents.brief,
       documentSearch: enabledAgents.documentSearch,
     };
     const enabledCount = Object.values(enabledSpecialized).filter(Boolean).length;
 
-    let selectedAgentKey: "brief" | "documentSearch" | "orchestrator" = "brief"; // default
+    let selectedAgentKey: "brief" | "documentSearch" | "orchestrator" | "externalBrief" = "brief"; // default
     let orchestratorIntent: string | null = null;
 
+    if (isExternalUser) {
+      selectedAgentKey = "externalBrief";
+      console.log("[GenerateResponse] Usuario externo detectado, usando externalBriefAgent");
+    }
     // Short-circuit — si solo 1 agente habilitado, usarlo directamente
-    if (enabledCount <= 1) {
+    else if (enabledCount <= 1) {
       if (enabledSpecialized.documentSearch && !enabledSpecialized.brief) {
         selectedAgentKey = "documentSearch";
       } else {
@@ -253,6 +263,7 @@ export const generateResponseAsync = internalAction({
     // Seleccionar el agente concreto
     const agentMap = {
       brief: { agent: briefAgent, name: "briefAgent" },
+      externalBrief: { agent: externalBriefAgent, name: "externalBriefAgent" },
       documentSearch: { agent: documentSearchAgent, name: "documentSearchAgent" },
       orchestrator: { agent: orchestratorAgent, name: "orchestratorAgent" },
     };

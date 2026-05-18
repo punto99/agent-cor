@@ -9,3 +9,6 @@ export { attachFileToTaskTool } from "./attachFileToTaskTool";
 export { getProjectTool } from "./getProjectTool";
 export { editProjectTool } from "./editProjectTool";
 export { validateUserForClientTool } from "./validateUserForClientTool";
+export { listAccessibleBrandsTool } from "./listAccessibleBrandsTool";
+export { validateExternalUserForBrandTool } from "./validateExternalUserForBrandTool";
+export { createExternalTaskTool } from "./createExternalTaskTool";

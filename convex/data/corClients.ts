@@ -49,9 +49,13 @@ export const listMyClients = query({
 
     if (assignments.length === 0) return [];
 
+    const uniqueClientIds = Array.from(
+      new Set(assignments.map((assignment) => assignment.clientId))
+    );
+
     // Obtener los clientes asociados
     const clients = await Promise.all(
-      assignments.map((a) => ctx.db.get(a.clientId))
+      uniqueClientIds.map((clientId) => ctx.db.get(clientId))
     );
 
     // Filtrar nulls (por si algún cliente fue eliminado)
@@ -88,9 +92,32 @@ export const isUserAuthorizedForClient = internalQuery({
       .withIndex("by_client_and_user", (q) =>
         q.eq("clientId", args.clientId).eq("userId", args.userId)
       )
-      .unique();
+      .collect();
 
-    return assignment !== null;
+    return assignment.some((a) => a.brandId === undefined);
+  },
+});
+
+export const isUserAuthorizedForBrand = internalQuery({
+  args: {
+    brandId: v.id("clientBrands"),
+    userId: v.id("users"),
+  },
+  handler: async (ctx, args) => {
+    const brand = await ctx.db.get(args.brandId);
+    if (!brand?.clientId) return false;
+
+    const assignments = await ctx.db
+      .query("clientUserAssignments")
+      .withIndex("by_client_and_user", (q) =>
+        q.eq("clientId", brand.clientId!).eq("userId", args.userId)
+      )
+      .collect();
+
+    return assignments.some(
+      (assignment) =>
+        assignment.brandId === undefined || assignment.brandId === args.brandId
+    );
   },
 });
 
@@ -167,12 +194,15 @@ export const assignUserToClient = mutation({
     if (!client) throw new Error("Cliente no encontrado");
 
     // Verificar que no exista ya la asignación (idempotencia)
-    const existing = await ctx.db
+    const existingAssignments = await ctx.db
       .query("clientUserAssignments")
       .withIndex("by_client_and_user", (q) =>
         q.eq("clientId", args.clientId).eq("userId", args.targetUserId)
       )
-      .unique();
+      .collect();
+    const existing = existingAssignments.find(
+      (assignment) => assignment.brandId === undefined
+    );
 
     if (existing) {
       console.log(`[corClients] ℹ️ Asignación ya existe: usuario ${args.targetUserId} → cliente ${client.name}`);
@@ -192,6 +222,47 @@ export const assignUserToClient = mutation({
 });
 
 /**
+ * Asigna un usuario a una marca específica de un cliente.
+ * Una asignación sin brandId para el mismo cliente sigue significando acceso total.
+ */
+export const assignUserToClientBrand = mutation({
+  args: {
+    brandId: v.id("clientBrands"),
+    targetUserId: v.id("users"),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) throw new Error("No autenticado");
+
+    const brand = await ctx.db.get(args.brandId);
+    if (!brand) throw new Error("Marca no encontrada");
+    if (!brand.clientId) {
+      throw new Error("La marca no está vinculada a un cliente local.");
+    }
+
+    const existing = await ctx.db
+      .query("clientUserAssignments")
+      .withIndex("by_client_user_brand", (q) =>
+        q
+          .eq("clientId", brand.clientId!)
+          .eq("userId", args.targetUserId)
+          .eq("brandId", args.brandId)
+      )
+      .first();
+
+    if (existing) return existing._id;
+
+    return await ctx.db.insert("clientUserAssignments", {
+      clientId: brand.clientId,
+      userId: args.targetUserId,
+      brandId: args.brandId,
+      assignedAt: Date.now(),
+      assignedBy: userId,
+    });
+  },
+});
+
+/**
  * Remueve la asignación de un usuario a un cliente.
  */
 export const removeUserFromClient = mutation({
@@ -203,12 +274,15 @@ export const removeUserFromClient = mutation({
     const userId = await getAuthUserId(ctx);
     if (!userId) throw new Error("No autenticado");
 
-    const assignment = await ctx.db
+    const assignments = await ctx.db
       .query("clientUserAssignments")
       .withIndex("by_client_and_user", (q) =>
         q.eq("clientId", args.clientId).eq("userId", args.targetUserId)
       )
-      .unique();
+      .collect();
+    const assignment = assignments.find(
+      (candidate) => candidate.brandId === undefined
+    );
 
     if (!assignment) {
       console.log(`[corClients] ℹ️ No existe asignación para remover`);
@@ -219,5 +293,4 @@ export const removeUserFromClient = mutation({
     console.log(`[corClients] ✅ Asignación removida: usuario ${args.targetUserId} de cliente ${args.clientId}`);
   },
 });
-
 

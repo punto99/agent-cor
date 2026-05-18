@@ -2,6 +2,8 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { useQuery } from "convex/react";
+import { api } from "@/convex/_generated/api";
 import { MessageSquare, LayoutDashboard } from "lucide-react";
 
 /**
@@ -10,6 +12,8 @@ import { MessageSquare, LayoutDashboard } from "lucide-react";
  */
 export function TopNavigation() {
   const pathname = usePathname();
+  const accessProfile = useQuery(api.data.userAccess.viewerAccessProfile);
+  const isExternalUser = accessProfile?.kind === "external";
 
   const tabs = [
     {
@@ -24,7 +28,7 @@ export function TopNavigation() {
       icon: LayoutDashboard,
       isActive: pathname === "/workspace/control-panel",
     },
-  ];
+  ].filter((tab) => !(isExternalUser && tab.href === "/workspace/control-panel"));
 
   return (
     <nav className="border-b border-border bg-card flex-shrink-0">
