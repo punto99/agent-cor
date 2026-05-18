@@ -19,6 +19,7 @@ import type * as crons from "../crons.js";
 import type * as data_approvedExternalUsers from "../data/approvedExternalUsers.js";
 import type * as data_backfill from "../data/backfill.js";
 import type * as data_clientAssignmentsDashboard from "../data/clientAssignmentsDashboard.js";
+import type * as data_clientBrands from "../data/clientBrands.js";
 import type * as data_corClientRelatedUsersDashboard from "../data/corClientRelatedUsersDashboard.js";
 import type * as data_corClients from "../data/corClients.js";
 import type * as data_corInboundSync from "../data/corInboundSync.js";
@@ -84,6 +85,7 @@ declare const fullApi: ApiFromModules<{
   "data/approvedExternalUsers": typeof data_approvedExternalUsers;
   "data/backfill": typeof data_backfill;
   "data/clientAssignmentsDashboard": typeof data_clientAssignmentsDashboard;
+  "data/clientBrands": typeof data_clientBrands;
   "data/corClientRelatedUsersDashboard": typeof data_corClientRelatedUsersDashboard;
   "data/corClients": typeof data_corClients;
   "data/corInboundSync": typeof data_corInboundSync;

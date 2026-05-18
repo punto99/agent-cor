@@ -13,6 +13,7 @@ import type {
   ProjectManagementProvider,
   ExternalUser,
   ExternalClient,
+  ExternalBrand,
   ExternalProject,
   ExternalTask,
   ExternalTaskAttachment,
@@ -120,6 +121,11 @@ export function createNoopProvider(): ProjectManagementProvider {
 
     async listAllClients(): Promise<ExternalClient[]> {
       console.log("[Noop Provider] listAllClients — no hay integración externa configurada");
+      return [];
+    },
+
+    async listAllBrands(): Promise<ExternalBrand[]> {
+      console.log("[Noop Provider] listAllBrands — no hay integración externa configurada");
       return [];
     },
   };

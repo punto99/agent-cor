@@ -252,6 +252,23 @@ export default defineSchema({
     .index("by_name", ["name"]),
 
   // =====================================================
+  // Client Brands — Marcas de COR asociadas a un cliente
+  // =====================================================
+  clientBrands: defineTable({
+    clientId: v.optional(v.id("corClients")),  // Referencia al cliente local, si existe
+    corClientId: v.number(),                   // ID del cliente en COR
+    corBrandId: v.number(),                    // ID de la marca en COR
+    name: v.string(),
+    syncedAt: v.number(),
+    trelloBoardId: v.optional(v.string()),     // Se llenará en la integración Trello
+    trelloBoardUrl: v.optional(v.string()),
+  })
+    .index("by_client", ["clientId"])
+    .index("by_corClientId", ["corClientId"])
+    .index("by_corBrandId", ["corBrandId"])
+    .index("by_corClientId_and_corBrandId", ["corClientId", "corBrandId"]),
+
+  // =====================================================
   // Client-User Assignments — Qué usuarios pueden usar qué clientes
   // =====================================================
   clientUserAssignments: defineTable({

@@ -15,6 +15,7 @@
 import { internalAction } from "../_generated/server";
 import { internal } from "../_generated/api";
 import { getProjectManagementProvider } from "../integrations/registry";
+import { v } from "convex/values";
 
 // ==================== 1. BACKFILL COR USERS ====================
 
@@ -285,6 +286,132 @@ export const backfillCorClients = internalAction({
       return { success: true, stats };
     } catch (error) {
       console.error("[Backfill] ❌ ERROR FATAL en backfillCorClients:", error);
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : String(error),
+        stats,
+      };
+    }
+  },
+});
+
+// ==================== 3. SYNC CLIENT BRANDS ====================
+
+/**
+ * Importa las marcas de COR asociadas a un cliente.
+ *
+ * COR no expone un endpoint directo de marcas por cliente, por eso:
+ *   1. Lista TODAS las marcas con GET /brands usando paginado.
+ *   2. Filtra localmente por client_id === corClientId.
+ *   3. Upsert en clientBrands.
+ *
+ * Ejecutar desde:
+ * Dashboard de Convex → Functions → data/backfill:syncClientBrandsFromCOR → Run
+ */
+export const syncClientBrandsFromCOR = internalAction({
+  args: {
+    corClientId: v.number(),
+  },
+  handler: async (ctx, args): Promise<any> => {
+    console.log("\n" + "=".repeat(60));
+    console.log("[ClientBrands] 🚀 INICIO: syncClientBrandsFromCOR");
+    console.log(`[ClientBrands] COR client_id: ${args.corClientId}`);
+    console.log("=".repeat(60));
+
+    const stats = {
+      totalCORBrands: 0,
+      matchedForClient: 0,
+      created: 0,
+      updated: 0,
+      errors: 0,
+      errorDetails: [] as string[],
+    };
+
+    try {
+      const provider = getProjectManagementProvider();
+
+      if (provider.name === "noop") {
+        console.log("[ClientBrands] ❌ Provider es noop — no se puede sincronizar marcas sin integración COR.");
+        return { success: false, error: "Provider es noop", stats };
+      }
+
+      const localClient: any = await ctx.runQuery(
+        internal.data.clientBrands.getLocalClientByCorId,
+        { corClientId: args.corClientId }
+      );
+
+      if (!localClient) {
+        console.log(
+          `[ClientBrands] ⚠️ No existe corClients para COR client_id ${args.corClientId}. Se guardarán las marcas sin clientId local.`
+        );
+      } else {
+        console.log(`[ClientBrands] Cliente local: ${localClient.name} (${localClient._id})`);
+      }
+
+      console.log("[ClientBrands] 📋 Obteniendo todas las marcas de COR...");
+      const allBrands = await provider.listAllBrands();
+      stats.totalCORBrands = allBrands.length;
+
+      const clientBrands = allBrands.filter(
+        (brand) => brand.clientId === args.corClientId
+      );
+      stats.matchedForClient = clientBrands.length;
+
+      console.log(
+        `[ClientBrands] ✅ ${clientBrands.length} marcas encontradas para cliente ${args.corClientId} de ${allBrands.length} marcas totales`
+      );
+
+      for (const brand of clientBrands) {
+        try {
+          const result = await ctx.runMutation(
+            internal.data.clientBrands.upsertClientBrand,
+            {
+              clientId: localClient?._id,
+              corClientId: args.corClientId,
+              corBrandId: brand.id,
+              name: brand.name,
+            }
+          );
+
+          if (result.created) {
+            stats.created++;
+            console.log(`[ClientBrands] ✅ CREADA: ${brand.name} (brand_id: ${brand.id})`);
+          } else {
+            stats.updated++;
+            console.log(`[ClientBrands] 🔄 ACTUALIZADA: ${brand.name} (brand_id: ${brand.id})`);
+          }
+        } catch (error) {
+          const errorMsg = `${brand.name} (brand_id: ${brand.id}): ${
+            error instanceof Error ? error.message : String(error)
+          }`;
+          stats.errors++;
+          stats.errorDetails.push(errorMsg);
+          console.error(`[ClientBrands] ❌ ERROR: ${errorMsg}`);
+        }
+      }
+
+      console.log("\n" + "=".repeat(60));
+      console.log("[ClientBrands] 📊 RESUMEN syncClientBrandsFromCOR:");
+      console.log(`  Marcas COR totales:      ${stats.totalCORBrands}`);
+      console.log(`  Marcas del cliente:      ${stats.matchedForClient}`);
+      console.log(`  Creadas:                 ${stats.created}`);
+      console.log(`  Actualizadas:            ${stats.updated}`);
+      console.log(`  Errores:                 ${stats.errors}`);
+      if (stats.errorDetails.length > 0) {
+        console.log("  Detalle errores:");
+        stats.errorDetails.forEach((e) => console.log(`    - ${e}`));
+      }
+      console.log("=".repeat(60) + "\n");
+
+      return {
+        success: true,
+        corClientId: args.corClientId,
+        localClientId: localClient?._id,
+        brands: clientBrands,
+        stats,
+      };
+    } catch (error) {
+      console.error("[ClientBrands] ❌ ERROR FATAL en syncClientBrandsFromCOR:", error);
       return {
         success: false,
         error: error instanceof Error ? error.message : String(error),

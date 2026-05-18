@@ -12,6 +12,7 @@ import type {
   ProjectManagementProvider,
   ExternalUser,
   ExternalClient,
+  ExternalBrand,
   ExternalProject,
   ExternalTask,
   ExternalTaskAttachment,
@@ -35,6 +36,14 @@ interface CORTokenResponse {
   token_type: string;
   expires_in: number;
   refresh_token?: string;
+}
+
+interface CORPaginatedResponse<T> {
+  total?: string | number;
+  perPage?: number;
+  page?: number;
+  lastPage?: number;
+  data?: T[];
 }
 
 export class CORNotFoundError extends Error {
@@ -909,6 +918,68 @@ export function createCORProvider(): ProjectManagementProvider {
         }));
       } catch (error) {
         console.error(`[COR Provider] ❌ Error en listAllClients:`, error);
+        return [];
+      }
+    },
+
+    // ==================== LIST ALL BRANDS ====================
+
+    async listAllBrands(): Promise<ExternalBrand[]> {
+      console.log("[COR Provider] 📋 Obteniendo TODAS las marcas de COR con paginado...");
+
+      const perPage = 100;
+      const maxPages = 500;
+      const allBrands: ExternalBrand[] = [];
+
+      try {
+        for (let page = 1; page <= maxPages; page++) {
+          const response = await corApiFetch(`/brands?page=${page}&perPage=${perPage}`);
+
+          if (!response.ok) {
+            const errorText = await response.text();
+            console.error(
+              `[COR Provider] ❌ Error listando marcas página ${page}: ${response.status} - ${errorText}`
+            );
+            break;
+          }
+
+          const result = (await response.json()) as
+            | CORPaginatedResponse<Record<string, unknown>>
+            | Record<string, unknown>[];
+          const rawBrands = Array.isArray(result) ? result : result.data || [];
+
+          const brands = rawBrands
+            .map((brand) => {
+              const id = Number(brand.id);
+              const clientId = Number(brand.client_id);
+              const name = String(brand.name || "").trim();
+
+              if (!Number.isFinite(id) || !Number.isFinite(clientId) || !name) {
+                return null;
+              }
+
+              return { id, name, clientId };
+            })
+            .filter((brand): brand is ExternalBrand => brand !== null);
+
+          allBrands.push(...brands);
+
+          const pagination = Array.isArray(result) ? null : result;
+          const lastPage = Number(pagination?.lastPage);
+          const currentPage = Number(pagination?.page || page);
+
+          console.log(
+            `[COR Provider] Página marcas ${currentPage}: ${brands.length} válidas (${allBrands.length} acumuladas)`
+          );
+
+          if (Number.isFinite(lastPage) && currentPage >= lastPage) break;
+          if (rawBrands.length < perPage) break;
+        }
+
+        console.log(`[COR Provider] ✅ Obtenidas ${allBrands.length} marcas de COR`);
+        return allBrands;
+      } catch (error) {
+        console.error("[COR Provider] ❌ Error en listAllBrands:", error);
         return [];
       }
     },

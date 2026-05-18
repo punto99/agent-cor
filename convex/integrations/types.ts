@@ -32,6 +32,13 @@ export interface ExternalClient {
   condition?: string;
 }
 
+/** Marca tal como existe en COR */
+export interface ExternalBrand {
+  id: number;
+  name: string;
+  clientId: number;
+}
+
 /** Proyecto tal como existe en el sistema externo */
 export interface ExternalProject {
   id: number;
@@ -245,6 +252,13 @@ export interface ProjectManagementProvider {
    * Usado para backfill masivo de corClients.
    */
   listAllClients(): Promise<ExternalClient[]>;
+
+  /**
+   * Listar TODAS las marcas del sistema externo.
+   * En COR: GET /brands con paginado.
+   * Usado para sincronizar marcas por cliente.
+   */
+  listAllBrands(): Promise<ExternalBrand[]>;
 
   /**
    * Listar attachments de una task en el sistema externo.
