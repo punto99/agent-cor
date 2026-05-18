@@ -277,18 +277,12 @@ export const getTaskByIdInternal = internalQuery({
     taskId: v.string(),
   },
   handler: async (ctx, args) => {
-    try {
-      // Buscar la task usando query en lugar de get para asegurar el tipo correcto
-      const tasks = await ctx.db
-        .query("tasks")
-        .filter((q) => q.eq(q.field("_id"), args.taskId))
-        .collect();
-      const task = tasks[0] || null;
-      if (task?.convexStatus === "deleted") return null;
-      return task;
-    } catch {
-      return null;
-    }
+    const taskId = ctx.db.normalizeId("tasks", args.taskId);
+    if (!taskId) return null;
+
+    const task = await ctx.db.get(taskId);
+    if (task?.convexStatus === "deleted") return null;
+    return task;
   },
 });
 
