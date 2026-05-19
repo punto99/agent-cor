@@ -59,31 +59,76 @@ export const createTaskTool = createTool({
   - El resto (requestType, brand, objective, keyMessage, kpis, budget, approvers) → se combinan en el campo description
   No necesitas preocuparte por la distribucion, el sistema lo maneja automaticamente.`,
   args: z.object({
-    title: z.string().describe("Titulo breve y descriptivo del proyecto (ej: Campaña de verano Coca-Cola)"),
+    title: z
+      .string()
+      .describe(
+        "Titulo breve y descriptivo del proyecto (ej: Campaña de verano Coca-Cola)",
+      ),
     requestType: z.string().describe("Tipo de requerimiento - OBLIGATORIO"),
     brand: z.string().describe("Marca o empresa - OBLIGATORIO"),
-    deadline: z.string().describe("Fecha limite del proyecto - OBLIGATORIO (formato YYYY-MM-DD)"),
-    deliverables: z.string().describe("Entregables concretos del proyecto - OBLIGATORIO"),
-    objective: z.string().optional().describe("Objetivo principal del proyecto"),
+    deadline: z
+      .string()
+      .describe("Fecha limite del proyecto - OBLIGATORIO (formato YYYY-MM-DD)"),
+    deliverables: z
+      .string()
+      .describe("Entregables concretos del proyecto - OBLIGATORIO"),
+    objective: z
+      .string()
+      .optional()
+      .describe("Objetivo principal del proyecto"),
     keyMessage: z.string().optional().describe("Mensaje clave a comunicar"),
     kpis: z.string().optional().describe("KPIs o metricas de exito"),
     budget: z.string().optional().describe("Presupuesto disponible"),
-    approvers: z.string().optional().describe("Personas que deben aprobar el proyecto"),
-    priority: z.number().optional().describe("Prioridad numerica: 0=Baja, 1=Media, 2=Alta, 3=Urgente. Si no se especifica, usar 1 (Media)."),
-    corUserId: z.number().optional().describe("COR ID del usuario (obtenido con validateUserForClient)"),
-    corClientId: z.number().optional().describe("ID del cliente en COR (obtenido con validateUserForClient)"),
-    corClientName: z.string().optional().describe("Nombre del cliente en COR (obtenido con validateUserForClient)"),
-    localClientId: z.string().optional().describe("ID local del cliente en Convex (obtenido con validateUserForClient)"),
-    nomenclature: z.string().optional().describe("Abreviatura del cliente (obtenido con validateUserForClient). NO la inventes, solo pasala si validateUserForClient la devolvio."),
-    estimatedTime: z.number().optional().describe("Horas totales estimadas para completar el proyecto. Estima basándote en el tipo de requerimiento, los entregables y la complejidad. Ejemplos: diseño de un flyer = 4h, campaña multi-pieza = 40h, video corporativo = 80h."),
+    approvers: z
+      .string()
+      .optional()
+      .describe("Personas que deben aprobar el proyecto"),
+    priority: z
+      .number()
+      .optional()
+      .describe(
+        "Prioridad numerica: 0=Baja, 1=Media, 2=Alta, 3=Urgente. Si no estas seguro, pon 1 (Media).",
+      ),
+    corUserId: z
+      .number()
+      .optional()
+      .describe("COR ID del usuario (obtenido con validateUserForClient)"),
+    corClientId: z
+      .number()
+      .optional()
+      .describe("ID del cliente en COR (obtenido con validateUserForClient)"),
+    corClientName: z
+      .string()
+      .optional()
+      .describe(
+        "Nombre del cliente en COR (obtenido con validateUserForClient)",
+      ),
+    localClientId: z
+      .string()
+      .optional()
+      .describe(
+        "ID local del cliente en Convex (obtenido con validateUserForClient)",
+      ),
+    nomenclature: z
+      .string()
+      .optional()
+      .describe(
+        "Abreviatura del cliente (obtenido con validateUserForClient). NO la inventes, solo pasala si validateUserForClient la devolvio.",
+      ),
+    estimatedTime: z
+      .number()
+      .optional()
+      .describe(
+        "Horas totales estimadas para completar el proyecto. Estima basándote en el tipo de requerimiento, los entregables y la complejidad. Si no estás seguro, haz una suposición educada. Este campo ayuda a priorizar y asignar recursos, así que es importante dar tu mejor estimación.",
+      ),
   }),
   handler: async (ctx, args): Promise<string> => {
     console.log("\n========================================");
     console.log("[CreateTask] 🚀 CREANDO TASK (SOLO CONVEX)");
     console.log("========================================");
-    
+
     const threadId = ctx.threadId;
-    
+
     if (!threadId) {
       console.error("[CreateTask] ERROR: No se encontro threadId");
       return "Error: No se pudo identificar el thread de la conversacion.";
@@ -115,19 +160,24 @@ export const createTaskTool = createTool({
     // VALIDACIÓN CONSOLIDADA (1 query en vez de ~6)
     // ====================================================
     console.log("[CreateTask] 🔍 Validando y preparando...");
-    const preparation = await ctx.runQuery(internal.data.tasks.validateAndPrepareTask, {
-      threadId,
-      corClientId: args.corClientId,
-      corUserId: args.corUserId,
-      requireIntegration: integrationEnabled,
-    });
+    const preparation = await ctx.runQuery(
+      internal.data.tasks.validateAndPrepareTask,
+      {
+        threadId,
+        corClientId: args.corClientId,
+        corUserId: args.corUserId,
+        requireIntegration: integrationEnabled,
+      },
+    );
 
     if (!preparation.ok) {
       return preparation.error;
     }
 
     const { userId, localClientId, pmId, existingProjectId } = preparation;
-    console.log(`[CreateTask] ✅ Validación OK — UserId: ${userId || "no encontrado"}`);
+    console.log(
+      `[CreateTask] ✅ Validación OK — UserId: ${userId || "no encontrado"}`,
+    );
 
     // ====================================================
     // Prefijo del título: nomenclature > corClientName
@@ -135,7 +185,9 @@ export const createTaskTool = createTool({
     // El sistema lo antepone automáticamente.
     // ====================================================
     const clientPrefix = args.nomenclature || args.corClientName;
-    const fullTitle = clientPrefix ? `${clientPrefix} - ${args.title}` : args.title;
+    const fullTitle = clientPrefix
+      ? `${clientPrefix} - ${args.title}`
+      : args.title;
 
     // ====================================================
     // Construir description con toda la info del brief
@@ -170,7 +222,10 @@ export const createTaskTool = createTool({
         if (msgAny.fileIds && Array.isArray(msgAny.fileIds)) {
           for (const fileId of msgAny.fileIds) {
             try {
-              const fileInfo = await ctx.runQuery(internal.data.tasks.getFileInfoInternal, { fileId });
+              const fileInfo = await ctx.runQuery(
+                internal.data.tasks.getFileInfoInternal,
+                { fileId },
+              );
               if (fileInfo?.url) {
                 fileUrls.push(fileInfo.url);
               }
@@ -180,9 +235,14 @@ export const createTaskTool = createTool({
           }
         }
       }
-      console.log(`[CreateTask] 📎 URLs de archivos encontradas: ${fileUrls.length}`);
+      console.log(
+        `[CreateTask] 📎 URLs de archivos encontradas: ${fileUrls.length}`,
+      );
     } catch (error) {
-      console.log("[CreateTask] ⚠️ No se pudieron obtener URLs de archivos (continuando):", error);
+      console.log(
+        "[CreateTask] ⚠️ No se pudieron obtener URLs de archivos (continuando):",
+        error,
+      );
     }
 
     // ====================================================
@@ -209,6 +269,7 @@ export const createTaskTool = createTool({
         taskPriority: args.priority ?? 1,
         taskStatus: "nueva",
         taskCreatedBy: userId,
+        taskClientId: localClientId as any,
         taskCorClientId: args.corClientId,
         taskCorClientName: args.corClientName,
         // Shared
@@ -228,20 +289,26 @@ export const createTaskTool = createTool({
     // Se ejecuta via scheduler — no bloquea la respuesta al usuario
     // ====================================================
     try {
-      await ctx.runMutation(internal.data.tasks.schedulePriorityClassification, {
-        taskId: taskId as any,
-        title: args.title,
-        requestType: args.requestType,
-        brand: args.brand,
-        objective: args.objective,
-        keyMessage: args.keyMessage,
-        kpis: args.kpis,
-        deadline: args.deadline,
-        budget: args.budget,
-        approvers: args.approvers,
-      });
+      await ctx.runMutation(
+        internal.data.tasks.schedulePriorityClassification,
+        {
+          taskId: taskId as any,
+          title: args.title,
+          requestType: args.requestType,
+          brand: args.brand,
+          objective: args.objective,
+          keyMessage: args.keyMessage,
+          kpis: args.kpis,
+          deadline: args.deadline,
+          budget: args.budget,
+          approvers: args.approvers,
+        },
+      );
     } catch (error) {
-      console.log("[CreateTask] ⚠️ No se pudo programar clasificación de prioridad (continuando):", error);
+      console.log(
+        "[CreateTask] ⚠️ No se pudo programar clasificación de prioridad (continuando):",
+        error,
+      );
     }
 
     // ====================================================
@@ -251,7 +318,10 @@ export const createTaskTool = createTool({
       await associateFilesHelper(ctx, taskId, threadId);
       console.log("[CreateTask] ✅ Archivos asociados");
     } catch (error) {
-      console.log("[CreateTask] ⚠️ No se pudieron asociar archivos (continuando):", error);
+      console.log(
+        "[CreateTask] ⚠️ No se pudieron asociar archivos (continuando):",
+        error,
+      );
     }
 
     console.log("\n========================================");

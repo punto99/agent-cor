@@ -4,13 +4,29 @@
 //
 // NOTA: Los tools de agentes están en convex/tools/
 import { v } from "convex/values";
-import { mutation, query, internalMutation, internalQuery, internalAction } from "../_generated/server";
+import {
+  mutation,
+  query,
+  internalMutation,
+  internalQuery,
+  internalAction,
+} from "../_generated/server";
 import { listMessages } from "@convex-dev/agent";
 import { internal, components } from "../_generated/api";
 import { getProjectManagementProvider } from "../integrations/registry";
 import { getAuthUserId } from "@convex-dev/auth/server";
-import { hashText, isStrategicPriority, type StrategicPriority } from "../lib/briefFormat";
-import { shouldRetry, getRetryDelay, formatRetryError, isClientError, MAX_RETRY_ATTEMPTS } from "../lib/corRetry";
+import {
+  hashText,
+  isStrategicPriority,
+  type StrategicPriority,
+} from "../lib/briefFormat";
+import {
+  shouldRetry,
+  getRetryDelay,
+  formatRetryError,
+  isClientError,
+  MAX_RETRY_ATTEMPTS,
+} from "../lib/corRetry";
 import type { ActionCtx } from "../_generated/server";
 
 const STRATEGIC_PRIORITY_LABEL_IDS: Record<StrategicPriority, number> = {
@@ -81,11 +97,18 @@ function validateDescriptionUpdate(
     return "No se puede guardar una descripción vacía o placeholder. La descripción contiene el brief completo.";
   }
 
-  if (currentText && nextText.length < Math.max(20, currentText.length * DESCRIPTION_MIN_REMAINING_RATIO)) {
+  if (
+    currentText &&
+    nextText.length <
+      Math.max(20, currentText.length * DESCRIPTION_MIN_REMAINING_RATIO)
+  ) {
     return "No se puede reemplazar la descripción por una versión mucho más corta. Edita solo la sección necesaria y conserva el resto del brief.";
   }
 
-  if (hasBriefStructure(currentDescription) && !hasBriefStructure(nextDescription)) {
+  if (
+    hasBriefStructure(currentDescription) &&
+    !hasBriefStructure(nextDescription)
+  ) {
     return "No se puede guardar la descripción porque perdió secciones base del brief como tipo de requerimiento o entregables.";
   }
 
@@ -94,7 +117,10 @@ function validateDescriptionUpdate(
 
 function validatePublishableDescription(description: unknown): string | null {
   const text = normalizeDescriptionText(description);
-  if (isPlaceholderDescription(description) || text.length < MIN_PUBLISHABLE_DESCRIPTION_LENGTH) {
+  if (
+    isPlaceholderDescription(description) ||
+    text.length < MIN_PUBLISHABLE_DESCRIPTION_LENGTH
+  ) {
     return "No se puede publicar en COR: la descripción/brief está vacía o incompleta.";
   }
   return null;
@@ -142,12 +168,13 @@ export const createTaskInternal = internalMutation({
     title: v.string(),
     description: v.optional(v.string()),
     deadline: v.optional(v.string()),
-    priority: v.optional(v.number()),       // 0=Low, 1=Medium, 2=High, 3=Urgent
+    priority: v.optional(v.number()), // 0=Low, 1=Medium, 2=High, 3=Urgent
     threadId: v.string(),
     status: v.string(),
     createdBy: v.optional(v.string()),
     // Referencia al proyecto local
     projectId: v.optional(v.string()),
+    clientId: v.optional(v.id("corClients")),
     // Campos para sincronización con COR
     corTaskId: v.optional(v.string()),
     corProjectId: v.optional(v.number()),
@@ -159,7 +186,24 @@ export const createTaskInternal = internalMutation({
   },
   handler: async (ctx, args) => {
     console.log("[Tasks.createTaskInternal] Insertando en base de datos...");
-    
+
+    let clientId = args.clientId;
+    if (!clientId && args.projectId) {
+      const project = await ctx.db.get(args.projectId as any);
+      if (project && "clientId" in project && project.clientId) {
+        clientId = project.clientId;
+      }
+    }
+    if (!clientId && args.corClientId !== undefined) {
+      const client = await ctx.db
+        .query("corClients")
+        .withIndex("by_corClientId", (q) =>
+          q.eq("corClientId", args.corClientId!),
+        )
+        .unique();
+      clientId = client?._id;
+    }
+
     const taskId = await ctx.db.insert("tasks", {
       title: args.title,
       description: args.description,
@@ -171,6 +215,7 @@ export const createTaskInternal = internalMutation({
       createdBy: args.createdBy,
       // Referencia al proyecto local
       projectId: args.projectId as any,
+      clientId,
       // Campos COR / sistema externo
       corTaskId: args.corTaskId,
       corProjectId: args.corProjectId,
@@ -179,9 +224,9 @@ export const createTaskInternal = internalMutation({
       corClientId: args.corClientId,
       corClientName: args.corClientName,
     });
-    
+
     console.log(`[Tasks.createTaskInternal] Task insertada con ID: ${taskId}`);
-    
+
     return taskId;
   },
 });
@@ -194,22 +239,26 @@ export const updateTaskInternal = internalMutation({
       title: v.optional(v.string()),
       description: v.optional(v.string()),
       deadline: v.optional(v.string()),
-      priority: v.optional(v.number()),     // 0=Low, 1=Medium, 2=High, 3=Urgent
-      strategicPriority: v.optional(v.union(
-        v.literal("I_U"),
-        v.literal("I_NU"),
-        v.literal("NI_U"),
-        v.literal("NI_NU"),
-      )),
+      priority: v.optional(v.number()), // 0=Low, 1=Medium, 2=High, 3=Urgent
+      strategicPriority: v.optional(
+        v.union(
+          v.literal("I_U"),
+          v.literal("I_NU"),
+          v.literal("NI_U"),
+          v.literal("NI_NU"),
+        ),
+      ),
     }),
     allowedFields: v.optional(v.array(v.string())),
   },
   handler: async (ctx, args) => {
-    console.log(`[Tasks.updateTaskInternal] Actualizando task ${args.taskId}...`);
+    console.log(
+      `[Tasks.updateTaskInternal] Actualizando task ${args.taskId}...`,
+    );
 
     const task: any = await ctx.db.get(args.taskId as any);
     if (!task) throw new Error("Task no encontrada");
-    
+
     // Filtrar campos undefined
     const updateData: any = {};
     for (const [key, value] of Object.entries(args.updates)) {
@@ -221,10 +270,12 @@ export const updateTaskInternal = internalMutation({
     const updateKeys = Object.keys(updateData);
     if (args.allowedFields) {
       const allowedFields = new Set(args.allowedFields);
-      const unexpectedFields = updateKeys.filter((field) => !allowedFields.has(field));
+      const unexpectedFields = updateKeys.filter(
+        (field) => !allowedFields.has(field),
+      );
       if (unexpectedFields.length > 0) {
         throw new Error(
-          `Edición rechazada: campos no permitidos para esta operación (${unexpectedFields.join(", ")}).`
+          `Edición rechazada: campos no permitidos para esta operación (${unexpectedFields.join(", ")}).`,
         );
       }
     }
@@ -236,12 +287,12 @@ export const updateTaskInternal = internalMutation({
       );
       if (descriptionError) throw new Error(descriptionError);
     }
-    
+
     // Registrar timestamp de edición local (detección de conflictos bidireccional)
     updateData.lastLocalEditAt = Date.now();
-    
+
     await ctx.db.patch(args.taskId as any, updateData);
-    
+
     console.log(`[Tasks.updateTaskInternal] Task actualizada`);
     return args.taskId;
   },
@@ -333,14 +384,16 @@ export const updateTaskFields = mutation({
       title: v.optional(v.string()),
       description: v.optional(v.string()),
       deadline: v.optional(v.string()),
-      priority: v.optional(v.number()),     // 0=Low, 1=Medium, 2=High, 3=Urgent
-      status: v.optional(v.string()),       // nueva, en_proceso, estancada, finalizada
-      strategicPriority: v.optional(v.union(
-        v.literal("I_U"),
-        v.literal("I_NU"),
-        v.literal("NI_U"),
-        v.literal("NI_NU"),
-      )),
+      priority: v.optional(v.number()), // 0=Low, 1=Medium, 2=High, 3=Urgent
+      status: v.optional(v.string()), // nueva, en_proceso, estancada, finalizada
+      strategicPriority: v.optional(
+        v.union(
+          v.literal("I_U"),
+          v.literal("I_NU"),
+          v.literal("NI_U"),
+          v.literal("NI_NU"),
+        ),
+      ),
     }),
   },
   handler: async (ctx, args) => {
@@ -353,7 +406,9 @@ export const updateTaskFields = mutation({
       .withIndex("by_user", (q) => q.eq("userId", userId))
       .unique();
     if (approvedExternalUser) {
-      throw new Error("Los usuarios externos no pueden publicar o sincronizar con COR.");
+      throw new Error(
+        "Los usuarios externos no pueden publicar o sincronizar con COR.",
+      );
     }
 
     const task = await ctx.db.get(args.taskId);
@@ -362,14 +417,14 @@ export const updateTaskFields = mutation({
     // ─── Bloquear edición durante sincronización ───
     if (task.corSyncStatus === "syncing" || task.corSyncStatus === "retrying") {
       throw new Error(
-        "La tarea se está sincronizando con el sistema externo. Espera a que termine la sincronización antes de editar."
+        "La tarea se está sincronizando con el sistema externo. Espera a que termine la sincronización antes de editar.",
       );
     }
 
     // ─── Validación de permisos ───
     if (!(await hasTaskAccess(ctx, task, userId))) {
       throw new Error(
-        `No tienes permisos para editar tasks del cliente "${task.corClientName || "desconocido"}".`
+        `No tienes permisos para editar tasks del cliente "${task.corClientName || "desconocido"}".`,
       );
     }
 
@@ -395,12 +450,15 @@ export const updateTaskFields = mutation({
     // Agregar timestamp de edición local
     updateData.lastLocalEditAt = Date.now();
 
-    console.log(`[Tasks.updateTaskFields] Actualizando task ${args.taskId}:`, Object.keys(updateData));
+    console.log(
+      `[Tasks.updateTaskFields] Actualizando task ${args.taskId}:`,
+      Object.keys(updateData),
+    );
     await ctx.db.patch(args.taskId, updateData as any);
 
     // Programar sync a COR si corresponde (via internalMutation)
     const changedFields = Object.keys(args.updates).filter(
-      (k) => (args.updates as any)[k] !== undefined
+      (k) => (args.updates as any)[k] !== undefined,
     );
     await ctx.scheduler.runAfter(0, internal.data.tasks.scheduleTaskSyncToCOR, {
       taskId: args.taskId,
@@ -425,8 +483,6 @@ export const updateTaskStatus = mutation({
   },
 });
 
-
-
 // ==================== BACKGROUND JOB: Asociar archivos a task ====================
 // Esta acción se ejecuta en background después de crear una task
 // para buscar archivos del thread y crear registros en taskAttachments
@@ -436,17 +492,19 @@ export const associateFilesToTask = internalAction({
     threadId: v.string(),
   },
   handler: async (ctx, args): Promise<void> => {
-    console.log(`[AssociateFiles] Buscando archivos para task ${args.taskId}...`);
-    
+    console.log(
+      `[AssociateFiles] Buscando archivos para task ${args.taskId}...`,
+    );
+
     try {
       // Obtener todos los mensajes del thread
       const messagesResult = await listMessages(ctx, components.agent, {
         threadId: args.threadId,
         paginationOpts: { cursor: null, numItems: 20 },
       });
-      
+
       const allFileIds: string[] = [];
-      
+
       // Buscar fileIds en cada mensaje
       for (const msg of messagesResult.page) {
         const msgAny = msg as any;
@@ -454,17 +512,22 @@ export const associateFilesToTask = internalAction({
           allFileIds.push(...msgAny.fileIds);
         }
       }
-      
+
       if (allFileIds.length === 0) {
         console.log(`[AssociateFiles] No se encontraron archivos en el thread`);
         return;
       }
 
-      console.log(`[AssociateFiles] Creando ${allFileIds.length} registros en taskAttachments...`);
-      
+      console.log(
+        `[AssociateFiles] Creando ${allFileIds.length} registros en taskAttachments...`,
+      );
+
       for (const fileId of allFileIds) {
         try {
-          const fileInfo = await ctx.runQuery(internal.data.tasks.getFileInfoInternal, { fileId });
+          const fileInfo = await ctx.runQuery(
+            internal.data.tasks.getFileInfoInternal,
+            { fileId },
+          );
           if (fileInfo) {
             await ctx.runMutation(internal.data.tasks.createTaskAttachment, {
               taskId: args.taskId as any,
@@ -474,13 +537,18 @@ export const associateFilesToTask = internalAction({
               mimeType: fileInfo.mimeType,
               size: fileInfo.size,
             });
-            console.log(`[AssociateFiles] ✅ Attachment creado: ${fileInfo.filename}`);
+            console.log(
+              `[AssociateFiles] ✅ Attachment creado: ${fileInfo.filename}`,
+            );
           }
         } catch (fileError) {
-          console.error(`[AssociateFiles] ⚠️ Error con archivo ${fileId}:`, fileError);
+          console.error(
+            `[AssociateFiles] ⚠️ Error con archivo ${fileId}:`,
+            fileError,
+          );
         }
       }
-      
+
       console.log(`[AssociateFiles] ✅ Archivos asociados exitosamente`);
     } catch (error) {
       console.error(`[AssociateFiles] Error:`, error);
@@ -608,19 +676,20 @@ export const getFileInfoInternal = internalQuery({
   handler: async (ctx, args) => {
     try {
       // Obtener el documento file del componente agent
-      const fileDoc = await ctx.runQuery(
-        components.agent.files.get,
-        { fileId: args.fileId }
-      );
-      
+      const fileDoc = await ctx.runQuery(components.agent.files.get, {
+        fileId: args.fileId,
+      });
+
       if (!fileDoc) {
-        console.error(`[Files] No se encontró el archivo con fileId: ${args.fileId}`);
+        console.error(
+          `[Files] No se encontró el archivo con fileId: ${args.fileId}`,
+        );
         return null;
       }
-      
+
       // Obtener la URL desde el storageId
       const url = await ctx.storage.getUrl(fileDoc.storageId);
-      
+
       return {
         fileId: args.fileId,
         storageId: fileDoc.storageId,
@@ -630,12 +699,14 @@ export const getFileInfoInternal = internalQuery({
         url,
       };
     } catch (error) {
-      console.error(`[Files] Error obteniendo info para fileId ${args.fileId}:`, error);
+      console.error(
+        `[Files] Error obteniendo info para fileId ${args.fileId}:`,
+        error,
+      );
       return null;
     }
   },
 });
-
 
 // ==================== CONSOLIDATED FUNCTIONS ====================
 // Optimización: Reducir múltiples runQuery/runMutation a menos transacciones.
@@ -685,7 +756,10 @@ export const validateAndPrepareTask = internalQuery({
 
     if (args.requireIntegration) {
       if (!userId) {
-        return { ok: false as const, error: "❌ No se pudo identificar al usuario de esta conversación." };
+        return {
+          ok: false as const,
+          error: "❌ No se pudo identificar al usuario de esta conversación.",
+        };
       }
 
       // corUser
@@ -694,7 +768,11 @@ export const validateAndPrepareTask = internalQuery({
         .withIndex("by_userId", (q) => q.eq("userId", userId))
         .unique();
       if (!corUser) {
-        return { ok: false as const, error: "❌ Tu usuario no está registrado en el sistema de gestión de proyectos (COR). Usa primero la herramienta 'validateUserForClient'." };
+        return {
+          ok: false as const,
+          error:
+            "❌ Tu usuario no está registrado en el sistema de gestión de proyectos (COR). Usa primero la herramienta 'validateUserForClient'.",
+        };
       }
       if (!pmId) pmId = corUser.corUserId;
 
@@ -706,7 +784,11 @@ export const validateAndPrepareTask = internalQuery({
           .withIndex("by_corClientId", (q) => q.eq("corClientId", corClientId))
           .unique();
         if (!localClient) {
-          return { ok: false as const, error: "❌ El cliente no está registrado localmente. Usa primero la herramienta 'validateUserForClient'." };
+          return {
+            ok: false as const,
+            error:
+              "❌ El cliente no está registrado localmente. Usa primero la herramienta 'validateUserForClient'.",
+          };
         }
         localClientId = localClient._id;
 
@@ -714,14 +796,17 @@ export const validateAndPrepareTask = internalQuery({
         const assignments = await ctx.db
           .query("clientUserAssignments")
           .withIndex("by_client_and_user", (q) =>
-            q.eq("clientId", localClient._id).eq("userId", userId)
+            q.eq("clientId", localClient._id).eq("userId", userId),
           )
           .collect();
         const hasFullAccess = assignments.some(
-          (assignment) => assignment.brandId === undefined
+          (assignment) => assignment.brandId === undefined,
         );
         if (!hasFullAccess) {
-          return { ok: false as const, error: `❌ No tienes autorización para crear briefs para este cliente. Contacta al administrador.` };
+          return {
+            ok: false as const,
+            error: `❌ No tienes autorización para crear briefs para este cliente. Contacta al administrador.`,
+          };
         }
       }
     } else {
@@ -778,7 +863,10 @@ export const validateAndPrepareExternalTask = internalQuery({
     const userId = chatThread?.userId || null;
 
     if (!userId) {
-      return { ok: false as const, error: "❌ No se pudo identificar al usuario de esta conversación." };
+      return {
+        ok: false as const,
+        error: "❌ No se pudo identificar al usuario de esta conversación.",
+      };
     }
 
     const approvedExternalUser = await ctx.db
@@ -787,7 +875,11 @@ export const validateAndPrepareExternalTask = internalQuery({
       .unique();
 
     if (!approvedExternalUser) {
-      return { ok: false as const, error: "❌ Este flujo solo está disponible para usuarios externos aprobados." };
+      return {
+        ok: false as const,
+        error:
+          "❌ Este flujo solo está disponible para usuarios externos aprobados.",
+      };
     }
 
     const existingTask = await ctx.db
@@ -804,31 +896,45 @@ export const validateAndPrepareExternalTask = internalQuery({
 
     const brand = await ctx.db.get(args.clientBrandId);
     if (!brand) {
-      return { ok: false as const, error: "❌ La marca seleccionada no existe." };
+      return {
+        ok: false as const,
+        error: "❌ La marca seleccionada no existe.",
+      };
     }
     if (!brand.clientId) {
-      return { ok: false as const, error: "❌ La marca no está vinculada a un cliente local. Contacta al administrador." };
+      return {
+        ok: false as const,
+        error:
+          "❌ La marca no está vinculada a un cliente local. Contacta al administrador.",
+      };
     }
 
     const client = await ctx.db.get(brand.clientId);
     if (!client) {
-      return { ok: false as const, error: "❌ El cliente asociado a esta marca no existe localmente." };
+      return {
+        ok: false as const,
+        error: "❌ El cliente asociado a esta marca no existe localmente.",
+      };
     }
 
     const assignments = await ctx.db
       .query("clientUserAssignments")
       .withIndex("by_client_and_user", (q) =>
-        q.eq("clientId", brand.clientId!).eq("userId", userId)
+        q.eq("clientId", brand.clientId!).eq("userId", userId),
       )
       .collect();
 
     const hasAccess = assignments.some(
       (assignment) =>
-        assignment.brandId === undefined || assignment.brandId === args.clientBrandId
+        assignment.brandId === undefined ||
+        assignment.brandId === args.clientBrandId,
     );
 
     if (!hasAccess) {
-      return { ok: false as const, error: `❌ No tienes autorización para crear briefs para la marca "${brand.name}".` };
+      return {
+        ok: false as const,
+        error: `❌ No tienes autorización para crear briefs para la marca "${brand.name}".`,
+      };
     }
 
     const existingProject = await ctx.db
@@ -866,7 +972,9 @@ export const createProjectAndTask = internalMutation({
     projectCorClientId: v.optional(v.number()),
     projectClientId: v.optional(v.id("corClients")),
     projectCreatedBy: v.optional(v.string()),
-    projectSource: v.optional(v.union(v.literal("internal"), v.literal("external"))),
+    projectSource: v.optional(
+      v.union(v.literal("internal"), v.literal("external")),
+    ),
     projectClientBrandId: v.optional(v.id("clientBrands")),
     projectBrandId: v.optional(v.number()),
     projectBrandName: v.optional(v.string()),
@@ -877,9 +985,12 @@ export const createProjectAndTask = internalMutation({
     taskPriority: v.optional(v.number()),
     taskStatus: v.string(),
     taskCreatedBy: v.optional(v.string()),
+    taskClientId: v.optional(v.id("corClients")),
     taskCorClientId: v.optional(v.number()),
     taskCorClientName: v.optional(v.string()),
-    taskSource: v.optional(v.union(v.literal("internal"), v.literal("external"))),
+    taskSource: v.optional(
+      v.union(v.literal("internal"), v.literal("external")),
+    ),
     taskClientBrandId: v.optional(v.id("clientBrands")),
     taskBrandId: v.optional(v.number()),
     taskBrandName: v.optional(v.string()),
@@ -917,6 +1028,21 @@ export const createProjectAndTask = internalMutation({
       console.log(`[CreateProjectAndTask] ✅ Proyecto creado: ${projectId}`);
     }
 
+    let taskClientId = args.taskClientId ?? args.projectClientId;
+    if (!taskClientId && args.existingProjectId) {
+      const project = await ctx.db.get(args.existingProjectId);
+      if (project?.clientId) taskClientId = project.clientId;
+    }
+    if (!taskClientId && args.taskCorClientId !== undefined) {
+      const client = await ctx.db
+        .query("corClients")
+        .withIndex("by_corClientId", (q) =>
+          q.eq("corClientId", args.taskCorClientId!),
+        )
+        .unique();
+      taskClientId = client?._id;
+    }
+
     // 2. Crear task
     const taskId = await ctx.db.insert("tasks", {
       title: args.taskTitle,
@@ -929,6 +1055,7 @@ export const createProjectAndTask = internalMutation({
       createdBy: args.taskCreatedBy,
       projectId: projectId as any,
       source: args.taskSource || "internal",
+      clientId: taskClientId,
       clientBrandId: args.taskClientBrandId,
       brandId: args.taskBrandId,
       brandName: args.taskBrandName,
@@ -941,6 +1068,119 @@ export const createProjectAndTask = internalMutation({
     return { projectId, taskId: taskId as string };
   },
 });
+
+export const listTasksForClientIdBackfill = internalQuery({
+  args: {
+    limit: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const limit = args.limit ?? 500;
+    const tasks = await ctx.db
+      .query("tasks")
+      .withIndex("by_clientId", (q) => q.eq("clientId", undefined))
+      .take(limit);
+
+    return tasks
+      .filter((task) => task.convexStatus !== "deleted")
+      .map((task) => ({
+        _id: task._id,
+        title: task.title,
+        projectId: task.projectId,
+        clientBrandId: task.clientBrandId,
+        corClientId: task.corClientId,
+        corClientName: task.corClientName,
+      }));
+  },
+});
+
+export const backfillTaskClientId = internalMutation({
+  args: {
+    taskId: v.id("tasks"),
+    dryRun: v.optional(v.boolean()),
+  },
+  handler: async (ctx, args) => {
+    const task = await ctx.db.get(args.taskId);
+    if (!task) return { status: "missing" as const };
+    if (task.clientId) {
+      return {
+        status: "already_set" as const,
+        clientId: task.clientId,
+        reason: "task.clientId",
+      };
+    }
+
+    let clientId = null as any;
+    let reason: string | undefined;
+
+    if (task.clientBrandId) {
+      const brand = await ctx.db.get(task.clientBrandId);
+      if (brand?.clientId) {
+        clientId = brand.clientId;
+        reason = "clientBrandId";
+      }
+    }
+
+    if (!clientId && task.projectId) {
+      const project = await ctx.db.get(task.projectId as any);
+      if (project && "clientId" in project && project.clientId) {
+        clientId = project.clientId;
+        reason = "projectId";
+      }
+    }
+
+    if (!clientId && task.corClientId !== undefined) {
+      const client = await ctx.db
+        .query("corClients")
+        .withIndex("by_corClientId", (q) =>
+          q.eq("corClientId", task.corClientId!),
+        )
+        .unique();
+      if (client) {
+        clientId = client._id;
+        reason = "corClientId";
+      }
+    }
+
+    if (!clientId && task.corClientName) {
+      const normalizedTaskClientName = normalizeClientName(task.corClientName);
+      const clients = await ctx.db.query("corClients").collect();
+      const client = clients.find(
+        (candidate) =>
+          normalizeClientName(candidate.name) === normalizedTaskClientName,
+      );
+      if (client) {
+        clientId = client._id;
+        reason = "corClientName";
+      }
+    }
+
+    if (!clientId) {
+      return {
+        status: "unresolved" as const,
+        taskId: task._id,
+        title: task.title,
+        corClientId: task.corClientId,
+        corClientName: task.corClientName,
+      };
+    }
+
+    if (!args.dryRun) {
+      await ctx.db.patch(task._id, { clientId });
+    }
+
+    return {
+      status: args.dryRun ? ("would_update" as const) : ("updated" as const),
+      taskId: task._id,
+      title: task.title,
+      clientId,
+      reason,
+    };
+  },
+});
+
+function normalizeClientName(name: string) {
+  return name.trim().toLowerCase().replace(/\s+/g, " ");
+}
 
 /**
  * Programa la clasificación de prioridad estratégica en background.
@@ -960,19 +1200,25 @@ export const schedulePriorityClassification = internalMutation({
     approvers: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    console.log(`[SchedulePriority] 🎯 Programando clasificación para task ${args.taskId}`);
-    await ctx.scheduler.runAfter(0, internal.data.tasks.classifyAndUpdatePriority, {
-      taskId: args.taskId,
-      title: args.title,
-      requestType: args.requestType,
-      brand: args.brand,
-      objective: args.objective,
-      keyMessage: args.keyMessage,
-      kpis: args.kpis,
-      deadline: args.deadline,
-      budget: args.budget,
-      approvers: args.approvers,
-    });
+    console.log(
+      `[SchedulePriority] 🎯 Programando clasificación para task ${args.taskId}`,
+    );
+    await ctx.scheduler.runAfter(
+      0,
+      internal.data.tasks.classifyAndUpdatePriority,
+      {
+        taskId: args.taskId,
+        title: args.title,
+        requestType: args.requestType,
+        brand: args.brand,
+        objective: args.objective,
+        keyMessage: args.keyMessage,
+        kpis: args.kpis,
+        deadline: args.deadline,
+        budget: args.budget,
+        approvers: args.approvers,
+      },
+    );
   },
 });
 
@@ -995,29 +1241,38 @@ export const classifyAndUpdatePriority = internalAction({
   },
   handler: async (ctx, args) => {
     try {
-      const classification = await ctx.runAction(internal.agents.priorityAgent.classifyPriorityAction, {
-        title: args.title,
-        requestType: args.requestType,
-        brand: args.brand,
-        objective: args.objective,
-        keyMessage: args.keyMessage,
-        kpis: args.kpis,
-        deadline: args.deadline,
-        budget: args.budget,
-        approvers: args.approvers,
-      });
+      const classification = await ctx.runAction(
+        internal.agents.priorityAgent.classifyPriorityAction,
+        {
+          title: args.title,
+          requestType: args.requestType,
+          brand: args.brand,
+          objective: args.objective,
+          keyMessage: args.keyMessage,
+          kpis: args.kpis,
+          deadline: args.deadline,
+          budget: args.budget,
+          approvers: args.approvers,
+        },
+      );
 
       if (classification && isStrategicPriority(classification)) {
         // Guardar prioridad estratégica en campo dedicado (no en description)
-        await ctx.runMutation(internal.data.tasks.setTaskStrategicPriorityInternal, {
-          taskId: args.taskId,
-          strategicPriority: classification,
-        });
+        await ctx.runMutation(
+          internal.data.tasks.setTaskStrategicPriorityInternal,
+          {
+            taskId: args.taskId,
+            strategicPriority: classification,
+          },
+        );
 
         // Si ya está publicada en COR, sincronizar etiqueta inmediatamente
-        const task = await ctx.runQuery(internal.data.tasks.getTaskByIdInternal, {
-          taskId: args.taskId as string,
-        });
+        const task = await ctx.runQuery(
+          internal.data.tasks.getTaskByIdInternal,
+          {
+            taskId: args.taskId as string,
+          },
+        );
 
         if (task?.corTaskId) {
           const corTaskId = parseInt(task.corTaskId, 10);
@@ -1029,10 +1284,15 @@ export const classifyAndUpdatePriority = internalAction({
           }
         }
 
-        console.log(`[ClassifyAndUpdate] ✅ Prioridad ${classification} guardada en task ${args.taskId}`);
+        console.log(
+          `[ClassifyAndUpdate] ✅ Prioridad ${classification} guardada en task ${args.taskId}`,
+        );
       }
     } catch (error) {
-      console.log(`[ClassifyAndUpdate] ⚠️ No se pudo clasificar prioridad (task ${args.taskId}):`, error);
+      console.log(
+        `[ClassifyAndUpdate] ⚠️ No se pudo clasificar prioridad (task ${args.taskId}):`,
+        error,
+      );
       // No falla — la task ya fue creada exitosamente
     }
   },
@@ -1069,11 +1329,16 @@ export async function associateFilesHelper(
       return;
     }
 
-    console.log(`[AssociateFiles] Creando ${allFileIds.length} registros en taskAttachments...`);
+    console.log(
+      `[AssociateFiles] Creando ${allFileIds.length} registros en taskAttachments...`,
+    );
 
     for (const fileId of allFileIds) {
       try {
-        const fileInfo = await ctx.runQuery(internal.data.tasks.getFileInfoInternal, { fileId });
+        const fileInfo = await ctx.runQuery(
+          internal.data.tasks.getFileInfoInternal,
+          { fileId },
+        );
         if (fileInfo) {
           await ctx.runMutation(internal.data.tasks.createTaskAttachment, {
             taskId: taskId as any,
@@ -1083,10 +1348,15 @@ export async function associateFilesHelper(
             mimeType: fileInfo.mimeType,
             size: fileInfo.size,
           });
-          console.log(`[AssociateFiles] ✅ Attachment creado: ${fileInfo.filename}`);
+          console.log(
+            `[AssociateFiles] ✅ Attachment creado: ${fileInfo.filename}`,
+          );
         }
       } catch (fileError) {
-        console.error(`[AssociateFiles] ⚠️ Error con archivo ${fileId}:`, fileError);
+        console.error(
+          `[AssociateFiles] ⚠️ Error con archivo ${fileId}:`,
+          fileError,
+        );
       }
     }
 
@@ -1095,7 +1365,6 @@ export async function associateFilesHelper(
     console.error(`[AssociateFiles] Error:`, error);
   }
 }
-
 
 // ==================== QUERIES ====================
 
@@ -1115,7 +1384,7 @@ export const getTaskByThread = query({
       .first();
     if (task?.convexStatus === "deleted") return null;
     if (task && !(await hasTaskAccess(ctx, task, userId))) return null;
-    
+
     return task;
   },
 });
@@ -1164,7 +1433,9 @@ export const listTasks = query({
       if (assignment.brandId) {
         const brandTasks = await ctx.db
           .query("tasks")
-          .withIndex("by_clientBrandId", (q) => q.eq("clientBrandId", assignment.brandId))
+          .withIndex("by_clientBrandId", (q) =>
+            q.eq("clientBrandId", assignment.brandId),
+          )
           .collect();
         for (const task of brandTasks) tasksById.set(task._id, task);
         continue;
@@ -1174,7 +1445,9 @@ export const listTasks = query({
       if (!client) continue;
       const clientTasks = await ctx.db
         .query("tasks")
-        .withIndex("by_corClientId", (q) => q.eq("corClientId", client.corClientId))
+        .withIndex("by_corClientId", (q) =>
+          q.eq("corClientId", client.corClientId),
+        )
         .collect();
       for (const task of clientTasks) tasksById.set(task._id, task);
     }
@@ -1257,7 +1530,9 @@ export const listMyTasks = query({
       if (assignment.brandId) {
         const brandTasks = await ctx.db
           .query("tasks")
-          .withIndex("by_clientBrandId", (q) => q.eq("clientBrandId", assignment.brandId))
+          .withIndex("by_clientBrandId", (q) =>
+            q.eq("clientBrandId", assignment.brandId),
+          )
           .collect();
         for (const task of brandTasks) tasksById.set(task._id, task);
         continue;
@@ -1268,7 +1543,9 @@ export const listMyTasks = query({
 
       const clientTasks = await ctx.db
         .query("tasks")
-        .withIndex("by_corClientId", (q) => q.eq("corClientId", client.corClientId))
+        .withIndex("by_corClientId", (q) =>
+          q.eq("corClientId", client.corClientId),
+        )
         .collect();
       for (const task of clientTasks) tasksById.set(task._id, task);
     }
@@ -1276,12 +1553,12 @@ export const listMyTasks = query({
     let tasks = Array.from(tasksById.values())
       .filter((t) => t.convexStatus !== "deleted")
       .sort((a, b) => b._creationTime - a._creationTime);
-    
+
     // Filtrar por status si se proporcionó
     if (args.status) {
       tasks = tasks.filter((t) => t.status === args.status);
     }
-    
+
     return tasks;
   },
 });
@@ -1326,17 +1603,26 @@ export const softDeleteTask = mutation({
  *   priority      →  priority
  *   status        →  status
  */
-const COR_SYNCABLE_FIELDS = new Set(["title", "description", "deadline", "priority", "status", "strategicPriority"]);
+const COR_SYNCABLE_FIELDS = new Set([
+  "title",
+  "description",
+  "deadline",
+  "priority",
+  "status",
+  "strategicPriority",
+]);
 
 async function hasFullClientAccess(ctx: any, clientId: any, userId: any) {
   const assignments = await ctx.db
     .query("clientUserAssignments")
     .withIndex("by_client_and_user", (q: any) =>
-      q.eq("clientId", clientId).eq("userId", userId)
+      q.eq("clientId", clientId).eq("userId", userId),
     )
     .collect();
 
-  return assignments.some((assignment: any) => assignment.brandId === undefined);
+  return assignments.some(
+    (assignment: any) => assignment.brandId === undefined,
+  );
 }
 
 async function hasTaskAccess(ctx: any, task: any, userId: any) {
@@ -1346,20 +1632,23 @@ async function hasTaskAccess(ctx: any, task: any, userId: any) {
     const assignments = await ctx.db
       .query("clientUserAssignments")
       .withIndex("by_client_and_user", (q: any) =>
-        q.eq("clientId", brand.clientId).eq("userId", userId)
+        q.eq("clientId", brand.clientId).eq("userId", userId),
       )
       .collect();
 
     return assignments.some(
       (assignment: any) =>
-        assignment.brandId === undefined || assignment.brandId === task.clientBrandId
+        assignment.brandId === undefined ||
+        assignment.brandId === task.clientBrandId,
     );
   }
 
   if (task.corClientId) {
     const client = await ctx.db
       .query("corClients")
-      .withIndex("by_corClientId", (q: any) => q.eq("corClientId", task.corClientId))
+      .withIndex("by_corClientId", (q: any) =>
+        q.eq("corClientId", task.corClientId),
+      )
       .unique();
     if (!client) return false;
     return await hasFullClientAccess(ctx, client._id, userId);
@@ -1370,7 +1659,7 @@ async function hasTaskAccess(ctx: any, task: any, userId: any) {
 
 /**
  * Mutation interna: programa la sincronización de ediciones locales hacia COR.
- * 
+ *
  * Verifica que la task esté publicada y luego schedula la action de sync.
  * Marca estado como "syncing" y resetea el attempt counter.
  * Uso: desde updateTaskFields (UI) y editTaskTool (agente) para unificar el flujo.
@@ -1384,16 +1673,24 @@ export const scheduleTaskSyncToCOR = internalMutation({
     const task = await ctx.db.get(args.taskId);
     if (!task) return;
 
-    if (task.corSyncStatus !== "synced" && task.corSyncStatus !== "retrying" && task.corSyncStatus !== "error") {
+    if (
+      task.corSyncStatus !== "synced" &&
+      task.corSyncStatus !== "retrying" &&
+      task.corSyncStatus !== "error"
+    ) {
       if (!task.corTaskId) {
-        console.log(`[scheduleTaskSyncToCOR] Task ${args.taskId} no está publicada en COR, omitiendo sync.`);
+        console.log(
+          `[scheduleTaskSyncToCOR] Task ${args.taskId} no está publicada en COR, omitiendo sync.`,
+        );
         return;
       }
     }
 
     if (!task.corTaskId) return;
 
-    console.log(`[scheduleTaskSyncToCOR] 🔄 Programando sync para task ${args.taskId}`);
+    console.log(
+      `[scheduleTaskSyncToCOR] 🔄 Programando sync para task ${args.taskId}`,
+    );
     await ctx.db.patch(args.taskId, {
       corSyncStatus: "syncing",
       corSyncAttempt: 0,
@@ -1410,14 +1707,14 @@ export const scheduleTaskSyncToCOR = internalMutation({
 
 /**
  * Action interna: sincroniza una edición local de Convex hacia COR.
- * 
+ *
  * SEGURIDAD CRÍTICA:
  * - Lee el corTaskId y corProjectId directamente de la task de Convex
  * - Verifica que la task siga en estado "synced" antes de tocar COR
  * - Solo edita la task COR que corresponde al corTaskId guardado
  * - Verifica que la task en COR pertenece al proyecto correcto (corProjectId)
  * - Logea exhaustivamente cada operación para auditoría
- * 
+ *
  * Flujo:
  * 1. Lee la task actualizada de Convex
  * 2. Si cambiaron campos nativos (title, deadline, priority) → updateTask directo
@@ -1435,7 +1732,9 @@ export const syncEditToCORAction = internalAction({
     console.log("\n========================================");
     console.log("[SyncEdit] 🔄 SINCRONIZANDO EDICIÓN LOCAL → COR");
     console.log(`[SyncEdit] Task Convex ID: ${args.taskId}`);
-    console.log(`[SyncEdit] Campos cambiados: ${args.changedFields.join(", ")}`);
+    console.log(
+      `[SyncEdit] Campos cambiados: ${args.changedFields.join(", ")}`,
+    );
     console.log(`[SyncEdit] Intento: ${attempt + 1}/${MAX_RETRY_ATTEMPTS}`);
     console.log("========================================\n");
 
@@ -1455,8 +1754,12 @@ export const syncEditToCORAction = internalAction({
       // ═══════════════════════════════════════════════════
 
       // Verificar que la task sigue en estado sincronizable
-      if (!["synced", "syncing", "retrying"].includes(task.corSyncStatus || "")) {
-        console.error(`[SyncEdit] ❌ Task no está en estado sincronizable (estado: ${task.corSyncStatus}). Abortando.`);
+      if (
+        !["synced", "syncing", "retrying"].includes(task.corSyncStatus || "")
+      ) {
+        console.error(
+          `[SyncEdit] ❌ Task no está en estado sincronizable (estado: ${task.corSyncStatus}). Abortando.`,
+        );
         return;
       }
 
@@ -1492,7 +1795,9 @@ export const syncEditToCORAction = internalAction({
       // 3. Primero, obtener la task actual de COR para verificación cruzada
       const corTask = await provider.getTask(parseInt(corTaskId));
       if (!corTask) {
-        console.error(`[SyncEdit] ❌ Task COR ${corTaskId} no encontrada. ¿Fue eliminada?`);
+        console.error(
+          `[SyncEdit] ❌ Task COR ${corTaskId} no encontrada. ¿Fue eliminada?`,
+        );
         await ctx.runMutation(internal.data.tasks.updatePublishStatus, {
           taskId: args.taskId,
           corSyncStatus: "error",
@@ -1503,7 +1808,9 @@ export const syncEditToCORAction = internalAction({
 
       // VERIFICACIÓN CRUZADA: la task de COR debe pertenecer al proyecto correcto
       if (corTask.projectId !== corProjectId) {
-        console.error(`[SyncEdit] 🚨 ALERTA DE SEGURIDAD: La task COR ${corTaskId} pertenece al proyecto ${corTask.projectId}, no al esperado ${corProjectId}. ABORTANDO.`);
+        console.error(
+          `[SyncEdit] 🚨 ALERTA DE SEGURIDAD: La task COR ${corTaskId} pertenece al proyecto ${corTask.projectId}, no al esperado ${corProjectId}. ABORTANDO.`,
+        );
         await ctx.runMutation(internal.data.tasks.updatePublishStatus, {
           taskId: args.taskId,
           corSyncStatus: "error",
@@ -1512,7 +1819,9 @@ export const syncEditToCORAction = internalAction({
         return;
       }
 
-      console.log(`[SyncEdit] ✅ Verificación cruzada OK — task COR ${corTaskId} pertenece al proyecto ${corProjectId}`);
+      console.log(
+        `[SyncEdit] ✅ Verificación cruzada OK — task COR ${corTaskId} pertenece al proyecto ${corProjectId}`,
+      );
 
       // ═══════════════════════════════════════════════════
       // CONSTRUIR EL UPDATE (mapeo 1:1)
@@ -1521,36 +1830,58 @@ export const syncEditToCORAction = internalAction({
       const updatePayload: Record<string, unknown> = {};
 
       // Solo sincronizar campos que tienen equivalente en COR
-      const syncableChanges = args.changedFields.filter((f) => COR_SYNCABLE_FIELDS.has(f));
+      const syncableChanges = args.changedFields.filter((f) =>
+        COR_SYNCABLE_FIELDS.has(f),
+      );
 
       if (syncableChanges.length === 0) {
-        console.log("[SyncEdit] ℹ️ No hay campos sincronizables con COR (cambios son solo locales)");
+        console.log(
+          "[SyncEdit] ℹ️ No hay campos sincronizables con COR (cambios son solo locales)",
+        );
       } else {
-        console.log(`[SyncEdit] 📝 Campos a sincronizar: ${syncableChanges.join(", ")}`);
+        console.log(
+          `[SyncEdit] 📝 Campos a sincronizar: ${syncableChanges.join(", ")}`,
+        );
 
-        const strategicPriorityChanged = syncableChanges.includes("strategicPriority");
+        const strategicPriorityChanged =
+          syncableChanges.includes("strategicPriority");
         const shouldSyncStrategicLabel =
           strategicPriorityChanged &&
           !!task.strategicPriority &&
           isStrategicPriority(task.strategicPriority);
 
-        const taskFieldChanges = syncableChanges.filter((f) => f !== "strategicPriority");
+        const taskFieldChanges = syncableChanges.filter(
+          (f) => f !== "strategicPriority",
+        );
 
         // Mapeo directo 1:1
-        if (taskFieldChanges.includes("title")) updatePayload.title = task.title;
-        if (taskFieldChanges.includes("description")) updatePayload.description = task.description || "";
-        if (taskFieldChanges.includes("deadline")) updatePayload.deadline = task.deadline;
-        if (taskFieldChanges.includes("priority")) updatePayload.priority = task.priority;
-        if (taskFieldChanges.includes("status")) updatePayload.status = task.status;
+        if (taskFieldChanges.includes("title"))
+          updatePayload.title = task.title;
+        if (taskFieldChanges.includes("description"))
+          updatePayload.description = task.description || "";
+        if (taskFieldChanges.includes("deadline"))
+          updatePayload.deadline = task.deadline;
+        if (taskFieldChanges.includes("priority"))
+          updatePayload.priority = task.priority;
+        if (taskFieldChanges.includes("status"))
+          updatePayload.status = task.status;
 
         // 4. Actualizar la task en COR
         if (Object.keys(updatePayload).length > 0) {
-          console.log(`[SyncEdit] 🚀 Enviando actualización a COR task ${corTaskId}:`, Object.keys(updatePayload));
+          console.log(
+            `[SyncEdit] 🚀 Enviando actualización a COR task ${corTaskId}:`,
+            Object.keys(updatePayload),
+          );
 
-          const result = await provider.updateTask(parseInt(corTaskId), updatePayload as any);
+          const result = await provider.updateTask(
+            parseInt(corTaskId),
+            updatePayload as any,
+          );
 
           if (!result.success) {
-            console.error(`[SyncEdit] ❌ Error actualizando COR: ${result.error}`);
+            console.error(
+              `[SyncEdit] ❌ Error actualizando COR: ${result.error}`,
+            );
             throw new Error(result.error || "Error desconocido de COR");
           }
         }
@@ -1568,9 +1899,16 @@ export const syncEditToCORAction = internalAction({
 
       // 5. Subir archivos pendientes a COR (no-fatal)
       try {
-        await uploadPendingAttachmentsToCOR(ctx, args.taskId, parseInt(corTaskId));
+        await uploadPendingAttachmentsToCOR(
+          ctx,
+          args.taskId,
+          parseInt(corTaskId),
+        );
       } catch (fileError) {
-        console.error("[SyncEdit] ⚠️ Error subiendo archivos pendientes:", fileError);
+        console.error(
+          "[SyncEdit] ⚠️ Error subiendo archivos pendientes:",
+          fileError,
+        );
       }
 
       // 6. Marcar como synced, actualizar hash y timestamp
@@ -1584,21 +1922,28 @@ export const syncEditToCORAction = internalAction({
         successUpdate.corDescriptionHash = newHash;
         console.log(`[SyncEdit] ✅ Hash actualizado: ${newHash}`);
       }
-      await ctx.runMutation(internal.data.tasks.updatePublishStatus, successUpdate as any);
+      await ctx.runMutation(
+        internal.data.tasks.updatePublishStatus,
+        successUpdate as any,
+      );
 
       console.log(`[SyncEdit] ✅ Sincronización completada exitosamente`);
       console.log("========================================\n");
-
     } catch (error) {
       const errorMsg = formatRetryError(error);
-      console.error(`[SyncEdit] ❌ Error en sincronización (intento ${attempt + 1}):`, errorMsg);
+      console.error(
+        `[SyncEdit] ❌ Error en sincronización (intento ${attempt + 1}):`,
+        errorMsg,
+      );
 
       // Errores 4xx son de validación/cliente — nunca se resuelven reintentando
       const canRetry = !isClientError(error) && shouldRetry(attempt);
 
       if (canRetry) {
         const delay = getRetryDelay(attempt)!;
-        console.log(`[SyncEdit] 🔄 Reintentando en ${delay / 1000}s (intento ${attempt + 2}/${MAX_RETRY_ATTEMPTS})`);
+        console.log(
+          `[SyncEdit] 🔄 Reintentando en ${delay / 1000}s (intento ${attempt + 2}/${MAX_RETRY_ATTEMPTS})`,
+        );
 
         // Marcar como "retrying" con el error actual
         await ctx.runMutation(internal.data.tasks.updatePublishStatus, {
@@ -1612,17 +1957,25 @@ export const syncEditToCORAction = internalAction({
         });
 
         // Programar siguiente intento
-        await ctx.scheduler.runAfter(delay, internal.data.tasks.syncEditToCORAction, {
-          taskId: args.taskId,
-          changedFields: args.changedFields,
-          attempt: attempt + 1,
-        });
+        await ctx.scheduler.runAfter(
+          delay,
+          internal.data.tasks.syncEditToCORAction,
+          {
+            taskId: args.taskId,
+            changedFields: args.changedFields,
+            attempt: attempt + 1,
+          },
+        );
       } else {
         // Error de cliente (4xx) o reintentos agotados → marcar como error definitivo
         if (isClientError(error)) {
-          console.error(`[SyncEdit] 🚫 Error de cliente (4xx) — no se reintenta: ${errorMsg}`);
+          console.error(
+            `[SyncEdit] 🚫 Error de cliente (4xx) — no se reintenta: ${errorMsg}`,
+          );
         } else {
-          console.error(`[SyncEdit] 🚫 Reintentos agotados para task ${args.taskId}`);
+          console.error(
+            `[SyncEdit] 🚫 Reintentos agotados para task ${args.taskId}`,
+          );
         }
         await ctx.runMutation(internal.data.tasks.updatePublishStatus, {
           taskId: args.taskId,
@@ -1653,11 +2006,15 @@ export const updateSyncMetadata = internalMutation({
   },
   handler: async (ctx, args) => {
     const updateData: Record<string, unknown> = {};
-    if (args.corDescriptionHash !== undefined) updateData.corDescriptionHash = args.corDescriptionHash;
-    if (args.corSyncedAt !== undefined) updateData.corSyncedAt = args.corSyncedAt;
-    if (args.lastLocalEditAt !== undefined) updateData.lastLocalEditAt = args.lastLocalEditAt;
-    if (args.corSyncAttempt !== undefined) updateData.corSyncAttempt = args.corSyncAttempt;
-    
+    if (args.corDescriptionHash !== undefined)
+      updateData.corDescriptionHash = args.corDescriptionHash;
+    if (args.corSyncedAt !== undefined)
+      updateData.corSyncedAt = args.corSyncedAt;
+    if (args.lastLocalEditAt !== undefined)
+      updateData.lastLocalEditAt = args.lastLocalEditAt;
+    if (args.corSyncAttempt !== undefined)
+      updateData.corSyncAttempt = args.corSyncAttempt;
+
     if (Object.keys(updateData).length > 0) {
       await ctx.db.patch(args.taskId, updateData as any);
     }
@@ -1681,7 +2038,9 @@ export const retryTaskSync = mutation({
       .withIndex("by_user", (q) => q.eq("userId", userId))
       .unique();
     if (approvedExternalUser) {
-      throw new Error("Los usuarios externos no pueden publicar o sincronizar con COR.");
+      throw new Error(
+        "Los usuarios externos no pueden publicar o sincronizar con COR.",
+      );
     }
 
     const task = await ctx.db.get(args.taskId);
@@ -1690,7 +2049,7 @@ export const retryTaskSync = mutation({
     // Verificar permisos (clientUserAssignments)
     if (!(await hasTaskAccess(ctx, task, userId))) {
       throw new Error(
-        "No tienes permisos para reintentar la sincronización de esta task."
+        "No tienes permisos para reintentar la sincronización de esta task.",
       );
     }
 
@@ -1701,16 +2060,22 @@ export const retryTaskSync = mutation({
 
     // Si la task nunca fue publicada (no tiene corTaskId), reintentar publicación
     if (!task.corTaskId) {
-      console.log(`[retryTaskSync] 🔄 Reintentando PUBLICACIÓN de task ${args.taskId}`);
+      console.log(
+        `[retryTaskSync] 🔄 Reintentando PUBLICACIÓN de task ${args.taskId}`,
+      );
       await ctx.db.patch(args.taskId, {
         corSyncStatus: "syncing",
         corSyncAttempt: 0,
         corSyncError: undefined,
       });
-      await ctx.scheduler.runAfter(0, internal.data.tasks.publishTaskToExternalAction, {
-        taskId: args.taskId,
-        attempt: 0,
-      });
+      await ctx.scheduler.runAfter(
+        0,
+        internal.data.tasks.publishTaskToExternalAction,
+        {
+          taskId: args.taskId,
+          attempt: 0,
+        },
+      );
       return { success: true, message: "Publicación reintentada" };
     }
 
@@ -1723,7 +2088,14 @@ export const retryTaskSync = mutation({
     });
 
     // Sincronizar todos los campos sincronizables
-    const allSyncFields = ["title", "description", "deadline", "priority", "status", "strategicPriority"];
+    const allSyncFields = [
+      "title",
+      "description",
+      "deadline",
+      "priority",
+      "status",
+      "strategicPriority",
+    ];
     await ctx.scheduler.runAfter(0, internal.data.tasks.syncEditToCORAction, {
       taskId: args.taskId,
       changedFields: allSyncFields,
@@ -1739,12 +2111,12 @@ export const retryTaskSync = mutation({
 /**
  * Sube los attachments pendientes (sin corAttachmentId) de una task a COR.
  * Función reutilizable llamada desde publishTaskToExternalAction y syncEditToCORAction.
- * 
+ *
  * Flujo por attachment:
  * 1. Descarga el blob desde Convex storage
  * 2. Sube a COR via provider.uploadTaskAttachment (multipart/form-data)
  * 3. Marca como sincronizado (corAttachmentId + corUrl)
- * 
+ *
  * No lanza excepciones — los errores individuales se logean y se continúa.
  */
 async function uploadPendingAttachmentsToCOR(
@@ -1754,12 +2126,14 @@ async function uploadPendingAttachmentsToCOR(
 ): Promise<void> {
   const pendingAttachments = await ctx.runQuery(
     internal.data.tasks.getPendingAttachments,
-    { taskId: taskId as any }
+    { taskId: taskId as any },
   );
 
   if (pendingAttachments.length === 0) return;
 
-  console.log(`[Attachments] 📎 Subiendo ${pendingAttachments.length} archivos pendientes a COR task ${corTaskId}...`);
+  console.log(
+    `[Attachments] 📎 Subiendo ${pendingAttachments.length} archivos pendientes a COR task ${corTaskId}...`,
+  );
   const provider = getProjectManagementProvider();
   let uploaded = 0;
 
@@ -1768,7 +2142,9 @@ async function uploadPendingAttachmentsToCOR(
       // Descargar blob desde Convex storage
       const blob = await ctx.storage.get(att.storageId as any);
       if (!blob) {
-        console.error(`[Attachments] ⚠️ Blob no encontrado para storageId ${att.storageId}, omitiendo`);
+        console.error(
+          `[Attachments] ⚠️ Blob no encontrado para storageId ${att.storageId}, omitiendo`,
+        );
         continue;
       }
 
@@ -1790,23 +2166,32 @@ async function uploadPendingAttachmentsToCOR(
           corUrl: result.attachment.url,
         });
         uploaded++;
-        console.log(`[Attachments] ✅ ${att.filename} → COR attachment ${result.attachment.id}`);
+        console.log(
+          `[Attachments] ✅ ${att.filename} → COR attachment ${result.attachment.id}`,
+        );
       } else {
-        console.error(`[Attachments] ⚠️ Error subiendo ${att.filename}: ${result.error}`);
+        console.error(
+          `[Attachments] ⚠️ Error subiendo ${att.filename}: ${result.error}`,
+        );
       }
     } catch (fileError) {
-      console.error(`[Attachments] ⚠️ Error con archivo ${att.filename}:`, fileError);
+      console.error(
+        `[Attachments] ⚠️ Error con archivo ${att.filename}:`,
+        fileError,
+      );
     }
   }
 
-  console.log(`[Attachments] 📎 ${uploaded}/${pendingAttachments.length} archivos subidos exitosamente`);
+  console.log(
+    `[Attachments] 📎 ${uploaded}/${pendingAttachments.length} archivos subidos exitosamente`,
+  );
 }
 
 /**
  * Mutation pública que inicia la publicación de una task en el sistema externo.
- * 
+ *
  * Patrón: mutation (feedback inmediato) → scheduler.runAfter(0, action) (trabajo async)
- * 
+ *
  * 1. Valida que la task existe y pertenece al usuario
  * 2. Pone corSyncStatus: "syncing" (feedback inmediato para la UI)
  * 3. Schedula la action que hace el trabajo pesado (crear proyecto + task en COR)
@@ -1844,12 +2229,16 @@ export const startPublishTaskToExternal = mutation({
 
     // Verificar que no está en proceso de sincronización
     if (task.corSyncStatus === "syncing" || task.corSyncStatus === "retrying") {
-      throw new Error("La task ya está en proceso de publicación o sincronización. Espera a que termine.");
+      throw new Error(
+        "La task ya está en proceso de publicación o sincronización. Espera a que termine.",
+      );
     }
 
     // Verificar que la task tiene un cliente asociado
     if (!task.corClientId) {
-      throw new Error("No se puede publicar: no hay un cliente asociado a esta tarea.");
+      throw new Error(
+        "No se puede publicar: no hay un cliente asociado a esta tarea.",
+      );
     }
 
     const descriptionError = validatePublishableDescription(task.description);
@@ -1860,24 +2249,32 @@ export const startPublishTaskToExternal = mutation({
     // Buscar el cliente local por corClientId
     const localClient = await ctx.db
       .query("corClients")
-      .withIndex("by_corClientId", (q) => q.eq("corClientId", task.corClientId!))
+      .withIndex("by_corClientId", (q) =>
+        q.eq("corClientId", task.corClientId!),
+      )
       .unique();
 
     if (!localClient) {
-      throw new Error("No se puede publicar: el cliente no está registrado en el sistema.");
+      throw new Error(
+        "No se puede publicar: el cliente no está registrado en el sistema.",
+      );
     }
 
     // Obtener el usuario directamente por su ID (ya autenticado por getAuthUserId)
     const user = await ctx.db.get(userId);
 
     if (!user) {
-      throw new Error("No se puede publicar: usuario no encontrado en el sistema.");
+      throw new Error(
+        "No se puede publicar: usuario no encontrado en el sistema.",
+      );
     }
 
     // Verificar que el usuario tiene autorización para esta task.
     // Si la task tiene marca, alcanza con permiso a esa marca; si no, exige permiso completo al cliente.
     if (!(await hasTaskAccess(ctx, task, userId))) {
-      throw new Error(`No tienes autorización para publicar esta tarea. Contacta al administrador.`);
+      throw new Error(
+        `No tienes autorización para publicar esta tarea. Contacta al administrador.`,
+      );
     }
 
     // Poner estado "syncing" — la UI lo verá inmediatamente
@@ -1889,9 +2286,13 @@ export const startPublishTaskToExternal = mutation({
 
     // Schedular la action que hace el trabajo pesado
     // runAfter(0, ...) = ejecutar inmediatamente en background
-    await ctx.scheduler.runAfter(0, internal.data.tasks.publishTaskToExternalAction, {
-      taskId: args.taskId,
-    });
+    await ctx.scheduler.runAfter(
+      0,
+      internal.data.tasks.publishTaskToExternalAction,
+      {
+        taskId: args.taskId,
+      },
+    );
 
     return { success: true, message: "Publicación iniciada" };
   },
@@ -1900,7 +2301,7 @@ export const startPublishTaskToExternal = mutation({
 /**
  * Action interna que ejecuta la publicación real en el sistema externo.
  * Se ejecuta en background via scheduler para no bloquear al usuario.
- * 
+ *
  * Flujo:
  * 1. Lee la task de Convex
  * 2. Crea un PROYECTO en COR (POST /projects) asociado al client_id
@@ -1955,11 +2356,14 @@ export const publishTaskToExternalAction = internalAction({
       // 3. Crear PROYECTO en el sistema externo (o reusar si ya fue publicado)
       const clientId = task.corClientId;
       if (!clientId) {
-        console.error("[PublishTask] ❌ No hay corClientId — no se puede crear proyecto");
+        console.error(
+          "[PublishTask] ❌ No hay corClientId — no se puede crear proyecto",
+        );
         await ctx.runMutation(internal.data.tasks.updatePublishStatus, {
           taskId: args.taskId,
           corSyncStatus: "error",
-          corSyncError: "No se encontró un cliente asociado. Busca el cliente antes de publicar.",
+          corSyncError:
+            "No se encontró un cliente asociado. Busca el cliente antes de publicar.",
         });
         return;
       }
@@ -1972,21 +2376,32 @@ export const publishTaskToExternalAction = internalAction({
 
       if (projectId) {
         // Leer el proyecto local
-        const localProject = await ctx.runQuery(internal.data.projects.getProjectInternal, {
-          projectId: projectId as any,
-        });
+        const localProject = await ctx.runQuery(
+          internal.data.projects.getProjectInternal,
+          {
+            projectId: projectId as any,
+          },
+        );
         localProjectDeliverables = localProject?.deliverables;
         localProjectPmId = localProject?.pmId;
 
         if (localProject?.corProjectId) {
           // El proyecto ya fue publicado en COR — reutilizar
           corProjectId = localProject.corProjectId;
-          console.log(`[PublishTask] ℹ️ Reutilizando proyecto COR existente: ${corProjectId}`);
+          console.log(
+            `[PublishTask] ℹ️ Reutilizando proyecto COR existente: ${corProjectId}`,
+          );
         } else {
           // Crear el proyecto en COR
-          console.log(`[PublishTask] 📁 Creando proyecto en COR para cliente ID: ${clientId}...`);
-          const projectName = localProject?.name || `${task.corClientName || "Sin cliente"} - ${task.title}`;
-          const corProjectBrief = localProject?.brief ? `Brief: ${localProject.brief}` : undefined;
+          console.log(
+            `[PublishTask] 📁 Creando proyecto en COR para cliente ID: ${clientId}...`,
+          );
+          const projectName =
+            localProject?.name ||
+            `${task.corClientName || "Sin cliente"} - ${task.title}`;
+          const corProjectBrief = localProject?.brief
+            ? `Brief: ${localProject.brief}`
+            : undefined;
 
           const project = await provider.createProject({
             name: projectName,
@@ -1997,18 +2412,25 @@ export const publishTaskToExternalAction = internalAction({
           });
 
           corProjectId = project.id;
-          console.log(`[PublishTask] ✅ Proyecto creado en COR: ID ${corProjectId}`);
+          console.log(
+            `[PublishTask] ✅ Proyecto creado en COR: ID ${corProjectId}`,
+          );
 
           // Actualizar el proyecto local con el corProjectId
-          await ctx.runMutation(internal.data.projects.updateProjectPublishStatus, {
-            projectId: projectId as any,
-            corProjectId: project.id,
-            corSyncStatus: "synced",
-          });
+          await ctx.runMutation(
+            internal.data.projects.updateProjectPublishStatus,
+            {
+              projectId: projectId as any,
+              corProjectId: project.id,
+              corSyncStatus: "synced",
+            },
+          );
         }
       } else {
         // Fallback: no hay proyecto local, crear directamente en COR (backward compat)
-        console.log(`[PublishTask] 📁 Creando proyecto en COR (sin proyecto local) para cliente ID: ${clientId}...`);
+        console.log(
+          `[PublishTask] 📁 Creando proyecto en COR (sin proyecto local) para cliente ID: ${clientId}...`,
+        );
         const projectName = `${task.corClientName || "Sin cliente"} - ${task.title}`;
 
         const project = await provider.createProject({
@@ -2018,16 +2440,19 @@ export const publishTaskToExternalAction = internalAction({
         });
 
         corProjectId = project.id;
-        console.log(`[PublishTask] ✅ Proyecto creado en COR: ID ${corProjectId}`);
+        console.log(
+          `[PublishTask] ✅ Proyecto creado en COR: ID ${corProjectId}`,
+        );
       }
 
       // 3.5 Guardar campos soportados solo por update (deliverables, pm_id)
       if (
         corProjectId &&
-        (localProjectDeliverables !== undefined || localProjectPmId !== undefined)
+        (localProjectDeliverables !== undefined ||
+          localProjectPmId !== undefined)
       ) {
         console.log(
-          `[PublishTask] 📝 Guardando deliverables/pm_id en proyecto COR ${corProjectId}...`
+          `[PublishTask] 📝 Guardando deliverables/pm_id en proyecto COR ${corProjectId}...`,
         );
 
         const projectUpdate = await provider.updateProject(corProjectId, {
@@ -2038,21 +2463,25 @@ export const publishTaskToExternalAction = internalAction({
         if (!projectUpdate.success) {
           throw new Error(
             projectUpdate.error ||
-              `No se pudo guardar deliverables/pm_id en proyecto COR ${corProjectId}`
+              `No se pudo guardar deliverables/pm_id en proyecto COR ${corProjectId}`,
           );
         }
 
         console.log(
-          `[PublishTask] ✅ Deliverables/pm_id guardados en proyecto COR ${corProjectId}`
+          `[PublishTask] ✅ Deliverables/pm_id guardados en proyecto COR ${corProjectId}`,
         );
       }
 
-      console.log(`[PublishTask] ✅ Proyecto listo: corProjectId=${corProjectId}`);
+      console.log(
+        `[PublishTask] ✅ Proyecto listo: corProjectId=${corProjectId}`,
+      );
 
       // 4. Crear TASK dentro del proyecto
       // Mapeo 1:1: cada campo de Convex va a su campo equivalente en COR
       // description → description, deadline → deadline, priority → priority
-      console.log(`[PublishTask] 📋 Creando task en proyecto ${corProjectId}...`);
+      console.log(
+        `[PublishTask] 📋 Creando task en proyecto ${corProjectId}...`,
+      );
 
       const externalTask = await provider.createTask({
         projectId: corProjectId!,
@@ -2070,7 +2499,10 @@ export const publishTaskToExternalAction = internalAction({
         console.log(
           `[PublishTask] 🏷️ Sincronizando etiqueta estratégica ${strategicPriority} en task COR ${externalTask.id}...`,
         );
-        await syncStrategicPriorityLabelInCOR(externalTask.id, strategicPriority);
+        await syncStrategicPriorityLabelInCOR(
+          externalTask.id,
+          strategicPriority,
+        );
         console.log(
           `[PublishTask] ✅ Etiqueta estratégica ${strategicPriority} aplicada en task COR ${externalTask.id}`,
         );
@@ -2078,7 +2510,7 @@ export const publishTaskToExternalAction = internalAction({
 
       // 5. Actualizar task local con IDs externos y estado "synced"
       const descriptionHash = hashText(task.description || "");
-      
+
       await ctx.runMutation(internal.data.tasks.updatePublishStatus, {
         taskId: args.taskId,
         corSyncStatus: "synced",
@@ -2088,13 +2520,18 @@ export const publishTaskToExternalAction = internalAction({
         corDescriptionHash: descriptionHash,
       });
 
-      console.log(`[PublishTask] ✅ IDs guardados — corTaskId: ${externalTask.id}, corProjectId: ${corProjectId}, clientId: ${clientId}, hash: ${descriptionHash}`);
+      console.log(
+        `[PublishTask] ✅ IDs guardados — corTaskId: ${externalTask.id}, corProjectId: ${corProjectId}, clientId: ${clientId}, hash: ${descriptionHash}`,
+      );
 
       // 6. Subir archivos pendientes a COR (no-fatal: la task ya está publicada)
       try {
         await uploadPendingAttachmentsToCOR(ctx, args.taskId, externalTask.id);
       } catch (fileError) {
-        console.error("[PublishTask] ⚠️ Error subiendo archivos (task ya publicada):", fileError);
+        console.error(
+          "[PublishTask] ⚠️ Error subiendo archivos (task ya publicada):",
+          fileError,
+        );
       }
 
       console.log("\n========================================");
@@ -2102,17 +2539,21 @@ export const publishTaskToExternalAction = internalAction({
       console.log(`[PublishTask] Proyecto: ${corProjectId}`);
       console.log(`[PublishTask] Task COR: ${externalTask.id}`);
       console.log("========================================\n");
-
     } catch (error) {
       const errorMsg = formatRetryError(error);
-      console.error(`[PublishTask] ❌ Error publicando (intento ${attempt + 1}):`, errorMsg);
-      
+      console.error(
+        `[PublishTask] ❌ Error publicando (intento ${attempt + 1}):`,
+        errorMsg,
+      );
+
       // Errores 4xx son de validación/cliente — nunca se resuelven reintentando
       const canRetry = !isClientError(error) && shouldRetry(attempt);
 
       if (canRetry) {
         const delay = getRetryDelay(attempt)!;
-        console.log(`[PublishTask] 🔄 Reintentando en ${delay / 1000}s (intento ${attempt + 2}/${MAX_RETRY_ATTEMPTS})`);
+        console.log(
+          `[PublishTask] 🔄 Reintentando en ${delay / 1000}s (intento ${attempt + 2}/${MAX_RETRY_ATTEMPTS})`,
+        );
 
         await ctx.runMutation(internal.data.tasks.updatePublishStatus, {
           taskId: args.taskId,
@@ -2124,15 +2565,23 @@ export const publishTaskToExternalAction = internalAction({
           corSyncAttempt: attempt + 1,
         });
 
-        await ctx.scheduler.runAfter(delay, internal.data.tasks.publishTaskToExternalAction, {
-          taskId: args.taskId,
-          attempt: attempt + 1,
-        });
+        await ctx.scheduler.runAfter(
+          delay,
+          internal.data.tasks.publishTaskToExternalAction,
+          {
+            taskId: args.taskId,
+            attempt: attempt + 1,
+          },
+        );
       } else {
         if (isClientError(error)) {
-          console.error(`[PublishTask] 🚫 Error de cliente (4xx) — no se reintenta: ${errorMsg}`);
+          console.error(
+            `[PublishTask] 🚫 Error de cliente (4xx) — no se reintenta: ${errorMsg}`,
+          );
         } else {
-          console.error(`[PublishTask] 🚫 Reintentos agotados para task ${args.taskId}`);
+          console.error(
+            `[PublishTask] 🚫 Reintentos agotados para task ${args.taskId}`,
+          );
         }
         await ctx.runMutation(internal.data.tasks.updatePublishStatus, {
           taskId: args.taskId,
@@ -2169,21 +2618,27 @@ export const updatePublishStatus = internalMutation({
     const updateData: Record<string, unknown> = {
       corSyncStatus: args.corSyncStatus,
     };
-    
-    if (args.corSyncError !== undefined) updateData.corSyncError = args.corSyncError;
+
+    if (args.corSyncError !== undefined)
+      updateData.corSyncError = args.corSyncError;
     if (args.corTaskId !== undefined) updateData.corTaskId = args.corTaskId;
-    if (args.corProjectId !== undefined) updateData.corProjectId = args.corProjectId;
-    if (args.corSyncedAt !== undefined) updateData.corSyncedAt = args.corSyncedAt;
-    if (args.corDescriptionHash !== undefined) updateData.corDescriptionHash = args.corDescriptionHash;
-    
+    if (args.corProjectId !== undefined)
+      updateData.corProjectId = args.corProjectId;
+    if (args.corSyncedAt !== undefined)
+      updateData.corSyncedAt = args.corSyncedAt;
+    if (args.corDescriptionHash !== undefined)
+      updateData.corDescriptionHash = args.corDescriptionHash;
+
     // Auto-cleanup: cuando se marca "synced", limpiar error y resetear attempt
     if (args.corSyncStatus === "synced") {
       updateData.corSyncError = undefined;
       updateData.corSyncAttempt = 0;
     }
-    
+
     await ctx.db.patch(args.taskId, updateData as any);
-    console.log(`[UpdatePublishStatus] Task ${args.taskId} → ${args.corSyncStatus}`);
+    console.log(
+      `[UpdatePublishStatus] Task ${args.taskId} → ${args.corSyncStatus}`,
+    );
   },
 });
 
@@ -2199,14 +2654,16 @@ export const updateCORSyncStatus = internalMutation({
     syncError: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    console.log(`[Tasks] Actualizando sync status de task ${args.taskId} a ${args.syncStatus}`);
-    
+    console.log(
+      `[Tasks] Actualizando sync status de task ${args.taskId} a ${args.syncStatus}`,
+    );
+
     await ctx.db.patch(args.taskId as any, {
       corTaskId: args.corTaskId ? String(args.corTaskId) : undefined,
       corSyncStatus: args.syncStatus,
       corSyncError: args.syncError,
     });
-    
+
     return args.taskId;
   },
 });

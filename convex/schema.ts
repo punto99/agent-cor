@@ -82,6 +82,7 @@ export default defineSchema({
     createdBy: v.optional(v.string()),
     projectId: v.optional(v.id("projects")), // Referencia al proyecto LOCAL en Convex
     source: v.optional(v.union(v.literal("internal"), v.literal("external"))),
+    clientId: v.optional(v.id("corClients")), // Referencia al cliente LOCAL
     clientBrandId: v.optional(v.id("clientBrands")),
     brandId: v.optional(v.number()), // Marca en COR (brand_id)
     brandName: v.optional(v.string()),
@@ -112,7 +113,20 @@ export default defineSchema({
     .index("by_createdBy", ["createdBy"])
     .index("by_projectId", ["projectId"])
     .index("by_source", ["source"])
+    .index("by_clientId", ["clientId"])
+    .index("by_clientId_source_status", ["clientId", "source", "status"])
+    .index("by_createdBy_clientId_status", ["createdBy", "clientId", "status"])
     .index("by_clientBrandId", ["clientBrandId"])
+    .index("by_createdBy_clientBrandId_status", [
+      "createdBy",
+      "clientBrandId",
+      "status",
+    ])
+    .index("by_clientBrandId_source_status", [
+      "clientBrandId",
+      "source",
+      "status",
+    ])
     .index("by_corClientId", ["corClientId"])
     .index("by_corTaskId", ["corTaskId"])
     .index("by_corSyncStatus", ["corSyncStatus"])

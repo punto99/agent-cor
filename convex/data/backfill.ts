@@ -57,9 +57,14 @@ export const backfillCorUsers = internalAction({
     try {
       // 1. Listar todos los usuarios de Convex
       console.log("[Backfill] 📋 Obteniendo usuarios de Convex...");
-      const convexUsers = await ctx.runQuery(internal.data.corUsers.listAllConvexUsers, {});
+      const convexUsers = await ctx.runQuery(
+        internal.data.corUsers.listAllConvexUsers,
+        {},
+      );
       stats.totalConvexUsers = convexUsers.length;
-      console.log(`[Backfill] ✅ ${convexUsers.length} usuarios encontrados en Convex`);
+      console.log(
+        `[Backfill] ✅ ${convexUsers.length} usuarios encontrados en Convex`,
+      );
 
       if (convexUsers.length === 0) {
         console.log("[Backfill] ⚠️ No hay usuarios en Convex. Nada que hacer.");
@@ -71,30 +76,40 @@ export const backfillCorUsers = internalAction({
       const provider = getProjectManagementProvider();
 
       if (provider.name === "noop") {
-        console.log("[Backfill] ❌ Provider es noop — no se puede hacer backfill sin integración COR.");
+        console.log(
+          "[Backfill] ❌ Provider es noop — no se puede hacer backfill sin integración COR.",
+        );
         return { success: false, error: "Provider es noop", stats };
       }
 
       const corUsers = await provider.listAllUsers();
       stats.totalCORUsers = corUsers.length;
-      console.log(`[Backfill] ✅ ${corUsers.length} usuarios encontrados en COR`);
+      console.log(
+        `[Backfill] ✅ ${corUsers.length} usuarios encontrados en COR`,
+      );
 
       if (corUsers.length === 0) {
-        console.log("[Backfill] ⚠️ No se obtuvieron usuarios de COR. Verifica las credenciales.");
+        console.log(
+          "[Backfill] ⚠️ No se obtuvieron usuarios de COR. Verifica las credenciales.",
+        );
         return { success: false, error: "COR retornó 0 usuarios", stats };
       }
 
       // 3. Crear mapa de email → COR user para búsqueda O(1)
-      const corUsersByEmail = new Map<string, typeof corUsers[0]>();
+      const corUsersByEmail = new Map<string, (typeof corUsers)[0]>();
       for (const cu of corUsers) {
         if (cu.email) {
           corUsersByEmail.set(cu.email.toLowerCase(), cu);
         }
       }
-      console.log(`[Backfill] 📊 ${corUsersByEmail.size} usuarios de COR con email indexados`);
+      console.log(
+        `[Backfill] 📊 ${corUsersByEmail.size} usuarios de COR con email indexados`,
+      );
 
       // 4. Verificar cuáles ya tienen corUser
-      console.log("[Backfill] 🔍 Verificando cuáles usuarios ya tienen corUser...");
+      console.log(
+        "[Backfill] 🔍 Verificando cuáles usuarios ya tienen corUser...",
+      );
 
       // 5. Cruzar usuarios
       console.log("[Backfill] 🔄 Cruzando usuarios Convex ↔ COR...\n");
@@ -104,7 +119,9 @@ export const backfillCorUsers = internalAction({
         const name = convexUser.name || "(sin nombre)";
 
         if (!email) {
-          console.log(`[Backfill] ⚠️ SKIP: ${name} (ID: ${convexUser._id}) — sin email`);
+          console.log(
+            `[Backfill] ⚠️ SKIP: ${name} (ID: ${convexUser._id}) — sin email`,
+          );
           stats.skippedNoEmail++;
           continue;
         }
@@ -112,11 +129,13 @@ export const backfillCorUsers = internalAction({
         // Verificar si ya tiene corUser
         const existingCorUser = await ctx.runQuery(
           internal.data.corUsers.getCorUserByUserId,
-          { userId: convexUser._id }
+          { userId: convexUser._id },
         );
 
         if (existingCorUser) {
-          console.log(`[Backfill] ℹ️ YA EXISTE: ${name} (${email}) → COR ID: ${existingCorUser.corUserId}`);
+          console.log(
+            `[Backfill] ℹ️ YA EXISTE: ${name} (${email}) → COR ID: ${existingCorUser.corUserId}`,
+          );
           stats.alreadyExisted++;
           stats.matched++;
           continue;
@@ -126,7 +145,9 @@ export const backfillCorUsers = internalAction({
         const corMatch = corUsersByEmail.get(email.toLowerCase());
 
         if (!corMatch) {
-          console.log(`[Backfill] ⚠️ SIN MATCH: ${name} (${email}) — no encontrado en COR`);
+          console.log(
+            `[Backfill] ⚠️ SIN MATCH: ${name} (${email}) — no encontrado en COR`,
+          );
           stats.noMatch++;
           continue;
         }
@@ -144,14 +165,14 @@ export const backfillCorUsers = internalAction({
           });
 
           console.log(
-            `[Backfill] ✅ CREADO: ${name} (${email}) → COR: ${corMatch.firstName} ${corMatch.lastName} (ID: ${corMatch.id}, Rol: ${corMatch.roleId})`
+            `[Backfill] ✅ CREADO: ${name} (${email}) → COR: ${corMatch.firstName} ${corMatch.lastName} (ID: ${corMatch.id}, Rol: ${corMatch.roleId})`,
           );
           stats.matched++;
           stats.created++;
         } catch (error) {
           console.error(
             `[Backfill] ❌ ERROR upsert para ${name} (${email}):`,
-            error instanceof Error ? error.message : String(error)
+            error instanceof Error ? error.message : String(error),
           );
           stats.errors++;
         }
@@ -219,16 +240,22 @@ export const backfillCorClients = internalAction({
       const provider = getProjectManagementProvider();
 
       if (provider.name === "noop") {
-        console.log("[Backfill] ❌ Provider es noop — no se puede hacer backfill sin integración COR.");
+        console.log(
+          "[Backfill] ❌ Provider es noop — no se puede hacer backfill sin integración COR.",
+        );
         return { success: false, error: "Provider es noop", stats };
       }
 
       const corClients = await provider.listAllClients();
       stats.totalCORClients = corClients.length;
-      console.log(`[Backfill] ✅ ${corClients.length} clientes obtenidos de COR`);
+      console.log(
+        `[Backfill] ✅ ${corClients.length} clientes obtenidos de COR`,
+      );
 
       if (corClients.length === 0) {
-        console.log("[Backfill] ⚠️ COR retornó 0 clientes. Verifica las credenciales.");
+        console.log(
+          "[Backfill] ⚠️ COR retornó 0 clientes. Verifica las credenciales.",
+        );
         return { success: false, error: "COR retornó 0 clientes", stats };
       }
 
@@ -240,7 +267,7 @@ export const backfillCorClients = internalAction({
           // Verificar si ya existe para loguear create vs update
           const existing = await ctx.runQuery(
             internal.data.corClients.getClientByCorId,
-            { corClientId: client.id }
+            { corClientId: client.id },
           );
 
           await ctx.runMutation(internal.data.corClients.upsertClient, {
@@ -256,10 +283,14 @@ export const backfillCorClients = internalAction({
           });
 
           if (existing) {
-            console.log(`[Backfill] 🔄 ACTUALIZADO: ${client.name} (COR ID: ${client.id})`);
+            console.log(
+              `[Backfill] 🔄 ACTUALIZADO: ${client.name} (COR ID: ${client.id})`,
+            );
             stats.updated++;
           } else {
-            console.log(`[Backfill] ✅ CREADO: ${client.name} (COR ID: ${client.id})`);
+            console.log(
+              `[Backfill] ✅ CREADO: ${client.name} (COR ID: ${client.id})`,
+            );
             stats.created++;
           }
         } catch (error) {
@@ -331,21 +362,25 @@ export const syncClientBrandsFromCOR = internalAction({
       const provider = getProjectManagementProvider();
 
       if (provider.name === "noop") {
-        console.log("[ClientBrands] ❌ Provider es noop — no se puede sincronizar marcas sin integración COR.");
+        console.log(
+          "[ClientBrands] ❌ Provider es noop — no se puede sincronizar marcas sin integración COR.",
+        );
         return { success: false, error: "Provider es noop", stats };
       }
 
       const localClient: any = await ctx.runQuery(
         internal.data.clientBrands.getLocalClientByCorId,
-        { corClientId: args.corClientId }
+        { corClientId: args.corClientId },
       );
 
       if (!localClient) {
         console.log(
-          `[ClientBrands] ⚠️ No existe corClients para COR client_id ${args.corClientId}. Se guardarán las marcas sin clientId local.`
+          `[ClientBrands] ⚠️ No existe corClients para COR client_id ${args.corClientId}. Se guardarán las marcas sin clientId local.`,
         );
       } else {
-        console.log(`[ClientBrands] Cliente local: ${localClient.name} (${localClient._id})`);
+        console.log(
+          `[ClientBrands] Cliente local: ${localClient.name} (${localClient._id})`,
+        );
       }
 
       console.log("[ClientBrands] 📋 Obteniendo todas las marcas de COR...");
@@ -353,12 +388,12 @@ export const syncClientBrandsFromCOR = internalAction({
       stats.totalCORBrands = allBrands.length;
 
       const clientBrands = allBrands.filter(
-        (brand) => brand.clientId === args.corClientId
+        (brand) => brand.clientId === args.corClientId,
       );
       stats.matchedForClient = clientBrands.length;
 
       console.log(
-        `[ClientBrands] ✅ ${clientBrands.length} marcas encontradas para cliente ${args.corClientId} de ${allBrands.length} marcas totales`
+        `[ClientBrands] ✅ ${clientBrands.length} marcas encontradas para cliente ${args.corClientId} de ${allBrands.length} marcas totales`,
       );
 
       for (const brand of clientBrands) {
@@ -370,15 +405,19 @@ export const syncClientBrandsFromCOR = internalAction({
               corClientId: args.corClientId,
               corBrandId: brand.id,
               name: brand.name,
-            }
+            },
           );
 
           if (result.created) {
             stats.created++;
-            console.log(`[ClientBrands] ✅ CREADA: ${brand.name} (brand_id: ${brand.id})`);
+            console.log(
+              `[ClientBrands] ✅ CREADA: ${brand.name} (brand_id: ${brand.id})`,
+            );
           } else {
             stats.updated++;
-            console.log(`[ClientBrands] 🔄 ACTUALIZADA: ${brand.name} (brand_id: ${brand.id})`);
+            console.log(
+              `[ClientBrands] 🔄 ACTUALIZADA: ${brand.name} (brand_id: ${brand.id})`,
+            );
           }
         } catch (error) {
           const errorMsg = `${brand.name} (brand_id: ${brand.id}): ${
@@ -411,12 +450,139 @@ export const syncClientBrandsFromCOR = internalAction({
         stats,
       };
     } catch (error) {
-      console.error("[ClientBrands] ❌ ERROR FATAL en syncClientBrandsFromCOR:", error);
+      console.error(
+        "[ClientBrands] ❌ ERROR FATAL en syncClientBrandsFromCOR:",
+        error,
+      );
       return {
         success: false,
         error: error instanceof Error ? error.message : String(error),
         stats,
       };
     }
+  },
+});
+
+// ==================== 4. BACKFILL TASK CLIENT IDS ====================
+
+/**
+ * Agrega tasks.clientId a tasks existentes.
+ *
+ * Resolución por task:
+ *   1. clientBrandId -> clientBrands.clientId
+ *   2. projectId -> projects.clientId
+ *   3. corClientId -> corClients.by_corClientId
+ *   4. corClientName -> match normalizado con corClients.name
+ *
+ * Ejecutar desde:
+ * Dashboard de Convex → Functions → data/backfill:backfillTaskClientIds → Run
+ */
+export const backfillTaskClientIds = internalAction({
+  args: {
+    limit: v.optional(v.number()),
+    dryRun: v.optional(v.boolean()),
+  },
+  handler: async (ctx, args) => {
+    console.log("\n" + "=".repeat(60));
+    console.log("[BackfillTaskClientIds] 🚀 INICIO");
+    console.log(
+      `[BackfillTaskClientIds] dryRun=${args.dryRun === true}, limit=${args.limit ?? 500}`,
+    );
+    console.log("=".repeat(60));
+
+    const stats = {
+      reviewed: 0,
+      updated: 0,
+      wouldUpdate: 0,
+      alreadySet: 0,
+      unresolved: 0,
+      missing: 0,
+      errors: 0,
+      byReason: {} as Record<string, number>,
+      unresolvedTasks: [] as Array<{
+        taskId: string;
+        title: string;
+        corClientId?: number;
+        corClientName?: string;
+      }>,
+      errorDetails: [] as string[],
+    };
+
+    const tasks = await ctx.runQuery(
+      internal.data.tasks.listTasksForClientIdBackfill,
+      {
+        limit: args.limit,
+      },
+    );
+
+    stats.reviewed = tasks.length;
+
+    for (const task of tasks) {
+      try {
+        const result = await ctx.runMutation(
+          internal.data.tasks.backfillTaskClientId,
+          {
+            taskId: task._id,
+            dryRun: args.dryRun,
+          },
+        );
+
+        if (result.status === "updated") stats.updated++;
+        if (result.status === "would_update") stats.wouldUpdate++;
+        if (result.status === "already_set") stats.alreadySet++;
+        if (result.status === "missing") stats.missing++;
+
+        if (
+          result.status === "updated" ||
+          result.status === "would_update" ||
+          result.status === "already_set"
+        ) {
+          const reason = result.reason ?? "unknown";
+          stats.byReason[reason] = (stats.byReason[reason] ?? 0) + 1;
+        }
+
+        if (result.status === "unresolved") {
+          stats.unresolved++;
+          stats.unresolvedTasks.push({
+            taskId: String(result.taskId),
+            title: result.title,
+            corClientId: result.corClientId,
+            corClientName: result.corClientName,
+          });
+        }
+      } catch (error) {
+        const errorMsg = `${task._id}: ${
+          error instanceof Error ? error.message : String(error)
+        }`;
+        stats.errors++;
+        stats.errorDetails.push(errorMsg);
+        console.error(`[BackfillTaskClientIds] ❌ ${errorMsg}`);
+      }
+    }
+
+    console.log("[BackfillTaskClientIds] 📊 RESUMEN:");
+    console.log(`  Revisadas:       ${stats.reviewed}`);
+    console.log(`  Actualizadas:    ${stats.updated}`);
+    console.log(`  Would update:    ${stats.wouldUpdate}`);
+    console.log(`  Ya tenían:       ${stats.alreadySet}`);
+    console.log(`  Sin resolver:    ${stats.unresolved}`);
+    console.log(`  Missing:         ${stats.missing}`);
+    console.log(`  Errores:         ${stats.errors}`);
+    console.log(`  Por razón:       ${JSON.stringify(stats.byReason)}`);
+    if (stats.unresolvedTasks.length > 0) {
+      console.log("  Sin resolver:");
+      for (const unresolved of stats.unresolvedTasks) {
+        console.log(
+          `    - ${unresolved.taskId} | ${unresolved.title} | corClientId=${unresolved.corClientId} | corClientName=${unresolved.corClientName}`,
+        );
+      }
+    }
+    console.log("=".repeat(60) + "\n");
+
+    return {
+      success: stats.errors === 0,
+      dryRun: args.dryRun === true,
+      stats,
+    };
   },
 });

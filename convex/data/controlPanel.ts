@@ -19,6 +19,7 @@ export const listMyClientProjects = query({
     if (!userId) return [];
     if (await isExternalUser(ctx, userId)) return [];
 
+    const userIdStr = String(userId);
     const assignments = await ctx.db
       .query("clientUserAssignments")
       .withIndex("by_user", (q) => q.eq("userId", userId))
@@ -61,41 +62,55 @@ export const listMyClientProjects = query({
     }
 
     const tasksById = new Map<string, any>();
-    const userTasks = await ctx.db
-      .query("tasks")
-      .withIndex("by_createdBy", (q) => q.eq("createdBy", String(userId)))
-      .order("desc")
-      .collect();
-
-    for (const task of userTasks) tasksById.set(String(task._id), task);
 
     for (const clientId of fullClientIds) {
-      const client = clientsById.get(clientId);
-      if (!client) continue;
-
-      const clientTasks = await ctx.db
+      const ownClientTasksQuery = ctx.db
         .query("tasks")
-        .withIndex("by_corClientId", (q) =>
-          q.eq("corClientId", client.corClientId),
-        )
-        .collect();
+        .withIndex("by_createdBy_clientId_status", (q) => {
+          const byClient = q
+            .eq("createdBy", userIdStr)
+            .eq("clientId", clientId as any);
+          return args.status ? byClient.eq("status", args.status) : byClient;
+        });
+      const ownClientTasks = await ownClientTasksQuery.collect();
+      for (const task of ownClientTasks) tasksById.set(String(task._id), task);
 
-      for (const task of clientTasks) {
-        if (task.source === "external") tasksById.set(String(task._id), task);
-      }
+      const externalClientTasksQuery = ctx.db
+        .query("tasks")
+        .withIndex("by_clientId_source_status", (q) => {
+          const bySource = q
+            .eq("clientId", clientId as any)
+            .eq("source", "external");
+          return args.status ? bySource.eq("status", args.status) : bySource;
+        });
+      const externalClientTasks = await externalClientTasksQuery.collect();
+      for (const task of externalClientTasks)
+        tasksById.set(String(task._id), task);
     }
 
     for (const brandId of brandIds) {
-      const brandTasks = await ctx.db
+      const ownBrandTasksQuery = ctx.db
         .query("tasks")
-        .withIndex("by_clientBrandId", (q) =>
-          q.eq("clientBrandId", brandId as any),
-        )
-        .collect();
+        .withIndex("by_createdBy_clientBrandId_status", (q) => {
+          const byBrand = q
+            .eq("createdBy", userIdStr)
+            .eq("clientBrandId", brandId as any);
+          return args.status ? byBrand.eq("status", args.status) : byBrand;
+        });
+      const ownBrandTasks = await ownBrandTasksQuery.collect();
+      for (const task of ownBrandTasks) tasksById.set(String(task._id), task);
 
-      for (const task of brandTasks) {
-        if (task.source === "external") tasksById.set(String(task._id), task);
-      }
+      const externalBrandTasksQuery = ctx.db
+        .query("tasks")
+        .withIndex("by_clientBrandId_source_status", (q) => {
+          const bySource = q
+            .eq("clientBrandId", brandId as any)
+            .eq("source", "external");
+          return args.status ? bySource.eq("status", args.status) : bySource;
+        });
+      const externalBrandTasks = await externalBrandTasksQuery.collect();
+      for (const task of externalBrandTasks)
+        tasksById.set(String(task._id), task);
     }
 
     const tasksByClient = new Map<string, any[]>();
@@ -103,11 +118,10 @@ export const listMyClientProjects = query({
 
     for (const task of tasksById.values()) {
       if (task.convexStatus === "deleted") continue;
-      if (args.status && task.status !== args.status) continue;
-      if (task.source !== "external" && task.createdBy !== String(userId))
-        continue;
+      if (task.source !== "external" && task.createdBy !== userIdStr) continue;
 
-      let clientId: string | null = null;
+      const clientId = task.clientId ? String(task.clientId) : null;
+      if (!clientId || !clientsById.has(clientId)) continue;
 
       if (task.clientBrandId) {
         const brand = brandsById.get(String(task.clientBrandId));
@@ -117,19 +131,9 @@ export const listMyClientProjects = query({
           brandIds.has(String(task.clientBrandId)) ||
           fullClientIds.has(String(brand.clientId));
         if (!hasBrandAccess) continue;
-
-        clientId = String(brand.clientId);
-      } else if (task.corClientId !== undefined) {
-        const corClientId = task.corClientId;
-        const client = await ctx.db
-          .query("corClients")
-          .withIndex("by_corClientId", (q) => q.eq("corClientId", corClientId))
-          .unique();
-        if (!client || !fullClientIds.has(String(client._id))) continue;
-        clientId = String(client._id);
+      } else if (!fullClientIds.has(clientId)) {
+        continue;
       }
-
-      if (!clientId || !clientsById.has(clientId)) continue;
 
       if (!tasksByClient.has(clientId)) tasksByClient.set(clientId, []);
       tasksByClient.get(clientId)!.push(task);

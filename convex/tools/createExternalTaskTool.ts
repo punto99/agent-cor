@@ -32,19 +32,41 @@ export const createExternalTaskTool = createTool({
   SOLO usar esta herramienta cuando el cliente haya confirmado explícitamente que el resumen está correcto.
   No publica en COR. Para usuarios externos, el sistema también agenda la creación de una card en Trello.`,
   args: z.object({
-    title: z.string().describe("Título breve y descriptivo del requerimiento, sin prefijo de marca."),
+    title: z
+      .string()
+      .describe(
+        "Título breve y descriptivo del requerimiento, sin prefijo de marca.",
+      ),
     requestType: z.string().describe("Tipo de requerimiento - OBLIGATORIO"),
-    clientBrandId: z.string().describe("ID local de clientBrands validado con validateExternalUserForBrand - OBLIGATORIO"),
+    clientBrandId: z
+      .string()
+      .describe(
+        "ID local de clientBrands validado con validateExternalUserForBrand - OBLIGATORIO",
+      ),
     brand: z.string().describe("Marca validada - OBLIGATORIO"),
-    deadline: z.string().describe("Fecha límite - OBLIGATORIO (formato YYYY-MM-DD)"),
+    deadline: z
+      .string()
+      .describe("Fecha límite - OBLIGATORIO (formato YYYY-MM-DD)"),
     deliverables: z.string().describe("Entregables concretos - OBLIGATORIO"),
-    objective: z.string().optional().describe("Objetivo principal del proyecto"),
+    objective: z
+      .string()
+      .optional()
+      .describe("Objetivo principal del proyecto"),
     keyMessage: z.string().optional().describe("Mensaje clave a comunicar"),
     kpis: z.string().optional().describe("KPIs o métricas de éxito"),
     budget: z.string().optional().describe("Presupuesto disponible"),
-    approvers: z.string().optional().describe("Personas que deben aprobar este requerimiento"),
-    priority: z.number().optional().describe("Prioridad numérica: 0=Baja, 1=Media, 2=Alta, 3=Urgente."),
-    estimatedTime: z.number().optional().describe("Horas totales estimadas para completar el requerimiento."),
+    approvers: z
+      .string()
+      .optional()
+      .describe("Personas que deben aprobar este requerimiento"),
+    priority: z
+      .number()
+      .optional()
+      .describe("Prioridad numérica: 0=Baja, 1=Media, 2=Alta, 3=Urgente."),
+    estimatedTime: z
+      .number()
+      .optional()
+      .describe("Horas totales estimadas para completar el requerimiento."),
   }),
   handler: async (ctx, args): Promise<string> => {
     console.log("\n========================================");
@@ -68,10 +90,13 @@ export const createExternalTaskTool = createTool({
       return `No se puede crear el requerimiento sin una marca validada. Usa primero "validateExternalUserForBrand".`;
     }
 
-    const preparation = await ctx.runQuery(internal.data.tasks.validateAndPrepareExternalTask, {
-      threadId,
-      clientBrandId: args.clientBrandId as any,
-    });
+    const preparation = await ctx.runQuery(
+      internal.data.tasks.validateAndPrepareExternalTask,
+      {
+        threadId,
+        clientBrandId: args.clientBrandId as any,
+      },
+    );
 
     if (!preparation.ok) {
       return preparation.error;
@@ -103,7 +128,10 @@ export const createExternalTaskTool = createTool({
         if (msgAny.fileIds && Array.isArray(msgAny.fileIds)) {
           for (const fileId of msgAny.fileIds) {
             try {
-              const fileInfo = await ctx.runQuery(internal.data.tasks.getFileInfoInternal, { fileId });
+              const fileInfo = await ctx.runQuery(
+                internal.data.tasks.getFileInfoInternal,
+                { fileId },
+              );
               if (fileInfo?.url) fileUrls.push(fileInfo.url);
             } catch {
               // Ignorar archivos que no se puedan resolver.
@@ -112,7 +140,10 @@ export const createExternalTaskTool = createTool({
         }
       }
     } catch (error) {
-      console.log("[CreateExternalTask] No se pudieron obtener URLs de archivos:", error);
+      console.log(
+        "[CreateExternalTask] No se pudieron obtener URLs de archivos:",
+        error,
+      );
     }
 
     let result: { projectId: string; taskId: string };
@@ -136,6 +167,7 @@ export const createExternalTaskTool = createTool({
         taskPriority: args.priority ?? 1,
         taskStatus: "nueva",
         taskCreatedBy: preparation.userId,
+        taskClientId: preparation.localClientId as any,
         taskCorClientId: preparation.corClientId,
         taskCorClientName: preparation.corClientName,
         taskSource: "external",
@@ -151,36 +183,51 @@ export const createExternalTaskTool = createTool({
     }
 
     try {
-      await ctx.runMutation(internal.data.tasks.schedulePriorityClassification, {
-        taskId: result.taskId as any,
-        title: args.title,
-        requestType: args.requestType,
-        brand: preparation.brandName,
-        objective: args.objective,
-        keyMessage: args.keyMessage,
-        kpis: args.kpis,
-        deadline: args.deadline,
-        budget: args.budget,
-        approvers: args.approvers,
-      });
+      await ctx.runMutation(
+        internal.data.tasks.schedulePriorityClassification,
+        {
+          taskId: result.taskId as any,
+          title: args.title,
+          requestType: args.requestType,
+          brand: preparation.brandName,
+          objective: args.objective,
+          keyMessage: args.keyMessage,
+          kpis: args.kpis,
+          deadline: args.deadline,
+          budget: args.budget,
+          approvers: args.approvers,
+        },
+      );
     } catch (error) {
-      console.log("[CreateExternalTask] No se pudo programar clasificación de prioridad:", error);
+      console.log(
+        "[CreateExternalTask] No se pudo programar clasificación de prioridad:",
+        error,
+      );
     }
 
     try {
       await associateFilesHelper(ctx, result.taskId, threadId);
     } catch (error) {
-      console.log("[CreateExternalTask] No se pudieron asociar archivos:", error);
+      console.log(
+        "[CreateExternalTask] No se pudieron asociar archivos:",
+        error,
+      );
     }
 
     try {
-      await ctx.runMutation(internal.data.trello.scheduleCreateCardForExternalTask, {
-        taskId: result.taskId as any,
-        requestType: args.requestType,
-        deliverablesCount,
-      });
+      await ctx.runMutation(
+        internal.data.trello.scheduleCreateCardForExternalTask,
+        {
+          taskId: result.taskId as any,
+          requestType: args.requestType,
+          deliverablesCount,
+        },
+      );
     } catch (error) {
-      console.log("[CreateExternalTask] No se pudo programar creación de card en Trello:", error);
+      console.log(
+        "[CreateExternalTask] No se pudo programar creación de card en Trello:",
+        error,
+      );
     }
 
     return `Listo, el requerimiento quedó guardado para revisión del equipo.
