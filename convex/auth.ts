@@ -29,12 +29,12 @@ export const { auth, signIn, signOut, store, isAuthenticated } = convexAuth({
           token,
           expires,
         }: { identifier: string; token: string; expires: Date },
-        ctx: any
+        ctx: any,
       ) => {
         const email = normalizeEmail(identifier);
         const isApproved = await ctx.runQuery(
           internal.data.approvedExternalUsers.isApprovedExternalEmail,
-          { email }
+          { email },
         );
 
         if (!isApproved) {
@@ -46,9 +46,7 @@ export const { auth, signIn, signOut, store, isAuthenticated } = convexAuth({
           throw new Error("RESEND_API_KEY no está configurada en Convex.");
         }
 
-        const from =
-          process.env.RESEND_FROM_EMAIL ??
-          "digital@pto99.com";
+        const from = process.env.RESEND_FROM_EMAIL ?? "digital@pto99.com";
         const response = await fetch("https://api.resend.com/emails", {
           method: "POST",
           headers: {
@@ -73,36 +71,66 @@ export const { auth, signIn, signOut, store, isAuthenticated } = convexAuth({
 
         if (!response.ok) {
           const body = await response.text();
-          throw new Error(`Resend no pudo enviar el código: ${response.status} ${body}`);
+          throw new Error(
+            `Resend no pudo enviar el código: ${response.status} ${body}`,
+          );
         }
       }) as any,
     }),
   ],
   callbacks: {
-    afterUserCreatedOrUpdated: async (ctx, { userId, existingUserId, type, provider, profile }) => {
+    afterUserCreatedOrUpdated: async (
+      ctx,
+      { userId, existingUserId, type, provider, profile },
+    ) => {
       if (
         provider.id === EXTERNAL_EMAIL_OTP_PROVIDER_ID &&
         type === "verification" &&
         typeof profile.email === "string"
       ) {
+        if (!existingUserId) {
+          await ctx.scheduler.runAfter(
+            0,
+            internal.data.preferences.ensureDefaultPreferences,
+            {
+              userId,
+              userKind: "external",
+            },
+          );
+        }
         await ctx.scheduler.runAfter(
           0,
           internal.data.approvedExternalUsers.linkApprovedExternalUser,
           {
             email: profile.email,
             userId,
-          }
+          },
         );
         return;
       }
 
+      if (provider.id !== "google") return;
+
       // Solo para usuarios nuevos de Google (no actualizaciones de perfil)
-      if (existingUserId || provider.id !== "google") return;
+      if (existingUserId) return;
+
+      await ctx.scheduler.runAfter(
+        0,
+        internal.data.preferences.ensureDefaultPreferences,
+        {
+          userId,
+          userKind: "internal",
+        },
+      );
 
       // Resolver usuario en COR en background (no bloquea el login)
-      await ctx.scheduler.runAfter(0, internal.data.corUsersActions.resolveUserInCOR, {
-        userId,
-      });
+      await ctx.scheduler.runAfter(
+        0,
+        internal.data.corUsersActions.resolveUserInCOR,
+        {
+          userId,
+        },
+      );
     },
   },
 });

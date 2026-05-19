@@ -1,6 +1,14 @@
-import { query, mutation } from "../_generated/server";
+import { internalMutation, mutation, query } from "../_generated/server";
 import { v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
+
+async function isExternalUser(ctx: any, userId: any) {
+  const approvedExternalUser = await ctx.db
+    .query("approvedExternalUsers")
+    .withIndex("by_user", (q: any) => q.eq("userId", userId))
+    .unique();
+  return Boolean(approvedExternalUser);
+}
 
 // Obtener las preferencias del usuario actual
 export const getUserPreferences = query({
@@ -19,15 +27,40 @@ export const getUserPreferences = query({
 
     // Si no hay preferencias, devolver valores por defecto
     if (!preferences) {
+      const externalUser = await isExternalUser(ctx, userId);
       return {
         userId,
         theme: "light" as const,
-        controlPanelView: "cards" as const,
+        controlPanelView: externalUser ? undefined : ("cards" as const),
         updatedAt: Date.now(),
       };
     }
 
     return preferences;
+  },
+});
+
+export const ensureDefaultPreferences = internalMutation({
+  args: {
+    userId: v.id("users"),
+    userKind: v.union(v.literal("internal"), v.literal("external")),
+  },
+  handler: async (ctx, args) => {
+    const existingPreferences = await ctx.db
+      .query("preferences")
+      .withIndex("by_user", (q) => q.eq("userId", args.userId))
+      .first();
+
+    if (existingPreferences) {
+      return existingPreferences._id;
+    }
+
+    return await ctx.db.insert("preferences", {
+      userId: args.userId,
+      theme: "light",
+      controlPanelView: args.userKind === "internal" ? "cards" : undefined,
+      updatedAt: Date.now(),
+    });
   },
 });
 
