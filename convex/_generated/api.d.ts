@@ -21,6 +21,7 @@ import type * as data_approvedExternalUsers from "../data/approvedExternalUsers.
 import type * as data_backfill from "../data/backfill.js";
 import type * as data_clientAssignmentsDashboard from "../data/clientAssignmentsDashboard.js";
 import type * as data_clientBrands from "../data/clientBrands.js";
+import type * as data_controlPanel from "../data/controlPanel.js";
 import type * as data_corClientRelatedUsersDashboard from "../data/corClientRelatedUsersDashboard.js";
 import type * as data_corClients from "../data/corClients.js";
 import type * as data_corInboundSync from "../data/corInboundSync.js";
@@ -96,6 +97,7 @@ declare const fullApi: ApiFromModules<{
   "data/backfill": typeof data_backfill;
   "data/clientAssignmentsDashboard": typeof data_clientAssignmentsDashboard;
   "data/clientBrands": typeof data_clientBrands;
+  "data/controlPanel": typeof data_controlPanel;
   "data/corClientRelatedUsersDashboard": typeof data_corClientRelatedUsersDashboard;
   "data/corClients": typeof data_corClients;
   "data/corInboundSync": typeof data_corInboundSync;

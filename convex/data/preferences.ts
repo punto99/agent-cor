@@ -11,22 +11,55 @@ export const getUserPreferences = query({
     if (userId === null) {
       return null;
     }
-    
+
     const preferences = await ctx.db
       .query("preferences")
       .withIndex("by_user", (q) => q.eq("userId", userId))
       .first();
-      
+
     // Si no hay preferencias, devolver valores por defecto
     if (!preferences) {
       return {
         userId,
         theme: "light" as const,
+        controlPanelView: "cards" as const,
         updatedAt: Date.now(),
       };
     }
 
     return preferences;
+  },
+});
+
+// Actualizar la vista preferida del panel de control
+export const setControlPanelView = mutation({
+  args: {
+    view: v.union(v.literal("cards"), v.literal("list")),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (userId === null) {
+      throw new Error("Not authenticated");
+    }
+
+    const existingPreferences = await ctx.db
+      .query("preferences")
+      .withIndex("by_user", (q) => q.eq("userId", userId))
+      .first();
+
+    if (existingPreferences) {
+      await ctx.db.patch(existingPreferences._id, {
+        controlPanelView: args.view,
+        updatedAt: Date.now(),
+      });
+      return existingPreferences._id;
+    }
+
+    return await ctx.db.insert("preferences", {
+      userId,
+      controlPanelView: args.view,
+      updatedAt: Date.now(),
+    });
   },
 });
 

@@ -10,16 +10,19 @@ export default defineSchema({
   workspaces: defineTable({
     ownerId: v.id("users"),
     createdAt: v.number(),
-  })
-    .index("by_owner", ["ownerId"]),
+  }).index("by_owner", ["ownerId"]),
 
   // Preferencias de usuario (theme, etc.)
   preferences: defineTable({
     userId: v.id("users"),
-    theme: v.optional(v.union(v.literal("light"), v.literal("dark"), v.literal("system"))),
+    theme: v.optional(
+      v.union(v.literal("light"), v.literal("dark"), v.literal("system")),
+    ),
+    controlPanelView: v.optional(
+      v.union(v.literal("cards"), v.literal("list")),
+    ),
     updatedAt: v.number(),
-  })
-    .index("by_user", ["userId"]),
+  }).index("by_user", ["userId"]),
 
   // Usuarios externos preaprobados para login por email + OTP.
   // Si el email existe en esta tabla, el usuario puede solicitar un código.
@@ -58,32 +61,37 @@ export default defineSchema({
   tasks: defineTable({
     // === Campos 1:1 con COR ===
     title: v.string(),
-    description: v.optional(v.string()),     // Contiene todos los datos del brief formateados
+    description: v.optional(v.string()), // Contiene todos los datos del brief formateados
     deadline: v.optional(v.string()),
-    priority: v.optional(v.number()),         // 0=Low, 1=Medium, 2=High, 3=Urgent
-    strategicPriority: v.optional(v.union(    // Prioridad estratégica (label en COR)
-      v.literal("I_U"),
-      v.literal("I_NU"),
-      v.literal("NI_U"),
-      v.literal("NI_NU")
-    )),
+    priority: v.optional(v.number()), // 0=Low, 1=Medium, 2=High, 3=Urgent
+    strategicPriority: v.optional(
+      v.union(
+        // Prioridad estratégica (label en COR)
+        v.literal("I_U"),
+        v.literal("I_NU"),
+        v.literal("NI_U"),
+        v.literal("NI_NU"),
+      ),
+    ),
     status: v.string(),
-    convexStatus: v.optional(v.union(v.literal("active"), v.literal("deleted"))),
+    convexStatus: v.optional(
+      v.union(v.literal("active"), v.literal("deleted")),
+    ),
     // === Campos internos (no van a COR) ===
     threadId: v.string(),
     createdBy: v.optional(v.string()),
-    projectId: v.optional(v.id("projects")),   // Referencia al proyecto LOCAL en Convex
+    projectId: v.optional(v.id("projects")), // Referencia al proyecto LOCAL en Convex
     source: v.optional(v.union(v.literal("internal"), v.literal("external"))),
     clientBrandId: v.optional(v.id("clientBrands")),
-    brandId: v.optional(v.number()),            // Marca en COR (brand_id)
+    brandId: v.optional(v.number()), // Marca en COR (brand_id)
     brandName: v.optional(v.string()),
     // === Campos de sincronización con herramienta externa (COR, Trello, etc.) ===
     corTaskId: v.optional(v.string()),
     corProjectId: v.optional(v.number()),
-    corSyncStatus: v.optional(v.string()),    // "pending" | "syncing" | "synced" | "retrying" | "error"
+    corSyncStatus: v.optional(v.string()), // "pending" | "syncing" | "synced" | "retrying" | "error"
     corSyncError: v.optional(v.string()),
     corSyncedAt: v.optional(v.number()),
-    corSyncAttempt: v.optional(v.number()),    // Intento actual de sync (0-based)
+    corSyncAttempt: v.optional(v.number()), // Intento actual de sync (0-based)
     corTaskMissingInCOR: v.optional(v.boolean()),
     corProjectMissingInCOR: v.optional(v.boolean()),
     // === Campos para identificar el cliente en el sistema externo ===
@@ -117,14 +125,14 @@ export default defineSchema({
   taskAttachments: defineTable({
     taskId: v.id("tasks"),
     // === Datos del archivo ===
-    storageId: v.string(),            // ID del blob en Convex storage (del agent component)
-    fileId: v.string(),               // ID del archivo en el agent component (para queries)
-    filename: v.string(),             // Nombre original del archivo
-    mimeType: v.string(),             // Tipo MIME (image/png, application/pdf, etc.)
-    size: v.optional(v.number()),     // Tamaño en bytes
+    storageId: v.string(), // ID del blob en Convex storage (del agent component)
+    fileId: v.string(), // ID del archivo en el agent component (para queries)
+    filename: v.string(), // Nombre original del archivo
+    mimeType: v.string(), // Tipo MIME (image/png, application/pdf, etc.)
+    size: v.optional(v.number()), // Tamaño en bytes
     // === Sincronización con COR ===
-    corAttachmentId: v.optional(v.number()),  // ID del attachment en COR (null = no sincronizado)
-    corUrl: v.optional(v.string()),           // URL del archivo en COR
+    corAttachmentId: v.optional(v.number()), // ID del attachment en COR (null = no sincronizado)
+    corUrl: v.optional(v.string()), // URL del archivo en COR
     // === Metadata ===
     createdAt: v.number(),
   })
@@ -164,8 +172,7 @@ export default defineSchema({
     enabled: v.boolean(), // true = activo, false = simular caída
     updatedAt: v.number(),
     updatedBy: v.optional(v.string()),
-  })
-    .index("by_provider", ["provider"]),
+  }).index("by_provider", ["provider"]),
 
   // =====================================================
   // RAG - Tablas para búsqueda en documentos
@@ -180,7 +187,7 @@ export default defineSchema({
       v.literal("pending"),
       v.literal("processing"),
       v.literal("completed"),
-      v.literal("error")
+      v.literal("error"),
     ),
     errorMessage: v.optional(v.string()),
   })
@@ -234,14 +241,14 @@ export default defineSchema({
   // COR Users — Cache de usuarios resueltos en COR
   // =====================================================
   corUsers: defineTable({
-    userId: v.id("users"),              // Referencia al user de Convex (authTables)
-    corUserId: v.number(),              // ID del usuario en COR
+    userId: v.id("users"), // Referencia al user de Convex (authTables)
+    corUserId: v.number(), // ID del usuario en COR
     corFirstName: v.string(),
     corLastName: v.string(),
     corEmail: v.string(),
-    corRoleId: v.optional(v.number()),  // 1=C-Level, 2=Director, 3=PM, 4=Collaborator, 5=Freelancer, 6=Client
+    corRoleId: v.optional(v.number()), // 1=C-Level, 2=Director, 3=PM, 4=Collaborator, 5=Freelancer, 6=Client
     corPositionName: v.optional(v.string()),
-    resolvedAt: v.number(),             // Timestamp de cuándo se resolvió por primera vez
+    resolvedAt: v.number(), // Timestamp de cuándo se resolvió por primera vez
     lastVerifiedAt: v.optional(v.number()),
   })
     .index("by_userId", ["userId"])
@@ -253,7 +260,7 @@ export default defineSchema({
   corClients: defineTable({
     corClientId: v.number(),
     name: v.string(),
-    nomenclature: v.optional(v.string()),   // Abreviatura/iniciales del cliente (ej: "AD" para American Deli). Se usa como prefijo en nombres de proyectos.
+    nomenclature: v.optional(v.string()), // Abreviatura/iniciales del cliente (ej: "AD" para American Deli). Se usa como prefijo en nombres de proyectos.
     businessName: v.optional(v.string()),
     nameContact: v.optional(v.string()),
     lastNameContact: v.optional(v.string()),
@@ -270,12 +277,12 @@ export default defineSchema({
   // Client Brands — Marcas de COR asociadas a un cliente
   // =====================================================
   clientBrands: defineTable({
-    clientId: v.optional(v.id("corClients")),  // Referencia al cliente local, si existe
-    corClientId: v.number(),                   // ID del cliente en COR
-    corBrandId: v.number(),                    // ID de la marca en COR
+    clientId: v.optional(v.id("corClients")), // Referencia al cliente local, si existe
+    corClientId: v.number(), // ID del cliente en COR
+    corBrandId: v.number(), // ID de la marca en COR
     name: v.string(),
     syncedAt: v.number(),
-    trelloBoardId: v.optional(v.string()),     // Se llenará en la integración Trello
+    trelloBoardId: v.optional(v.string()), // Se llenará en la integración Trello
     trelloBoardUrl: v.optional(v.string()),
   })
     .index("by_client", ["clientId"])
@@ -287,11 +294,11 @@ export default defineSchema({
   // Client-User Assignments — Qué usuarios pueden usar qué clientes
   // =====================================================
   clientUserAssignments: defineTable({
-    clientId: v.id("corClients"),           // Referencia al cliente local
-    userId: v.id("users"),                  // Referencia al usuario local
+    clientId: v.id("corClients"), // Referencia al cliente local
+    userId: v.id("users"), // Referencia al usuario local
     brandId: v.optional(v.id("clientBrands")), // undefined = acceso a todo el cliente
     assignedAt: v.number(),
-    assignedBy: v.optional(v.id("users")),  // Quién lo asignó (admin/PM)
+    assignedBy: v.optional(v.id("users")), // Quién lo asignó (admin/PM)
   })
     .index("by_client", ["clientId"])
     .index("by_user", ["userId"])
@@ -307,31 +314,33 @@ export default defineSchema({
     // === Campos 1:1 con COR ===
     name: v.string(),
     brief: v.optional(v.string()),
-    startDate: v.optional(v.string()),         // YYYY-MM-DD
-    endDate: v.optional(v.string()),           // YYYY-MM-DD (deadline)
-    status: v.string(),                        // "active" | "in_process" | "suspended" | "finished"
-    convexStatus: v.optional(v.union(v.literal("active"), v.literal("deleted"))),
-    estimatedTime: v.optional(v.number()),     // Horas estimadas
+    startDate: v.optional(v.string()), // YYYY-MM-DD
+    endDate: v.optional(v.string()), // YYYY-MM-DD (deadline)
+    status: v.string(), // "active" | "in_process" | "suspended" | "finished"
+    convexStatus: v.optional(
+      v.union(v.literal("active"), v.literal("deleted")),
+    ),
+    estimatedTime: v.optional(v.number()), // Horas estimadas
     billable: v.optional(v.boolean()),
-    incomeType: v.optional(v.string()),        // "fee" | "one_time" | "hourly_rate" | "contract"
-    deliverables: v.optional(v.number()),      // Cantidad de entregables
-    pmId: v.optional(v.number()),              // PM en COR (opcional)
-    brandId: v.optional(v.number()),           // Marca en COR (opcional)
-    productId: v.optional(v.number()),         // Producto en COR (opcional)
+    incomeType: v.optional(v.string()), // "fee" | "one_time" | "hourly_rate" | "contract"
+    deliverables: v.optional(v.number()), // Cantidad de entregables
+    pmId: v.optional(v.number()), // PM en COR (opcional)
+    brandId: v.optional(v.number()), // Marca en COR (opcional)
+    productId: v.optional(v.number()), // Producto en COR (opcional)
     // === Campos internos (no van a COR) ===
-    clientId: v.optional(v.id("corClients")),  // Referencia al cliente LOCAL
-    createdBy: v.optional(v.string()),         // Id<"users"> como string
-    threadId: v.optional(v.string()),          // Thread que originó este proyecto
+    clientId: v.optional(v.id("corClients")), // Referencia al cliente LOCAL
+    createdBy: v.optional(v.string()), // Id<"users"> como string
+    threadId: v.optional(v.string()), // Thread que originó este proyecto
     source: v.optional(v.union(v.literal("internal"), v.literal("external"))),
     clientBrandId: v.optional(v.id("clientBrands")),
     brandName: v.optional(v.string()),
     // === Campos de sincronización con COR ===
     corProjectId: v.optional(v.number()),
-    corClientId: v.optional(v.number()),       // Denormalized para fast publish
-    corSyncStatus: v.optional(v.string()),     // "pending" | "syncing" | "synced" | "retrying" | "error"
+    corClientId: v.optional(v.number()), // Denormalized para fast publish
+    corSyncStatus: v.optional(v.string()), // "pending" | "syncing" | "synced" | "retrying" | "error"
     corSyncError: v.optional(v.string()),
     corSyncedAt: v.optional(v.number()),
-    corSyncAttempt: v.optional(v.number()),     // Intento actual de sync (0-based)
+    corSyncAttempt: v.optional(v.number()), // Intento actual de sync (0-based)
     corMissingInCOR: v.optional(v.boolean()),
     // === Sincronización con Trello (misma card que la task) ===
     trelloCardId: v.optional(v.string()),
@@ -357,8 +366,8 @@ export default defineSchema({
   trelloBoardLists: defineTable({
     clientBrandId: v.id("clientBrands"),
     trelloBoardId: v.string(),
-    status: v.string(),       // value interno: nueva, en_proceso, etc.
-    name: v.string(),         // label visible esperado en Trello
+    status: v.string(), // value interno: nueva, en_proceso, etc.
+    name: v.string(), // label visible esperado en Trello
     trelloListId: v.string(),
     syncedAt: v.number(),
   })
@@ -373,9 +382,9 @@ export default defineSchema({
   trelloBoardCustomFields: defineTable({
     clientBrandId: v.id("clientBrands"),
     trelloBoardId: v.string(),
-    fieldKey: v.string(),     // requestType, brand, priority, deliverablesCount
+    fieldKey: v.string(), // requestType, brand, priority, deliverablesCount
     name: v.string(),
-    type: v.string(),         // text, number, list, date, checkbox
+    type: v.string(), // text, number, list, date, checkbox
     trelloCustomFieldId: v.string(),
     syncedAt: v.number(),
   })
@@ -395,7 +404,7 @@ export default defineSchema({
     trelloListId: v.optional(v.string()),
     trelloCardId: v.optional(v.string()),
     trelloCardUrl: v.optional(v.string()),
-    syncStatus: v.string(),   // "pending" | "syncing" | "synced" | "error"
+    syncStatus: v.string(), // "pending" | "syncing" | "synced" | "error"
     syncError: v.optional(v.string()),
     createdAt: v.number(),
     syncedAt: v.optional(v.number()),
