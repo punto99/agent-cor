@@ -17,6 +17,7 @@ import type * as agents_priorityAgent from "../agents/priorityAgent.js";
 import type * as agents_reviewerAgent from "../agents/reviewerAgent.js";
 import type * as auth from "../auth.js";
 import type * as crons from "../crons.js";
+import type * as data_analytics from "../data/analytics.js";
 import type * as data_approvedExternalUsers from "../data/approvedExternalUsers.js";
 import type * as data_backfill from "../data/backfill.js";
 import type * as data_clientAssignmentsDashboard from "../data/clientAssignmentsDashboard.js";
@@ -44,6 +45,7 @@ import type * as integrations_noopProvider from "../integrations/noopProvider.js
 import type * as integrations_registry from "../integrations/registry.js";
 import type * as integrations_trelloProvider from "../integrations/trelloProvider.js";
 import type * as integrations_types from "../integrations/types.js";
+import type * as lib_analyticsAccess from "../lib/analyticsAccess.js";
 import type * as lib_briefFormat from "../lib/briefFormat.js";
 import type * as lib_corRetry from "../lib/corRetry.js";
 import type * as lib_llmFallback from "../lib/llmFallback.js";
@@ -93,6 +95,7 @@ declare const fullApi: ApiFromModules<{
   "agents/reviewerAgent": typeof agents_reviewerAgent;
   auth: typeof auth;
   crons: typeof crons;
+  "data/analytics": typeof data_analytics;
   "data/approvedExternalUsers": typeof data_approvedExternalUsers;
   "data/backfill": typeof data_backfill;
   "data/clientAssignmentsDashboard": typeof data_clientAssignmentsDashboard;
@@ -120,6 +123,7 @@ declare const fullApi: ApiFromModules<{
   "integrations/registry": typeof integrations_registry;
   "integrations/trelloProvider": typeof integrations_trelloProvider;
   "integrations/types": typeof integrations_types;
+  "lib/analyticsAccess": typeof lib_analyticsAccess;
   "lib/briefFormat": typeof lib_briefFormat;
   "lib/corRetry": typeof lib_corRetry;
   "lib/llmFallback": typeof lib_llmFallback;

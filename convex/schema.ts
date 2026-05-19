@@ -116,6 +116,7 @@ export default defineSchema({
     .index("by_clientId", ["clientId"])
     .index("by_clientId_source_status", ["clientId", "source", "status"])
     .index("by_createdBy_clientId_status", ["createdBy", "clientId", "status"])
+    .index("by_strategicPriority", ["strategicPriority"])
     .index("by_clientBrandId", ["clientBrandId"])
     .index("by_createdBy_clientBrandId_status", [
       "createdBy",
@@ -161,7 +162,9 @@ export default defineSchema({
     createdAt: v.number(),
   })
     .index("by_task", ["taskId"])
-    .index("by_evaluation_thread", ["evaluationThreadId"]),
+    .index("by_evaluation_thread", ["evaluationThreadId"])
+    .index("by_status", ["status"])
+    .index("by_createdAt", ["createdAt"]),
 
   // Registro de errores de LLM para monitoreo y debugging
   llmErrors: defineTable({
@@ -364,6 +367,7 @@ export default defineSchema({
     trelloSyncedAt: v.optional(v.number()),
   })
     .index("by_clientId", ["clientId"])
+    .index("by_status", ["status"])
     .index("by_source", ["source"])
     .index("by_clientBrandId", ["clientBrandId"])
     .index("by_corClientId", ["corClientId"])

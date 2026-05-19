@@ -1,7 +1,10 @@
 "use client";
 
 import { useState } from "react";
-import { LogOut } from "lucide-react";
+import Link from "next/link";
+import { useQuery } from "convex/react";
+import { BarChart3, LogOut } from "lucide-react";
+import { api } from "@/convex/_generated/api";
 import { Button } from "./ui/Button";
 import {
   DropdownMenu,
@@ -15,6 +18,7 @@ import { useUser } from "../UserContextProvider";
 
 export function UserMenu() {
   const { user, signOut } = useUser();
+  const analyticsAccess = useQuery(api.data.analytics.viewerCanAccessAnalytics);
   const [imageError, setImageError] = useState(false);
 
   if (!user) return null;
@@ -67,6 +71,17 @@ export function UserMenu() {
           </div>
         </DropdownMenuLabel>
         <DropdownMenuSeparator />
+        {analyticsAccess?.canAccess && (
+          <>
+            <DropdownMenuItem asChild className="cursor-pointer">
+              <Link href="/workspace/analytics">
+                <BarChart3 className="mr-2 h-4 w-4" />
+                <span>Analytics</span>
+              </Link>
+            </DropdownMenuItem>
+            <DropdownMenuSeparator />
+          </>
+        )}
         <DropdownMenuItem onClick={signOut} className="cursor-pointer">
           <LogOut className="mr-2 h-4 w-4" />
           <span>Cerrar sesión</span>
