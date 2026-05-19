@@ -30,7 +30,7 @@ function inferDeliverablesCount(deliverablesText: string): number {
 export const createExternalTaskTool = createTool({
   description: `Crear un requerimiento externo en Convex para revisión del equipo interno.
   SOLO usar esta herramienta cuando el cliente haya confirmado explícitamente que el resumen está correcto.
-  No publica en COR y no crea nada en Trello todavía.`,
+  No publica en COR. Para usuarios externos, el sistema también agenda la creación de una card en Trello.`,
   args: z.object({
     title: z.string().describe("Título breve y descriptivo del requerimiento, sin prefijo de marca."),
     requestType: z.string().describe("Tipo de requerimiento - OBLIGATORIO"),
@@ -171,6 +171,16 @@ export const createExternalTaskTool = createTool({
       await associateFilesHelper(ctx, result.taskId, threadId);
     } catch (error) {
       console.log("[CreateExternalTask] No se pudieron asociar archivos:", error);
+    }
+
+    try {
+      await ctx.runMutation(internal.data.trello.scheduleCreateCardForExternalTask, {
+        taskId: result.taskId as any,
+        requestType: args.requestType,
+        deliverablesCount,
+      });
+    } catch (error) {
+      console.log("[CreateExternalTask] No se pudo programar creación de card en Trello:", error);
     }
 
     return `Listo, el requerimiento quedó guardado para revisión del equipo.

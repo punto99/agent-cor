@@ -92,6 +92,12 @@ export default defineSchema({
     // === Campos para tracking de sincronización bidireccional ===
     corDescriptionHash: v.optional(v.string()),
     lastLocalEditAt: v.optional(v.number()),
+    // === Sincronización con Trello (solo Convex; no se expone como custom fields) ===
+    trelloCardId: v.optional(v.string()),
+    trelloCardUrl: v.optional(v.string()),
+    trelloSyncStatus: v.optional(v.string()), // "pending" | "syncing" | "synced" | "error"
+    trelloSyncError: v.optional(v.string()),
+    trelloSyncedAt: v.optional(v.number()),
   })
     .index("by_thread", ["threadId"])
     .index("by_status", ["status"])
@@ -101,7 +107,9 @@ export default defineSchema({
     .index("by_clientBrandId", ["clientBrandId"])
     .index("by_corClientId", ["corClientId"])
     .index("by_corTaskId", ["corTaskId"])
-    .index("by_corSyncStatus", ["corSyncStatus"]),
+    .index("by_corSyncStatus", ["corSyncStatus"])
+    .index("by_trelloCardId", ["trelloCardId"])
+    .index("by_trelloSyncStatus", ["trelloSyncStatus"]),
 
   // === Task Attachments: Archivos adjuntos de tasks ===
   // Estructura espejada con COR para sincronización directa.
@@ -325,6 +333,12 @@ export default defineSchema({
     corSyncedAt: v.optional(v.number()),
     corSyncAttempt: v.optional(v.number()),     // Intento actual de sync (0-based)
     corMissingInCOR: v.optional(v.boolean()),
+    // === Sincronización con Trello (misma card que la task) ===
+    trelloCardId: v.optional(v.string()),
+    trelloCardUrl: v.optional(v.string()),
+    trelloSyncStatus: v.optional(v.string()),
+    trelloSyncError: v.optional(v.string()),
+    trelloSyncedAt: v.optional(v.number()),
   })
     .index("by_clientId", ["clientId"])
     .index("by_source", ["source"])
@@ -333,5 +347,62 @@ export default defineSchema({
     .index("by_corProjectId", ["corProjectId"])
     .index("by_createdBy", ["createdBy"])
     .index("by_threadId", ["threadId"])
-    .index("by_corSyncStatus", ["corSyncStatus"]),
+    .index("by_corSyncStatus", ["corSyncStatus"])
+    .index("by_trelloCardId", ["trelloCardId"])
+    .index("by_trelloSyncStatus", ["trelloSyncStatus"]),
+
+  // =====================================================
+  // Trello Board Lists — Mapeo estable status Convex/COR → List ID de Trello
+  // =====================================================
+  trelloBoardLists: defineTable({
+    clientBrandId: v.id("clientBrands"),
+    trelloBoardId: v.string(),
+    status: v.string(),       // value interno: nueva, en_proceso, etc.
+    name: v.string(),         // label visible esperado en Trello
+    trelloListId: v.string(),
+    syncedAt: v.number(),
+  })
+    .index("by_brand", ["clientBrandId"])
+    .index("by_board", ["trelloBoardId"])
+    .index("by_brand_and_status", ["clientBrandId", "status"])
+    .index("by_list", ["trelloListId"]),
+
+  // =====================================================
+  // Trello Custom Fields — IDs cacheados por board
+  // =====================================================
+  trelloBoardCustomFields: defineTable({
+    clientBrandId: v.id("clientBrands"),
+    trelloBoardId: v.string(),
+    fieldKey: v.string(),     // requestType, brand, priority, deliverablesCount
+    name: v.string(),
+    type: v.string(),         // text, number, list, date, checkbox
+    trelloCustomFieldId: v.string(),
+    syncedAt: v.number(),
+  })
+    .index("by_brand", ["clientBrandId"])
+    .index("by_board", ["trelloBoardId"])
+    .index("by_brand_and_key", ["clientBrandId", "fieldKey"])
+    .index("by_customField", ["trelloCustomFieldId"]),
+
+  // =====================================================
+  // Trello Cards — Mapping idempotente Convex task/project → Trello card
+  // =====================================================
+  trelloCards: defineTable({
+    taskId: v.id("tasks"),
+    projectId: v.id("projects"),
+    clientBrandId: v.id("clientBrands"),
+    trelloBoardId: v.string(),
+    trelloListId: v.optional(v.string()),
+    trelloCardId: v.optional(v.string()),
+    trelloCardUrl: v.optional(v.string()),
+    syncStatus: v.string(),   // "pending" | "syncing" | "synced" | "error"
+    syncError: v.optional(v.string()),
+    createdAt: v.number(),
+    syncedAt: v.optional(v.number()),
+  })
+    .index("by_task", ["taskId"])
+    .index("by_project", ["projectId"])
+    .index("by_brand", ["clientBrandId"])
+    .index("by_card", ["trelloCardId"])
+    .index("by_syncStatus", ["syncStatus"]),
 });

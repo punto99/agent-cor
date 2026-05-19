@@ -25,6 +25,15 @@ export const getByCorBrandId = internalQuery({
   },
 });
 
+export const getById = internalQuery({
+  args: {
+    clientBrandId: v.id("clientBrands"),
+  },
+  handler: async (ctx, args) => {
+    return await ctx.db.get(args.clientBrandId);
+  },
+});
+
 export const getLocalClientByCorId = internalQuery({
   args: {
     corClientId: v.number(),
