@@ -484,6 +484,17 @@ export default function ControlPanelPage() {
 
                   {selectedClient.brands.length > 0 && (
                     <div className="mt-4 flex flex-wrap items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setSelectedBrandId(null)}
+                        className={`inline-flex h-8 items-center rounded-md border px-3 text-xs font-medium transition-colors ${
+                          selectedBrandId === null
+                            ? "border-primary bg-primary/5 text-primary"
+                            : "border-border bg-card text-muted-foreground hover:border-primary/40 hover:bg-accent hover:text-foreground"
+                        }`}
+                      >
+                        Todas las marcas
+                      </button>
                       {selectedClient.brands.map((brand, index) => {
                         const isSelected =
                           selectedBrandId === String(brand._id);
@@ -508,18 +519,6 @@ export default function ControlPanelPage() {
                           </button>
                         );
                       })}
-
-                      <button
-                        type="button"
-                        onClick={() => setSelectedBrandId(null)}
-                        className={`inline-flex h-8 items-center rounded-md border px-3 text-xs font-medium transition-colors ${
-                          selectedBrandId === null
-                            ? "border-primary bg-primary/5 text-primary"
-                            : "border-border bg-card text-muted-foreground hover:border-primary/40 hover:bg-accent hover:text-foreground"
-                        }`}
-                      >
-                        Todas las marcas
-                      </button>
                     </div>
                   )}
                 </div>
@@ -561,7 +560,7 @@ export default function ControlPanelPage() {
                           key={project._id}
                           className="border border-border rounded-lg bg-card overflow-hidden"
                         >
-                          <div className="px-4 py-3 border-b border-border flex items-center justify-between gap-4 bg-[#eeeeee]">
+                          <div className="px-4 py-3 border-b border-border flex items-center justify-between gap-4 bg-muted/70 dark:bg-muted/40">
                             <div className="min-w-0 flex items-center gap-2">
                               <FolderKanban className="h-4 w-4 text-muted-foreground flex-shrink-0" />
                               <div className="min-w-0">
