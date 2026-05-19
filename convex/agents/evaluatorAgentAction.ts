@@ -191,8 +191,9 @@ export const generateEvaluationAsync = internalAction({
   args: {
     threadId: v.string(),
     promptMessageId: v.string(),
+    evaluationId: v.optional(v.id("taskEvaluations")),
   },
-  handler: async (ctx, { threadId, promptMessageId }): Promise<{
+  handler: async (ctx, { threadId, promptMessageId, evaluationId }): Promise<{
     text: string;
     promptMessageId: string;
     provider: "gemini" | "openai";
@@ -203,56 +204,83 @@ export const generateEvaluationAsync = internalAction({
     console.log(`[Evaluator] ThreadId: ${threadId}`);
     console.log("========================================\n");
 
-    const { generateText } = await import("ai");
+    try {
+      const { generateText } = await import("ai");
 
-    // Preparar contexto
-    const { args: preparedArgs, save } = await evaluatorAgent.start(
-      ctx,
-      { promptMessageId },
-      { threadId }
-    );
+      // Preparar contexto
+      const { args: preparedArgs, save, getSavedMessages } = await evaluatorAgent.start(
+        ctx,
+        { promptMessageId },
+        { threadId }
+      );
 
-    // Verificar configuración de proveedores
-    const geminiEnabled: boolean = await ctx.runQuery(internal.data.llmConfig.isProviderEnabled, { provider: "gemini" });
-    const openaiEnabled: boolean = await ctx.runQuery(internal.data.llmConfig.isProviderEnabled, { provider: "openai" });
+      // Verificar configuración de proveedores
+      const geminiEnabled: boolean = await ctx.runQuery(internal.data.llmConfig.isProviderEnabled, { provider: "gemini" });
+      const openaiEnabled: boolean = await ctx.runQuery(internal.data.llmConfig.isProviderEnabled, { provider: "openai" });
 
-    // Ejecutar con fallback automático Gemini → OpenAI
-    const { result, provider: usedProvider } = await withLLMFallback({
-      agentName: "evaluatorAgent",
-      threadId,
-      geminiEnabled,
-      openaiEnabled,
-      primaryFn: (signal) => generateText({
-        ...preparedArgs,
-        model: geminiConfig.model,
-        providerOptions: geminiConfig.providerOptions as any,
-        maxRetries: 0,
-        abortSignal: signal,
-      }),
-      fallbackFn: (signal) => generateText({
-        ...preparedArgs,
-        model: openaiConfig.model,
-        maxRetries: 0,
-        abortSignal: signal,
-      }),
-      logError: async (log) => {
-        await ctx.runMutation(internal.data.llmConfig.logLLMError, log);
-      },
-      onBothFailed: "Los servicios de evaluación están temporalmente no disponibles. Por favor, intenta de nuevo más tarde.",
-    });
+      // Ejecutar con fallback automático Gemini → OpenAI
+      const { result, provider: usedProvider } = await withLLMFallback({
+        agentName: "evaluatorAgent",
+        threadId,
+        geminiEnabled,
+        openaiEnabled,
+        primaryFn: (signal) => generateText({
+          ...preparedArgs,
+          model: geminiConfig.model,
+          providerOptions: geminiConfig.providerOptions as any,
+          maxRetries: 0,
+          abortSignal: signal,
+        }),
+        fallbackFn: (signal) => generateText({
+          ...preparedArgs,
+          model: openaiConfig.model,
+          maxRetries: 0,
+          abortSignal: signal,
+        }),
+        logError: async (log) => {
+          await ctx.runMutation(internal.data.llmConfig.logLLMError, log);
+        },
+        onBothFailed: "Los servicios de evaluación están temporalmente no disponibles. Por favor, intenta de nuevo más tarde.",
+      });
 
-    // Guardar resultado
-    for (const step of result.steps) {
-      await save({ step });
+      // Guardar resultado
+      for (const step of result.steps) {
+        await save({ step });
+      }
+
+      const resultMessage = [...getSavedMessages()]
+        .reverse()
+        .find((message: any) => {
+          if (message.tool || message.message?.role !== "assistant") return false;
+          return typeof message.text === "string" && message.text.trim().length > 0;
+        });
+
+      if (evaluationId) {
+        await ctx.runMutation(internal.data.evaluation.completeTaskEvaluation, {
+          evaluationId,
+          resultText: result.text,
+          resultMessageId: resultMessage?._id,
+          resultProvider: usedProvider,
+        });
+      }
+
+      const totalTime = Date.now() - startTime;
+      console.log(`[Evaluator] ✅ Evaluación completada con ${usedProvider} en ${totalTime}ms`);
+
+      return {
+        text: result.text,
+        promptMessageId,
+        provider: usedProvider,
+      };
+    } catch (error) {
+      const errorMessage = extractErrorMessage(error);
+      if (evaluationId) {
+        await ctx.runMutation(internal.data.evaluation.failTaskEvaluation, {
+          evaluationId,
+          error: errorMessage,
+        });
+      }
+      throw error;
     }
-
-    const totalTime = Date.now() - startTime;
-    console.log(`[Evaluator] ✅ Evaluación completada con ${usedProvider} en ${totalTime}ms`);
-
-    return {
-      text: result.text,
-      promptMessageId,
-      provider: usedProvider,
-    };
   },
 });

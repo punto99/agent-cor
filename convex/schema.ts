@@ -166,6 +166,44 @@ export default defineSchema({
     .index("by_status", ["status"])
     .index("by_createdAt", ["createdAt"]),
 
+  taskEvaluations: defineTable({
+    taskId: v.id("tasks"),
+    evaluationThreadId: v.string(),
+    originalThreadId: v.string(),
+    requestedBy: v.optional(v.id("users")),
+    requestedBySource: v.optional(v.string()), // "auth" | "message" | "taskCreatedBy" | "unknown"
+    requestedAt: v.number(),
+    completedAt: v.optional(v.number()),
+    status: v.union(
+      v.literal("processing"),
+      v.literal("completed"),
+      v.literal("failed"),
+    ),
+    prompt: v.optional(v.string()),
+    inputFileIds: v.array(v.string()),
+    userMessageId: v.optional(v.string()),
+    resultMessageId: v.optional(v.string()),
+    resultText: v.optional(v.string()),
+    resultProvider: v.optional(v.string()),
+    error: v.optional(v.string()),
+    clientId: v.optional(v.id("corClients")),
+    clientBrandId: v.optional(v.id("clientBrands")),
+    taskSource: v.optional(v.union(v.literal("internal"), v.literal("external"))),
+    backfilled: v.optional(v.boolean()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_task", ["taskId"])
+    .index("by_thread", ["evaluationThreadId"])
+    .index("by_requestedBy", ["requestedBy"])
+    .index("by_status", ["status"])
+    .index("by_createdAt", ["createdAt"])
+    .index("by_task_and_createdAt", ["taskId", "createdAt"])
+    .index("by_requestedBy_and_createdAt", ["requestedBy", "createdAt"])
+    .index("by_clientId_and_createdAt", ["clientId", "createdAt"])
+    .index("by_userMessageId", ["userMessageId"])
+    .index("by_resultMessageId", ["resultMessageId"]),
+
   // Registro de errores de LLM para monitoreo y debugging
   llmErrors: defineTable({
     provider: v.string(), // "gemini" | "openai"

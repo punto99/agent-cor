@@ -19,7 +19,7 @@ const PROJECT_STATUSES = [
 ] as const;
 
 const STRATEGIC_PRIORITIES = ["I_U", "I_NU", "NI_U", "NI_NU"] as const;
-const EVALUATION_STATUSES = ["pending", "in_progress", "completed"] as const;
+const EVALUATION_STATUSES = ["processing", "completed", "failed"] as const;
 const MAX_ANALYTICS_TASKS = 2500;
 const MAX_ANALYTICS_EVALUATIONS = 2500;
 
@@ -56,7 +56,7 @@ export const getDashboard = query({
       .order("desc")
       .take(MAX_ANALYTICS_TASKS);
     const recentEvaluations = await ctx.db
-      .query("evaluationThreads")
+      .query("taskEvaluations")
       .withIndex("by_createdAt")
       .order("desc")
       .take(MAX_ANALYTICS_EVALUATIONS);
@@ -86,9 +86,6 @@ export const getDashboard = query({
       if (brand) brandNameById.set(String(brand._id), brand.name);
     }
 
-    const tasksById = new Map(
-      activeTasks.map((task) => [String(task._id), task]),
-    );
     const taskUserCounts = countBy(
       activeTasks.filter((task) => task.createdBy),
       (task) => String(task.createdBy),
@@ -96,15 +93,8 @@ export const getDashboard = query({
     const evaluationUserCounts = new Map<string, number>();
 
     for (const evaluation of recentEvaluations) {
-      let task = tasksById.get(String(evaluation.taskId));
-      if (!task) {
-        const fetchedTask = await ctx.db.get(evaluation.taskId);
-        if (fetchedTask && fetchedTask.convexStatus !== "deleted") {
-          task = fetchedTask;
-        }
-      }
-      if (!task?.createdBy) continue;
-      const createdBy = String(task.createdBy);
+      if (!evaluation.requestedBy) continue;
+      const createdBy = String(evaluation.requestedBy);
       evaluationUserCounts.set(
         createdBy,
         (evaluationUserCounts.get(createdBy) ?? 0) + 1,
@@ -219,7 +209,9 @@ export const getDashboard = query({
       ).length,
     }));
     const evaluatedTaskIds = new Set(
-      recentEvaluations.map((evaluation) => String(evaluation.taskId)),
+      recentEvaluations
+        .filter((evaluation) => evaluation.status === "completed")
+        .map((evaluation) => String(evaluation.taskId)),
     );
 
     return {
@@ -364,9 +356,9 @@ function getProjectStatusLabel(status: string) {
 
 function getEvaluationStatusLabel(status: string) {
   const labels: Record<string, string> = {
-    pending: "Pendiente",
-    in_progress: "En progreso",
+    processing: "En proceso",
     completed: "Completada",
+    failed: "Fallida",
   };
   return labels[status] ?? status;
 }

@@ -13,9 +13,10 @@
 // =====================================================
 
 import { internalAction } from "../_generated/server";
-import { internal } from "../_generated/api";
+import { components, internal } from "../_generated/api";
 import { getProjectManagementProvider } from "../integrations/registry";
 import { v } from "convex/values";
+import { listMessages } from "@convex-dev/agent";
 
 // ==================== 1. BACKFILL COR USERS ====================
 
@@ -586,3 +587,193 @@ export const backfillTaskClientIds = internalAction({
     };
   },
 });
+
+// ==================== 5. BACKFILL TASK EVALUATIONS ====================
+
+/**
+ * Migra evaluaciones reales desde los mensajes existentes del agent component.
+ *
+ * Importante:
+ * - evaluationThreads se mantiene como thread único por task.
+ * - taskEvaluations se crea solo si el thread tiene un mensaje de usuario con
+ *   archivos y una respuesta posterior del agente.
+ *
+ * Ejecutar primero en dry run:
+ * Dashboard de Convex → Functions → data/backfill:backfillTaskEvaluationsFromThreads
+ * Args: { "dryRun": true, "limit": 100 }
+ */
+export const backfillTaskEvaluationsFromThreads = internalAction({
+  args: {
+    dryRun: v.optional(v.boolean()),
+    limit: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const dryRun = args.dryRun !== false;
+    console.log("\n" + "=".repeat(60));
+    console.log("[BackfillTaskEvaluations] 🚀 INICIO");
+    console.log(`[BackfillTaskEvaluations] dryRun=${dryRun}`);
+    console.log("=".repeat(60));
+
+    const stats = {
+      threadsReviewed: 0,
+      unusedThreads: 0,
+      candidateEvaluations: 0,
+      wouldCreate: 0,
+      created: 0,
+      alreadyExists: 0,
+      missingTask: 0,
+      incomplete: 0,
+      errors: 0,
+      details: [] as Array<{
+        taskId: string;
+        evaluationThreadId: string;
+        fileCount: number;
+        requestedAt: number;
+        completedAt: number;
+        resultPreview: string;
+      }>,
+      errorDetails: [] as string[],
+    };
+
+    const evaluationThreads = await ctx.runQuery(
+      internal.data.evaluation.listEvaluationThreadsForBackfill,
+      { limit: args.limit },
+    );
+
+    stats.threadsReviewed = evaluationThreads.length;
+
+    for (const evalThread of evaluationThreads) {
+      try {
+        const messagesResult = await listMessages(ctx, components.agent, {
+          threadId: evalThread.evaluationThreadId,
+          paginationOpts: { cursor: null, numItems: 100 },
+          excludeToolMessages: true,
+        });
+
+        const messages = [...messagesResult.page].sort((a: any, b: any) => {
+          if (a.order !== b.order) return a.order - b.order;
+          if (a.stepOrder !== b.stepOrder) return a.stepOrder - b.stepOrder;
+          return a._creationTime - b._creationTime;
+        });
+
+        const userMessages = messages.filter((message: any) => {
+          return (
+            message.message?.role === "user" &&
+            Array.isArray(message.fileIds) &&
+            message.fileIds.length > 0
+          );
+        });
+
+        if (userMessages.length === 0) {
+          stats.unusedThreads++;
+          continue;
+        }
+
+        for (const userMessage of userMessages) {
+          const assistantMessage = messages.find((message: any) => {
+            return (
+              message.message?.role === "assistant" &&
+              !message.tool &&
+              message._creationTime >= userMessage._creationTime &&
+              typeof message.text === "string" &&
+              message.text.trim().length > 0
+            );
+          }) as any;
+
+          if (!assistantMessage) {
+            stats.incomplete++;
+            continue;
+          }
+
+          stats.candidateEvaluations++;
+          const fileIds = uniqueStrings(userMessage.fileIds ?? []);
+          const resultText = assistantMessage.text.trim();
+          const detail = {
+            taskId: String(evalThread.taskId),
+            evaluationThreadId: evalThread.evaluationThreadId,
+            fileCount: fileIds.length,
+            requestedAt: userMessage._creationTime,
+            completedAt: assistantMessage._creationTime,
+            resultPreview: resultText.slice(0, 180),
+          };
+          stats.details.push(detail);
+
+          if (dryRun) {
+            stats.wouldCreate++;
+            continue;
+          }
+
+          const result = await ctx.runMutation(
+            internal.data.evaluation.createBackfilledTaskEvaluation,
+            {
+              taskId: evalThread.taskId,
+              evaluationThreadId: evalThread.evaluationThreadId,
+              originalThreadId: evalThread.originalThreadId,
+              requestedBy: userMessage.userId,
+              requestedBySource: userMessage.userId ? "message" : "unknown",
+              requestedAt: userMessage._creationTime,
+              completedAt: assistantMessage._creationTime,
+              prompt: extractMessageText(userMessage),
+              inputFileIds: fileIds,
+              userMessageId: userMessage._id,
+              resultMessageId: assistantMessage._id,
+              resultText,
+              resultProvider: assistantMessage.provider,
+            },
+          );
+
+          if (result.status === "created") stats.created++;
+          if (result.status === "already_exists") stats.alreadyExists++;
+          if (result.status === "missing_task") stats.missingTask++;
+        }
+      } catch (error) {
+        const errorMsg = `${evalThread.evaluationThreadId}: ${
+          error instanceof Error ? error.message : String(error)
+        }`;
+        stats.errors++;
+        stats.errorDetails.push(errorMsg);
+        console.error(`[BackfillTaskEvaluations] ❌ ${errorMsg}`);
+      }
+    }
+
+    console.log("[BackfillTaskEvaluations] 📊 RESUMEN:");
+    console.log(`  Threads revisados:       ${stats.threadsReviewed}`);
+    console.log(`  Threads sin uso:         ${stats.unusedThreads}`);
+    console.log(`  Candidatas completas:    ${stats.candidateEvaluations}`);
+    console.log(`  Incompletas:             ${stats.incomplete}`);
+    console.log(`  Would create:            ${stats.wouldCreate}`);
+    console.log(`  Creadas:                 ${stats.created}`);
+    console.log(`  Ya existían:             ${stats.alreadyExists}`);
+    console.log(`  Task faltante:           ${stats.missingTask}`);
+    console.log(`  Errores:                 ${stats.errors}`);
+    console.log("=".repeat(60) + "\n");
+
+    return {
+      success: stats.errors === 0,
+      dryRun,
+      stats,
+    };
+  },
+});
+
+function uniqueStrings(values: string[]) {
+  return Array.from(new Set(values.filter(Boolean)));
+}
+
+function extractMessageText(message: any) {
+  if (typeof message.text === "string" && message.text.trim()) {
+    return message.text.trim();
+  }
+
+  const content = message.message?.content;
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return undefined;
+
+  const text = content
+    .filter((part: any) => part?.type === "text" && typeof part.text === "string")
+    .map((part: any) => part.text.trim())
+    .filter(Boolean)
+    .join("\n\n");
+
+  return text || undefined;
+}

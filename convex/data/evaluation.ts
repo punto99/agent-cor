@@ -1,10 +1,11 @@
 // convex/evaluation.ts
 // Funciones para manejar la evaluación de resultados
 import { v } from "convex/values";
-import { mutation, query } from "../_generated/server";
+import { internalMutation, internalQuery, mutation, query } from "../_generated/server";
 import { components, internal } from "../_generated/api";
 import { createThread, saveMessage, listUIMessages, getFile } from "@convex-dev/agent";
 import { paginationOptsValidator } from "convex/server";
+import { getAuthUserId } from "@convex-dev/auth/server";
 
 // Crear un thread de evaluación para un thread de brief existente
 export const createEvaluationThread = mutation({
@@ -67,6 +68,24 @@ export const sendEvaluationFile = mutation({
   },
   handler: async (ctx, { evaluationThreadId, briefThreadId, taskId, prompt, fileId, fileIds }) => {
     console.log(`[Evaluation] 📤 Enviando archivo(s) para evaluación`);
+    const userId = await getAuthUserId(ctx);
+    if (!userId) {
+      throw new Error("Debes iniciar sesión para enviar una evaluación.");
+    }
+
+    const task = await ctx.db.get(taskId);
+    if (!task || task.convexStatus === "deleted") {
+      throw new Error("No se encontró la task asociada a esta evaluación.");
+    }
+
+    const evalThread = await ctx.db
+      .query("evaluationThreads")
+      .withIndex("by_evaluation_thread", (q) => q.eq("evaluationThreadId", evaluationThreadId))
+      .first();
+
+    if (!evalThread || evalThread.taskId !== taskId) {
+      throw new Error("El thread de evaluación no corresponde a esta task.");
+    }
     
     // Crear contenido del mensaje
     const content: any[] = [];
@@ -136,22 +155,35 @@ Referencias del requerimiento original:
     console.log(`[Evaluation] ✅ Mensaje de evaluación guardado: ${messageId}`);
     
     // Actualizar status del thread de evaluación
-    const evalThread = await ctx.db
-      .query("evaluationThreads")
-      .withIndex("by_evaluation_thread", (q) => q.eq("evaluationThreadId", evaluationThreadId))
-      .first();
-    
-    if (evalThread) {
-      await ctx.db.patch(evalThread._id, { status: "in_progress" });
-    }
+    await ctx.db.patch(evalThread._id, { status: "in_progress" });
+
+    const now = Date.now();
+    const evaluationId = await ctx.db.insert("taskEvaluations", {
+      taskId,
+      evaluationThreadId,
+      originalThreadId: briefThreadId,
+      requestedBy: userId,
+      requestedBySource: "auth",
+      requestedAt: now,
+      status: "processing",
+      prompt,
+      inputFileIds: allFileIds,
+      userMessageId: messageId,
+      clientId: task.clientId,
+      clientBrandId: task.clientBrandId,
+      taskSource: task.source,
+      createdAt: now,
+      updatedAt: now,
+    });
     
     // Disparar generación de evaluación asíncrona
     await ctx.scheduler.runAfter(0, internal.agents.evaluatorAgentAction.generateEvaluationAsync, {
       threadId: evaluationThreadId,
       promptMessageId: messageId,
+      evaluationId,
     });
     
-    return { messageId };
+    return { messageId, evaluationId };
   },
 });
 
@@ -183,5 +215,166 @@ export const getEvaluationThreadByTask = query({
       .first();
     
     return evalThread;
+  },
+});
+
+export const completeTaskEvaluation = internalMutation({
+  args: {
+    evaluationId: v.id("taskEvaluations"),
+    resultText: v.string(),
+    resultMessageId: v.optional(v.string()),
+    resultProvider: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const evaluation = await ctx.db.get(args.evaluationId);
+    if (!evaluation) return { status: "missing" as const };
+
+    const now = Date.now();
+    await ctx.db.patch(args.evaluationId, {
+      status: "completed",
+      resultText: args.resultText,
+      resultMessageId: args.resultMessageId,
+      resultProvider: args.resultProvider,
+      completedAt: now,
+      updatedAt: now,
+      error: undefined,
+    });
+
+    const evalThread = await ctx.db
+      .query("evaluationThreads")
+      .withIndex("by_evaluation_thread", (q) =>
+        q.eq("evaluationThreadId", evaluation.evaluationThreadId),
+      )
+      .first();
+
+    if (evalThread) {
+      await ctx.db.patch(evalThread._id, { status: "completed" });
+    }
+
+    return { status: "completed" as const };
+  },
+});
+
+export const failTaskEvaluation = internalMutation({
+  args: {
+    evaluationId: v.id("taskEvaluations"),
+    error: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const evaluation = await ctx.db.get(args.evaluationId);
+    if (!evaluation) return { status: "missing" as const };
+
+    const now = Date.now();
+    await ctx.db.patch(args.evaluationId, {
+      status: "failed",
+      error: args.error,
+      updatedAt: now,
+    });
+
+    const evalThread = await ctx.db
+      .query("evaluationThreads")
+      .withIndex("by_evaluation_thread", (q) =>
+        q.eq("evaluationThreadId", evaluation.evaluationThreadId),
+      )
+      .first();
+
+    if (evalThread) {
+      await ctx.db.patch(evalThread._id, { status: "completed" });
+    }
+
+    return { status: "failed" as const };
+  },
+});
+
+export const listEvaluationThreadsForBackfill = internalQuery({
+  args: {
+    limit: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    return await ctx.db
+      .query("evaluationThreads")
+      .withIndex("by_createdAt")
+      .order("desc")
+      .take(args.limit ?? 100);
+  },
+});
+
+export const createBackfilledTaskEvaluation = internalMutation({
+  args: {
+    taskId: v.id("tasks"),
+    evaluationThreadId: v.string(),
+    originalThreadId: v.string(),
+    requestedBy: v.optional(v.string()),
+    requestedBySource: v.string(),
+    requestedAt: v.number(),
+    completedAt: v.number(),
+    prompt: v.optional(v.string()),
+    inputFileIds: v.array(v.string()),
+    userMessageId: v.optional(v.string()),
+    resultMessageId: v.optional(v.string()),
+    resultText: v.string(),
+    resultProvider: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    if (args.userMessageId) {
+      const existing = await ctx.db
+        .query("taskEvaluations")
+        .withIndex("by_userMessageId", (q) =>
+          q.eq("userMessageId", args.userMessageId),
+        )
+        .first();
+      if (existing) return { status: "already_exists" as const, evaluationId: existing._id };
+    }
+
+    if (args.resultMessageId) {
+      const existing = await ctx.db
+        .query("taskEvaluations")
+        .withIndex("by_resultMessageId", (q) =>
+          q.eq("resultMessageId", args.resultMessageId),
+        )
+        .first();
+      if (existing) return { status: "already_exists" as const, evaluationId: existing._id };
+    }
+
+    const task = await ctx.db.get(args.taskId);
+    if (!task || task.convexStatus === "deleted") {
+      return { status: "missing_task" as const };
+    }
+
+    let requestedBy = args.requestedBy
+      ? ctx.db.normalizeId("users", args.requestedBy)
+      : null;
+    let requestedBySource = requestedBy ? args.requestedBySource : "unknown";
+
+    if (!requestedBy && task.createdBy) {
+      requestedBy = ctx.db.normalizeId("users", task.createdBy);
+      if (requestedBy) requestedBySource = "taskCreatedBy";
+    }
+
+    const now = Date.now();
+    const evaluationId = await ctx.db.insert("taskEvaluations", {
+      taskId: args.taskId,
+      evaluationThreadId: args.evaluationThreadId,
+      originalThreadId: args.originalThreadId,
+      requestedBy: requestedBy ?? undefined,
+      requestedBySource,
+      requestedAt: args.requestedAt,
+      completedAt: args.completedAt,
+      status: "completed",
+      prompt: args.prompt,
+      inputFileIds: args.inputFileIds,
+      userMessageId: args.userMessageId,
+      resultMessageId: args.resultMessageId,
+      resultText: args.resultText,
+      resultProvider: args.resultProvider,
+      clientId: task.clientId,
+      clientBrandId: task.clientBrandId,
+      taskSource: task.source,
+      backfilled: true,
+      createdAt: args.requestedAt,
+      updatedAt: now,
+    });
+
+    return { status: "created" as const, evaluationId };
   },
 });
