@@ -169,6 +169,7 @@ export default defineSchema({
   taskEvaluations: defineTable({
     taskId: v.id("tasks"),
     evaluationThreadId: v.string(),
+    agentEvaluationThreadId: v.optional(v.string()),
     originalThreadId: v.string(),
     requestedBy: v.optional(v.id("users")),
     requestedBySource: v.optional(v.string()), // "auth" | "message" | "taskCreatedBy" | "unknown"
@@ -182,7 +183,9 @@ export default defineSchema({
     prompt: v.optional(v.string()),
     inputFileIds: v.array(v.string()),
     userMessageId: v.optional(v.string()),
+    agentUserMessageId: v.optional(v.string()),
     resultMessageId: v.optional(v.string()),
+    agentResultMessageId: v.optional(v.string()),
     resultText: v.optional(v.string()),
     resultProvider: v.optional(v.string()),
     error: v.optional(v.string()),
@@ -195,6 +198,7 @@ export default defineSchema({
   })
     .index("by_task", ["taskId"])
     .index("by_thread", ["evaluationThreadId"])
+    .index("by_agent_thread", ["agentEvaluationThreadId"])
     .index("by_requestedBy", ["requestedBy"])
     .index("by_status", ["status"])
     .index("by_createdAt", ["createdAt"])

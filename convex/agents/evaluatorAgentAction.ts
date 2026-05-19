@@ -3,7 +3,7 @@
 // convex/evaluatorAgentAction.ts
 // Agente evaluador para comparar producto final con requerimiento original
 // IMPORTANTE: Este archivo usa Node.js runtime (512MB) en vez de Convex runtime (64MB)
-import { Agent, createTool, listMessages } from "@convex-dev/agent";
+import { Agent, createTool, listMessages, saveMessage } from "@convex-dev/agent";
 import { components, internal } from "../_generated/api";
 import { google } from "@ai-sdk/google";
 import { z } from "zod";
@@ -191,9 +191,11 @@ export const generateEvaluationAsync = internalAction({
   args: {
     threadId: v.string(),
     promptMessageId: v.string(),
+    visibleThreadId: v.optional(v.string()),
+    visiblePromptMessageId: v.optional(v.string()),
     evaluationId: v.optional(v.id("taskEvaluations")),
   },
-  handler: async (ctx, { threadId, promptMessageId, evaluationId }): Promise<{
+  handler: async (ctx, { threadId, promptMessageId, visibleThreadId, visiblePromptMessageId, evaluationId }): Promise<{
     text: string;
     promptMessageId: string;
     provider: "gemini" | "openai";
@@ -254,12 +256,32 @@ export const generateEvaluationAsync = internalAction({
           if (message.tool || message.message?.role !== "assistant") return false;
           return typeof message.text === "string" && message.text.trim().length > 0;
         });
+      const resultText = result.text.trim() || resultMessage?.text?.trim() || "";
+
+      if (!resultText) {
+        throw new Error("El evaluador terminó sin generar una respuesta visible.");
+      }
 
       if (evaluationId) {
+        let visibleResultMessageId: string | undefined;
+        if (visibleThreadId) {
+          const savedVisibleMessage = await saveMessage(ctx, components.agent, {
+            threadId: visibleThreadId,
+            promptMessageId: visiblePromptMessageId,
+            agentName: agentConfig.evaluator.name,
+            message: {
+              role: "assistant",
+              content: resultText,
+            },
+          });
+          visibleResultMessageId = savedVisibleMessage.messageId;
+        }
+
         await ctx.runMutation(internal.data.evaluation.completeTaskEvaluation, {
           evaluationId,
-          resultText: result.text,
-          resultMessageId: resultMessage?._id,
+          resultText,
+          resultMessageId: visibleResultMessageId ?? resultMessage?._id,
+          agentResultMessageId: resultMessage?._id,
           resultProvider: usedProvider,
         });
       }

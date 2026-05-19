@@ -121,6 +121,10 @@ export function TaskDetailDialog({
         }
       : "skip",
   );
+  const latestTaskEvaluation = useQuery(
+    api.data.evaluation.getLatestTaskEvaluationByTask,
+    { taskId: task._id },
+  );
 
   // Sincronizar evaluationThreadId cuando el query resuelve
   useEffect(() => {
@@ -267,8 +271,12 @@ export function TaskDetailDialog({
     });
 
   const isEvaluatorThinking =
-    evalMessageList.length > 0 &&
-    evalMessageList[evalMessageList.length - 1]?.role === "user";
+    latestTaskEvaluation?.status === "processing" || isSubmittingEval;
+  const evaluationErrorMessage =
+    latestTaskEvaluation?.status === "failed" && !isEvaluatorThinking
+      ? latestTaskEvaluation.error ||
+        "El evaluador no pudo generar una respuesta."
+      : null;
   const shouldDeleteBoth = taskMissingInCOR && projectMissingInCOR && !!project;
 
   const handleConfirmDeleteTask = async () => {
@@ -564,6 +572,7 @@ export function TaskDetailDialog({
               <EvaluationMessageList
                 messages={evalMessageList}
                 isThinking={isEvaluatorThinking}
+                errorMessage={evaluationErrorMessage}
               />
               <EvaluationInput
                 selectedFiles={selectedFiles}

@@ -142,12 +142,28 @@ Referencias del requerimiento original:
       throw new Error("Debes adjuntar al menos un archivo o escribir un mensaje");
     }
     
-    // Guardar el mensaje del usuario (sin metadata personalizado)
+    const agentEvaluationThreadId = await createThread(ctx, components.agent, {
+      userId,
+      title: `Evaluación aislada de Brief`,
+      summary: `Thread técnico para evaluar task ${taskId}`,
+    });
+
+    // Guardar el mensaje del usuario en el thread visible de la task.
     const { messageId } = await saveMessage(ctx, components.agent, {
       threadId: evaluationThreadId,
       message: { 
         role: "user", 
         content
+      },
+      metadata: allFileIds.length > 0 ? { fileIds: allFileIds } : undefined,
+    });
+
+    // Guardar el mismo mensaje en un thread técnico limpio para la generación.
+    const { messageId: agentUserMessageId } = await saveMessage(ctx, components.agent, {
+      threadId: agentEvaluationThreadId,
+      message: {
+        role: "user",
+        content,
       },
       metadata: allFileIds.length > 0 ? { fileIds: allFileIds } : undefined,
     });
@@ -161,6 +177,7 @@ Referencias del requerimiento original:
     const evaluationId = await ctx.db.insert("taskEvaluations", {
       taskId,
       evaluationThreadId,
+      agentEvaluationThreadId,
       originalThreadId: briefThreadId,
       requestedBy: userId,
       requestedBySource: "auth",
@@ -169,6 +186,7 @@ Referencias del requerimiento original:
       prompt,
       inputFileIds: allFileIds,
       userMessageId: messageId,
+      agentUserMessageId,
       clientId: task.clientId,
       clientBrandId: task.clientBrandId,
       taskSource: task.source,
@@ -178,8 +196,10 @@ Referencias del requerimiento original:
     
     // Disparar generación de evaluación asíncrona
     await ctx.scheduler.runAfter(0, internal.agents.evaluatorAgentAction.generateEvaluationAsync, {
-      threadId: evaluationThreadId,
-      promptMessageId: messageId,
+      threadId: agentEvaluationThreadId,
+      promptMessageId: agentUserMessageId,
+      visibleThreadId: evaluationThreadId,
+      visiblePromptMessageId: messageId,
       evaluationId,
     });
     
@@ -218,11 +238,25 @@ export const getEvaluationThreadByTask = query({
   },
 });
 
+export const getLatestTaskEvaluationByTask = query({
+  args: {
+    taskId: v.id("tasks"),
+  },
+  handler: async (ctx, args) => {
+    return await ctx.db
+      .query("taskEvaluations")
+      .withIndex("by_task_and_createdAt", (q) => q.eq("taskId", args.taskId))
+      .order("desc")
+      .first();
+  },
+});
+
 export const completeTaskEvaluation = internalMutation({
   args: {
     evaluationId: v.id("taskEvaluations"),
     resultText: v.string(),
     resultMessageId: v.optional(v.string()),
+    agentResultMessageId: v.optional(v.string()),
     resultProvider: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
@@ -234,6 +268,7 @@ export const completeTaskEvaluation = internalMutation({
       status: "completed",
       resultText: args.resultText,
       resultMessageId: args.resultMessageId,
+      agentResultMessageId: args.agentResultMessageId,
       resultProvider: args.resultProvider,
       completedAt: now,
       updatedAt: now,

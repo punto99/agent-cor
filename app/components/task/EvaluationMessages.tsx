@@ -78,6 +78,7 @@ export function ThinkingIndicator() {
 interface EvaluationMessageListProps {
   messages: EvaluationMessage[];
   isThinking: boolean;
+  errorMessage?: string | null;
 }
 
 /**
@@ -86,6 +87,7 @@ interface EvaluationMessageListProps {
 export function EvaluationMessageList({
   messages,
   isThinking,
+  errorMessage,
 }: EvaluationMessageListProps) {
   return (
     <div className="flex-1 p-4 space-y-4 overflow-y-auto">
@@ -105,6 +107,20 @@ export function EvaluationMessageList({
       {messages.map((message) => (
         <MessageRenderer key={message.key} message={message} />
       ))}
+
+      {errorMessage && (
+        <div className="flex justify-start">
+          <div className="max-w-[90%] rounded-lg p-3 bg-destructive/10 text-destructive border border-destructive/20">
+            <div className="text-sm font-medium mb-1">
+              No se pudo completar la evaluación
+            </div>
+            <p className="text-sm">
+              {errorMessage} Puedes subir el archivo nuevamente e intentarlo
+              otra vez.
+            </p>
+          </div>
+        </div>
+      )}
 
       {isThinking && <ThinkingIndicator />}
     </div>
