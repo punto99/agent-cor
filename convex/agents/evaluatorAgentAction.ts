@@ -20,7 +20,7 @@ import {
 } from "../lib/llmFallback";
 
 // Usar modelo flash que es más eficiente en memoria
-const languageModel = google("gemini-3.1-pro-preview");
+const languageModel = google("gemini-3.5-flash");
 
 // Tool para obtener la información de la task del thread
 const getTaskInfoTool = createTool({
