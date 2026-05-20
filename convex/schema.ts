@@ -117,7 +117,7 @@ export default defineSchema({
   // Registro de errores de LLM para monitoreo y debugging
   llmErrors: defineTable({
     provider: v.string(), // "gemini" | "openai"
-    model: v.string(), // "gemini-3.1-pro-preview" | "gpt-5.2"
+    model: v.string(), // "gemini-3.5-flash" | "gpt-5.5"
     agentName: v.string(), // "briefAgent" | "reviewerAgent" | "evaluatorAgent"
     errorType: v.string(), // "rate_limit" | "high_demand" | "timeout" | "unknown"
     errorMessage: v.string(),
