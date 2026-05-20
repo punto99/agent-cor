@@ -13,6 +13,7 @@ import type {
   ExternalUser,
   ExternalClient,
   ExternalBrand,
+  ExternalProduct,
   ExternalProject,
   ExternalTask,
   ExternalTaskAttachment,
@@ -980,6 +981,74 @@ export function createCORProvider(): ProjectManagementProvider {
         return allBrands;
       } catch (error) {
         console.error("[COR Provider] ❌ Error en listAllBrands:", error);
+        return [];
+      }
+    },
+
+    // ==================== LIST ALL PRODUCTS ====================
+
+    async listAllProducts(): Promise<ExternalProduct[]> {
+      console.log("[COR Provider] 📋 Obteniendo TODOS los productos de COR con paginado...");
+
+      const perPage = 100;
+      const maxPages = 500;
+      const allProducts: ExternalProduct[] = [];
+
+      try {
+        for (let page = 1; page <= maxPages; page++) {
+          const response = await corApiFetch(`/products?page=${page}&perPage=${perPage}`);
+
+          if (!response.ok) {
+            const errorText = await response.text();
+            console.error(
+              `[COR Provider] ❌ Error listando productos página ${page}: ${response.status} - ${errorText}`
+            );
+            break;
+          }
+
+          const result = (await response.json()) as
+            | CORPaginatedResponse<Record<string, unknown>>
+            | Record<string, unknown>[];
+          const rawProducts = Array.isArray(result) ? result : result.data || [];
+
+          const products = rawProducts
+            .map((product) => {
+              const id = Number(product.id);
+              const clientId = Number(product.client_id);
+              const brandId = Number(product.brand_id);
+              const name = String(product.name || "").trim();
+
+              if (
+                !Number.isFinite(id) ||
+                !Number.isFinite(clientId) ||
+                !Number.isFinite(brandId) ||
+                !name
+              ) {
+                return null;
+              }
+
+              return { id, name, clientId, brandId };
+            })
+            .filter((product): product is ExternalProduct => product !== null);
+
+          allProducts.push(...products);
+
+          const pagination = Array.isArray(result) ? null : result;
+          const lastPage = Number(pagination?.lastPage);
+          const currentPage = Number(pagination?.page || page);
+
+          console.log(
+            `[COR Provider] Página productos ${currentPage}: ${products.length} válidos (${allProducts.length} acumulados)`
+          );
+
+          if (Number.isFinite(lastPage) && currentPage >= lastPage) break;
+          if (rawProducts.length < perPage) break;
+        }
+
+        console.log(`[COR Provider] ✅ Obtenidos ${allProducts.length} productos de COR`);
+        return allProducts;
+      } catch (error) {
+        console.error("[COR Provider] ❌ Error en listAllProducts:", error);
         return [];
       }
     },

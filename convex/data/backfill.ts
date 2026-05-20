@@ -464,7 +464,152 @@ export const syncClientBrandsFromCOR = internalAction({
   },
 });
 
-// ==================== 4. BACKFILL TASK CLIENT IDS ====================
+// ==================== 4. SYNC SUB BRANDS ====================
+
+/**
+ * Importa los productos de COR asociados a una marca.
+ *
+ * En Convex estos productos se guardan como subBrands.
+ * COR no expone aquí un endpoint directo de productos por marca, por eso:
+ *   1. Lista TODOS los productos con GET /products usando paginado.
+ *   2. Filtra localmente por brand_id === corBrandId.
+ *   3. Upsert en subBrands.
+ *
+ * Ejecutar desde:
+ * Dashboard de Convex → Functions → data/backfill:syncSubBrandsFromCOR → Run
+ */
+export const syncSubBrandsFromCOR = internalAction({
+  args: {
+    corBrandId: v.number(),
+  },
+  handler: async (ctx, args): Promise<any> => {
+    console.log("\n" + "=".repeat(60));
+    console.log("[SubBrands] 🚀 INICIO: syncSubBrandsFromCOR");
+    console.log(`[SubBrands] COR brand_id: ${args.corBrandId}`);
+    console.log("=".repeat(60));
+
+    const stats = {
+      totalCORProducts: 0,
+      matchedForBrand: 0,
+      created: 0,
+      updated: 0,
+      errors: 0,
+      errorDetails: [] as string[],
+    };
+
+    try {
+      const provider = getProjectManagementProvider();
+
+      if (provider.name === "noop") {
+        console.log(
+          "[SubBrands] ❌ Provider es noop — no se puede sincronizar productos sin integración COR.",
+        );
+        return { success: false, error: "Provider es noop", stats };
+      }
+
+      const localBrand: any = await ctx.runQuery(
+        internal.data.subBrands.getLocalBrandByCorId,
+        { corBrandId: args.corBrandId },
+      );
+
+      if (!localBrand) {
+        console.log(
+          `[SubBrands] ❌ No existe clientBrands para COR brand_id ${args.corBrandId}. Sin la marca local no se pueden guardar subBrands.`,
+        );
+        return {
+          success: false,
+          error: `No existe clientBrands para COR brand_id ${args.corBrandId}`,
+          stats,
+        };
+      }
+
+      console.log(
+        `[SubBrands] Marca local: ${localBrand.name} (${localBrand._id})`,
+      );
+
+      console.log("[SubBrands] 📋 Obteniendo todos los productos de COR...");
+      const allProducts = await provider.listAllProducts();
+      stats.totalCORProducts = allProducts.length;
+
+      const brandProducts = allProducts.filter(
+        (product) => product.brandId === args.corBrandId,
+      );
+      stats.matchedForBrand = brandProducts.length;
+
+      console.log(
+        `[SubBrands] ✅ ${brandProducts.length} productos encontrados para marca ${args.corBrandId} de ${allProducts.length} productos totales`,
+      );
+
+      for (const product of brandProducts) {
+        try {
+          const result = await ctx.runMutation(
+            internal.data.subBrands.upsertSubBrand,
+            {
+              clientBrandId: localBrand._id,
+              clientId: localBrand.clientId,
+              corClientId: product.clientId,
+              corBrandId: product.brandId,
+              corProductId: product.id,
+              name: product.name,
+            },
+          );
+
+          if (result.created) {
+            stats.created++;
+            console.log(
+              `[SubBrands] ✅ CREADA: ${product.name} (product_id: ${product.id})`,
+            );
+          } else {
+            stats.updated++;
+            console.log(
+              `[SubBrands] 🔄 ACTUALIZADA: ${product.name} (product_id: ${product.id})`,
+            );
+          }
+        } catch (error) {
+          const errorMsg = `${product.name} (product_id: ${product.id}): ${
+            error instanceof Error ? error.message : String(error)
+          }`;
+          stats.errors++;
+          stats.errorDetails.push(errorMsg);
+          console.error(`[SubBrands] ❌ ERROR: ${errorMsg}`);
+        }
+      }
+
+      console.log("\n" + "=".repeat(60));
+      console.log("[SubBrands] 📊 RESUMEN syncSubBrandsFromCOR:");
+      console.log(`  Productos COR totales:   ${stats.totalCORProducts}`);
+      console.log(`  Productos de la marca:   ${stats.matchedForBrand}`);
+      console.log(`  Creados:                 ${stats.created}`);
+      console.log(`  Actualizados:            ${stats.updated}`);
+      console.log(`  Errores:                 ${stats.errors}`);
+      if (stats.errorDetails.length > 0) {
+        console.log("  Detalle errores:");
+        stats.errorDetails.forEach((e) => console.log(`    - ${e}`));
+      }
+      console.log("=".repeat(60) + "\n");
+
+      return {
+        success: true,
+        corBrandId: args.corBrandId,
+        localBrandId: localBrand._id,
+        subBrands: brandProducts,
+        stats,
+      };
+    } catch (error) {
+      console.error(
+        "[SubBrands] ❌ ERROR FATAL en syncSubBrandsFromCOR:",
+        error,
+      );
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : String(error),
+        stats,
+      };
+    }
+  },
+});
+
+// ==================== 5. BACKFILL TASK CLIENT IDS ====================
 
 /**
  * Agrega tasks.clientId a tasks existentes.
@@ -588,7 +733,7 @@ export const backfillTaskClientIds = internalAction({
   },
 });
 
-// ==================== 5. BACKFILL TASK EVALUATIONS ====================
+// ==================== 6. BACKFILL TASK EVALUATIONS ====================
 
 /**
  * Migra evaluaciones reales desde los mensajes existentes del agent component.

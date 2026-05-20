@@ -39,6 +39,14 @@ export interface ExternalBrand {
   clientId: number;
 }
 
+/** Producto tal como existe en COR. En Convex se guarda como subBrand. */
+export interface ExternalProduct {
+  id: number;
+  name: string;
+  clientId: number;
+  brandId: number;
+}
+
 /** Proyecto tal como existe en el sistema externo */
 export interface ExternalProject {
   id: number;
@@ -259,6 +267,13 @@ export interface ProjectManagementProvider {
    * Usado para sincronizar marcas por cliente.
    */
   listAllBrands(): Promise<ExternalBrand[]>;
+
+  /**
+   * Listar TODOS los productos del sistema externo.
+   * En COR: GET /products con paginado.
+   * En Convex se guardan como subBrands vinculadas a clientBrands.
+   */
+  listAllProducts(): Promise<ExternalProduct[]>;
 
   /**
    * Listar attachments de una task en el sistema externo.

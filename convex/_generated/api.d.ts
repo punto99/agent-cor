@@ -34,6 +34,7 @@ import type * as data_llmConfig from "../data/llmConfig.js";
 import type * as data_permissions from "../data/permissions.js";
 import type * as data_preferences from "../data/preferences.js";
 import type * as data_projects from "../data/projects.js";
+import type * as data_subBrands from "../data/subBrands.js";
 import type * as data_tasks from "../data/tasks.js";
 import type * as data_trello from "../data/trello.js";
 import type * as data_userAccess from "../data/userAccess.js";
@@ -112,6 +113,7 @@ declare const fullApi: ApiFromModules<{
   "data/permissions": typeof data_permissions;
   "data/preferences": typeof data_preferences;
   "data/projects": typeof data_projects;
+  "data/subBrands": typeof data_subBrands;
   "data/tasks": typeof data_tasks;
   "data/trello": typeof data_trello;
   "data/userAccess": typeof data_userAccess;

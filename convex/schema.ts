@@ -350,6 +350,23 @@ export default defineSchema({
     .index("by_corClientId_and_corBrandId", ["corClientId", "corBrandId"]),
 
   // =====================================================
+  // Sub Brands — Productos de COR asociados a una marca
+  // =====================================================
+  subBrands: defineTable({
+    clientBrandId: v.id("clientBrands"), // Marca local que hereda permisos
+    clientId: v.optional(v.id("corClients")), // Cliente local, si existe
+    corClientId: v.number(), // ID del cliente en COR
+    corBrandId: v.number(), // ID de la marca en COR
+    corProductId: v.number(), // ID del producto en COR
+    name: v.string(),
+    syncedAt: v.number(),
+  })
+    .index("by_brand", ["clientBrandId"])
+    .index("by_corProductId", ["corProductId"])
+    .index("by_corBrandId", ["corBrandId"])
+    .index("by_corBrandId_and_corProductId", ["corBrandId", "corProductId"]),
+
+  // =====================================================
   // Client-User Assignments — Qué usuarios pueden usar qué clientes
   // =====================================================
   clientUserAssignments: defineTable({
