@@ -94,7 +94,7 @@ export const isUserAuthorizedForClient = internalQuery({
       )
       .collect();
 
-    return assignment.some((a) => a.brandId === undefined);
+    return assignment.length > 0;
   },
 });
 
@@ -293,4 +293,3 @@ export const removeUserFromClient = mutation({
     console.log(`[corClients] ✅ Asignación removida: usuario ${args.targetUserId} de cliente ${args.clientId}`);
   },
 });
-

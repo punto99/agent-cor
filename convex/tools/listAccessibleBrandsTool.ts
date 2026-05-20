@@ -28,13 +28,27 @@ export const listAccessibleBrandsTool = createTool({
       return "No tienes marcas asignadas todavía. Contacta al equipo para que te habiliten el acceso.";
     }
 
-    const formatted = brands
-      .map(
-        (brand: any, index: number) =>
-          `${index + 1}. ${brand.name} (clientBrandId: ${brand._id}, corBrandId: ${brand.corBrandId}, corClientId: ${brand.corClientId})`,
-      )
-      .join("\n");
+    const lines = [];
+    for (let index = 0; index < brands.length; index += 1) {
+      const brand = brands[index] as any;
+      const subBrands = await ctx.runQuery(
+        internal.data.subBrands.listByBrandInternal,
+        { clientBrandId: brand._id as any },
+      );
+      const subBrandText =
+        subBrands.length > 0
+          ? `\n   Productos/subBrands: ${subBrands
+              .map(
+                (subBrand: any) =>
+                  `${subBrand.name} (subBrandId: ${subBrand._id}, corProductId: ${subBrand.corProductId})`,
+              )
+              .join("; ")}`
+          : "";
+      lines.push(
+        `${index + 1}. ${brand.name} (clientBrandId: ${brand._id}, corBrandId: ${brand.corBrandId}, corClientId: ${brand.corClientId})${subBrandText}`,
+      );
+    }
 
-    return `Marcas disponibles para este usuario:\n${formatted}`;
+    return `Marcas disponibles para este usuario:\n${lines.join("\n")}`;
   },
 });

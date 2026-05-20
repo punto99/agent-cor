@@ -211,6 +211,20 @@ export const validateUserForClientTool = createTool({
       `[ValidateUserForClient] ✅ Validación completa — usuario autorizado para ${corClient.name}`
     );
 
+    const accessibleBrands = await ctx.runQuery(
+      internal.data.permissions.listAccessibleBrands,
+      { userId: userId as any },
+    );
+    const brands = [];
+    for (const brand of accessibleBrands as any[]) {
+      if (brand.clientId !== localClient._id) continue;
+      const subBrands = await ctx.runQuery(
+        internal.data.subBrands.listByBrandInternal,
+        { clientBrandId: brand._id as any },
+      );
+      brands.push({ ...brand, subBrands });
+    }
+
     return JSON.stringify({
       authorized: true,
       corUserId: corUser.corUserId,
@@ -218,6 +232,17 @@ export const validateUserForClientTool = createTool({
       corClientName: corClient.name,
       localClientId: localClient._id,
       nomenclature: localClient.nomenclature || undefined,
+      brands: brands.map((brand: any) => ({
+        clientBrandId: String(brand._id),
+        name: brand.name,
+        corBrandId: brand.corBrandId,
+        subBrands: brand.subBrands.map((subBrand: any) => ({
+          subBrandId: String(subBrand._id),
+          name: subBrand.name,
+          corProductId: subBrand.corProductId,
+        })),
+      })),
+      requiresBrand: brands.length > 0,
     });
   },
 });

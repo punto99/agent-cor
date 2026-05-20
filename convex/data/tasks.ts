@@ -47,6 +47,86 @@ async function isExternalUser(ctx: any, userId: any) {
   return Boolean(approvedExternalUser);
 }
 
+async function resolveCreationTaxonomy(
+  ctx: any,
+  args: {
+    clientId?: any;
+    corClientId?: number;
+    clientBrandId?: any;
+    subBrandId?: any;
+  },
+) {
+  let clientId = args.clientId;
+  if (!clientId && args.corClientId !== undefined) {
+    const client = await ctx.db
+      .query("corClients")
+      .withIndex("by_corClientId", (q: any) =>
+        q.eq("corClientId", args.corClientId!),
+      )
+      .unique();
+    clientId = client?._id;
+  }
+
+  let brand = args.clientBrandId ? await ctx.db.get(args.clientBrandId) : null;
+  if (args.clientBrandId && !brand) {
+    throw new Error("❌ La marca seleccionada no existe.");
+  }
+
+  if (clientId && brand?.clientId && brand.clientId !== clientId) {
+    throw new Error("❌ La marca seleccionada no pertenece al cliente validado.");
+  }
+
+  if (clientId && !brand) {
+    const clientBrands = await ctx.db
+      .query("clientBrands")
+      .withIndex("by_client", (q: any) => q.eq("clientId", clientId))
+      .collect();
+    if (clientBrands.length > 0) {
+      throw new Error(
+        "❌ Este cliente tiene marcas configuradas. Debes seleccionar una marca antes de crear el requerimiento.",
+      );
+    }
+  }
+
+  let subBrand = args.subBrandId ? await ctx.db.get(args.subBrandId) : null;
+  if (args.subBrandId && !subBrand) {
+    throw new Error("❌ La subBrand/producto seleccionada no existe.");
+  }
+
+  if (!brand && subBrand) {
+    brand = await ctx.db.get(subBrand.clientBrandId);
+  }
+
+  if (brand) {
+    const subBrands = await ctx.db
+      .query("subBrands")
+      .withIndex("by_brand", (q: any) => q.eq("clientBrandId", brand!._id))
+      .collect();
+
+    if (subBrands.length > 0 && !subBrand) {
+      throw new Error(
+        `❌ La marca "${brand.name}" tiene productos/subBrands configurados. Debes seleccionar una subBrand antes de crear el requerimiento.`,
+      );
+    }
+
+    if (subBrand && subBrand.clientBrandId !== brand._id) {
+      throw new Error(
+        "❌ La subBrand/producto seleccionada no pertenece a la marca validada.",
+      );
+    }
+  }
+
+  return {
+    clientId,
+    clientBrandId: brand?._id,
+    brandId: brand?.corBrandId,
+    brandName: brand?.name,
+    subBrandId: subBrand?._id,
+    productId: subBrand?.corProductId,
+    subBrandName: subBrand?.name,
+  };
+}
+
 function normalizeDescriptionText(value: unknown): string {
   if (typeof value !== "string") return "";
   return value
@@ -727,6 +807,7 @@ export const validateAndPrepareTask = internalQuery({
     threadId: v.string(),
     corClientId: v.optional(v.number()),
     corUserId: v.optional(v.number()),
+    clientBrandId: v.optional(v.id("clientBrands")),
     requireIntegration: v.boolean(),
   },
   handler: async (ctx, args) => {
@@ -802,10 +883,15 @@ export const validateAndPrepareTask = internalQuery({
         const hasFullAccess = assignments.some(
           (assignment) => assignment.brandId === undefined,
         );
-        if (!hasFullAccess) {
+        const hasBrandAccess =
+          args.clientBrandId !== undefined &&
+          assignments.some(
+            (assignment) => assignment.brandId === args.clientBrandId,
+          );
+        if (!hasFullAccess && !hasBrandAccess) {
           return {
             ok: false as const,
-            error: `❌ No tienes autorización para crear briefs para este cliente. Contacta al administrador.`,
+            error: `❌ No tienes autorización para crear briefs para este cliente o marca. Contacta al administrador.`,
           };
         }
       }
@@ -854,6 +940,7 @@ export const validateAndPrepareExternalTask = internalQuery({
   args: {
     threadId: v.string(),
     clientBrandId: v.id("clientBrands"),
+    subBrandId: v.optional(v.id("subBrands")),
   },
   handler: async (ctx, args) => {
     const chatThread = await ctx.db
@@ -937,6 +1024,46 @@ export const validateAndPrepareExternalTask = internalQuery({
       };
     }
 
+    const subBrands = await ctx.db
+      .query("subBrands")
+      .withIndex("by_brand", (q) => q.eq("clientBrandId", brand._id))
+      .collect();
+
+    let subBrand = null as any;
+    if (subBrands.length > 0) {
+      if (!args.subBrandId) {
+        return {
+          ok: false as const,
+          error: `❌ La marca "${brand.name}" tiene productos/subBrands configurados. Debes pedirle al cliente que elija una antes de crear el requerimiento.`,
+          availableSubBrands: subBrands.map((candidate) => ({
+            subBrandId: String(candidate._id),
+            name: candidate.name,
+            corProductId: candidate.corProductId,
+          })),
+        };
+      }
+
+      subBrand = await ctx.db.get(args.subBrandId);
+      if (!subBrand || subBrand.clientBrandId !== brand._id) {
+        return {
+          ok: false as const,
+          error:
+            "❌ La subBrand/producto seleccionada no pertenece a la marca validada.",
+          availableSubBrands: subBrands.map((candidate) => ({
+            subBrandId: String(candidate._id),
+            name: candidate.name,
+            corProductId: candidate.corProductId,
+          })),
+        };
+      }
+    } else if (args.subBrandId) {
+      return {
+        ok: false as const,
+        error:
+          "❌ Esta marca no tiene productos/subBrands configurados. No envíes una subBrand para este requerimiento.",
+      };
+    }
+
     const existingProject = await ctx.db
       .query("projects")
       .withIndex("by_threadId", (q) => q.eq("threadId", args.threadId))
@@ -951,6 +1078,9 @@ export const validateAndPrepareExternalTask = internalQuery({
       clientBrandId: brand._id,
       corBrandId: brand.corBrandId,
       brandName: brand.name,
+      subBrandId: subBrand?._id,
+      corProductId: subBrand?.corProductId,
+      subBrandName: subBrand?.name,
       existingProjectId: existingProject?._id || undefined,
     };
   },
@@ -978,6 +1108,9 @@ export const createProjectAndTask = internalMutation({
     projectClientBrandId: v.optional(v.id("clientBrands")),
     projectBrandId: v.optional(v.number()),
     projectBrandName: v.optional(v.string()),
+    projectSubBrandId: v.optional(v.id("subBrands")),
+    projectProductId: v.optional(v.number()),
+    projectSubBrandName: v.optional(v.string()),
     // Task fields
     taskTitle: v.string(),
     taskDescription: v.optional(v.string()),
@@ -994,11 +1127,32 @@ export const createProjectAndTask = internalMutation({
     taskClientBrandId: v.optional(v.id("clientBrands")),
     taskBrandId: v.optional(v.number()),
     taskBrandName: v.optional(v.string()),
+    taskSubBrandId: v.optional(v.id("subBrands")),
+    taskProductId: v.optional(v.number()),
+    taskSubBrandName: v.optional(v.string()),
     // Shared
     threadId: v.string(),
     existingProjectId: v.optional(v.id("projects")),
   },
   handler: async (ctx, args) => {
+    const existingProject = args.existingProjectId
+      ? await ctx.db.get(args.existingProjectId)
+      : null;
+
+    const resolved = await resolveCreationTaxonomy(ctx, {
+      clientId:
+        args.taskClientId ?? args.projectClientId ?? existingProject?.clientId,
+      corClientId: args.taskCorClientId ?? args.projectCorClientId,
+      clientBrandId:
+        args.taskClientBrandId ??
+        args.projectClientBrandId ??
+        existingProject?.clientBrandId,
+      subBrandId:
+        args.taskSubBrandId ??
+        args.projectSubBrandId ??
+        existingProject?.subBrandId,
+    });
+
     // 1. Crear o reutilizar proyecto
     let projectId: string;
     if (args.existingProjectId) {
@@ -1018,20 +1172,22 @@ export const createProjectAndTask = internalMutation({
         createdBy: args.projectCreatedBy,
         threadId: args.threadId,
         source: args.projectSource || "internal",
-        clientBrandId: args.projectClientBrandId,
-        brandId: args.projectBrandId,
-        brandName: args.projectBrandName,
+        clientBrandId: resolved.clientBrandId,
+        brandId: resolved.brandId ?? args.projectBrandId,
+        brandName: resolved.brandName ?? args.projectBrandName,
+        subBrandId: resolved.subBrandId,
+        productId: resolved.productId ?? args.projectProductId,
+        subBrandName: resolved.subBrandName ?? args.projectSubBrandName,
         corClientId: args.projectCorClientId,
-        clientId: args.projectClientId,
+        clientId: resolved.clientId ?? args.projectClientId,
         corSyncStatus: "pending",
       });
       console.log(`[CreateProjectAndTask] ✅ Proyecto creado: ${projectId}`);
     }
 
-    let taskClientId = args.taskClientId ?? args.projectClientId;
+    let taskClientId = resolved.clientId ?? args.taskClientId ?? args.projectClientId;
     if (!taskClientId && args.existingProjectId) {
-      const project = await ctx.db.get(args.existingProjectId);
-      if (project?.clientId) taskClientId = project.clientId;
+      if (existingProject?.clientId) taskClientId = existingProject.clientId;
     }
     if (!taskClientId && args.taskCorClientId !== undefined) {
       const client = await ctx.db
@@ -1056,9 +1212,12 @@ export const createProjectAndTask = internalMutation({
       projectId: projectId as any,
       source: args.taskSource || "internal",
       clientId: taskClientId,
-      clientBrandId: args.taskClientBrandId,
-      brandId: args.taskBrandId,
-      brandName: args.taskBrandName,
+      clientBrandId: resolved.clientBrandId ?? args.taskClientBrandId,
+      brandId: resolved.brandId ?? args.taskBrandId,
+      brandName: resolved.brandName ?? args.taskBrandName,
+      subBrandId: resolved.subBrandId ?? args.taskSubBrandId,
+      productId: resolved.productId ?? args.taskProductId,
+      subBrandName: resolved.subBrandName ?? args.taskSubBrandName,
       corSyncStatus: "pending",
       corClientId: args.taskCorClientId,
       corClientName: args.taskCorClientName,

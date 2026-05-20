@@ -44,6 +44,12 @@ export const createExternalTaskTool = createTool({
         "ID local de clientBrands validado con validateExternalUserForBrand - OBLIGATORIO",
       ),
     brand: z.string().describe("Marca validada - OBLIGATORIO"),
+    subBrandId: z
+      .string()
+      .optional()
+      .describe(
+        "ID local de subBrands cuando validateExternalUserForBrand indicó que la marca tiene productos/subBrands.",
+      ),
     deadline: z
       .string()
       .describe("Fecha límite - OBLIGATORIO (formato YYYY-MM-DD)"),
@@ -95,6 +101,7 @@ export const createExternalTaskTool = createTool({
       {
         threadId,
         clientBrandId: args.clientBrandId as any,
+        subBrandId: args.subBrandId as any,
       },
     );
 
@@ -161,6 +168,9 @@ export const createExternalTaskTool = createTool({
         projectClientBrandId: preparation.clientBrandId as any,
         projectBrandId: preparation.corBrandId,
         projectBrandName: preparation.brandName,
+        projectSubBrandId: preparation.subBrandId as any,
+        projectProductId: preparation.corProductId,
+        projectSubBrandName: preparation.subBrandName,
         taskTitle: fullTitle,
         taskDescription: description,
         taskDeadline: args.deadline,
@@ -174,11 +184,17 @@ export const createExternalTaskTool = createTool({
         taskClientBrandId: preparation.clientBrandId as any,
         taskBrandId: preparation.corBrandId,
         taskBrandName: preparation.brandName,
+        taskSubBrandId: preparation.subBrandId as any,
+        taskProductId: preparation.corProductId,
+        taskSubBrandName: preparation.subBrandName,
         threadId,
         existingProjectId: preparation.existingProjectId as any,
       });
     } catch (error) {
       console.error("[CreateExternalTask] Error creando proyecto/task:", error);
+      if (error instanceof Error && error.message.startsWith("❌")) {
+        return error.message;
+      }
       return "Error: No se pudo crear el proyecto y requerimiento asociados.";
     }
 

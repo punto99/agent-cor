@@ -87,6 +87,10 @@ export const validateExternalUserForBrandTool = createTool({
     }
 
     const brand = matches[0];
+    const subBrands = await ctx.runQuery(
+      internal.data.subBrands.listByBrandInternal,
+      { clientBrandId: brand._id as any },
+    );
 
     return JSON.stringify({
       authorized: true,
@@ -95,6 +99,12 @@ export const validateExternalUserForBrandTool = createTool({
       corBrandId: brand.corBrandId,
       corClientId: brand.corClientId,
       localClientId: brand.clientId ? String(brand.clientId) : undefined,
+      requiresSubBrand: subBrands.length > 0,
+      subBrands: subBrands.map((subBrand: any) => ({
+        subBrandId: String(subBrand._id),
+        name: subBrand.name,
+        corProductId: subBrand.corProductId,
+      })),
     });
   },
 });

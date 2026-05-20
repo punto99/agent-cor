@@ -66,6 +66,24 @@ export const createTaskTool = createTool({
       ),
     requestType: z.string().describe("Tipo de requerimiento - OBLIGATORIO"),
     brand: z.string().describe("Marca o empresa - OBLIGATORIO"),
+    clientBrandId: z
+      .string()
+      .optional()
+      .describe(
+        "ID local de clientBrands si validateUserForClient devolvio marcas para el cliente.",
+      ),
+    subBrand: z
+      .string()
+      .optional()
+      .describe(
+        "Producto/subBrand indicado por el usuario cuando la marca tiene subBrands.",
+      ),
+    subBrandId: z
+      .string()
+      .optional()
+      .describe(
+        "ID local de subBrands si validateUserForClient devolvio productos/subBrands para la marca.",
+      ),
     deadline: z
       .string()
       .describe("Fecha limite del proyecto - OBLIGATORIO (formato YYYY-MM-DD)"),
@@ -166,6 +184,7 @@ export const createTaskTool = createTool({
         threadId,
         corClientId: args.corClientId,
         corUserId: args.corUserId,
+        clientBrandId: args.clientBrandId as any,
         requireIntegration: integrationEnabled,
       },
     );
@@ -178,6 +197,38 @@ export const createTaskTool = createTool({
     console.log(
       `[CreateTask] ✅ Validación OK — UserId: ${userId || "no encontrado"}`,
     );
+
+    const taxonomy = localClientId
+      ? await ctx.runQuery(
+          internal.data.subBrands.resolveBrandAndSubBrandForClient,
+          {
+            clientId: localClientId as any,
+            brandName: args.brand,
+            clientBrandId: args.clientBrandId as any,
+            subBrandName: args.subBrand,
+            subBrandId: args.subBrandId as any,
+          },
+        )
+      : { ok: true as const, requiresBrand: false };
+
+    if (!taxonomy.ok) {
+      const taxonomyAny = taxonomy as any;
+      const availableBrands = taxonomyAny.availableBrands
+        ? `\n\nMarcas disponibles:\n${taxonomyAny.availableBrands
+            .map((brand: any) => `- ${brand.name} (clientBrandId: ${brand.clientBrandId})`)
+            .join("\n")}`
+        : "";
+      const availableSubBrands = taxonomyAny.availableSubBrands
+        ? `\n\nSubBrands/productos disponibles:\n${taxonomyAny.availableSubBrands
+            .map((subBrand: any) => `- ${subBrand.name} (subBrandId: ${subBrand.subBrandId})`)
+            .join("\n")}`
+        : "";
+      return `❌ ${taxonomyAny.error}${availableBrands}${availableSubBrands}`;
+    }
+
+    const taxonomyAny = taxonomy as any;
+    const resolvedBrand = taxonomyAny.brand;
+    const resolvedSubBrand = taxonomyAny.subBrand;
 
     // ====================================================
     // Prefijo del título: nomenclature > corClientName
@@ -195,7 +246,7 @@ export const createTaskTool = createTool({
     // ====================================================
     const description = buildBriefDescription({
       requestType: args.requestType,
-      brand: args.brand,
+      brand: resolvedBrand?.name ?? args.brand,
       deadline: args.deadline,
       deliverables: args.deliverables,
       objective: args.objective,
@@ -262,6 +313,12 @@ export const createTaskTool = createTool({
         projectCorClientId: args.corClientId,
         projectClientId: localClientId as any,
         projectCreatedBy: userId,
+        projectClientBrandId: resolvedBrand?._id as any,
+        projectBrandId: resolvedBrand?.corBrandId,
+        projectBrandName: resolvedBrand?.name,
+        projectSubBrandId: resolvedSubBrand?._id as any,
+        projectProductId: resolvedSubBrand?.corProductId,
+        projectSubBrandName: resolvedSubBrand?.name,
         // Task
         taskTitle: fullTitle,
         taskDescription: description,
@@ -272,12 +329,21 @@ export const createTaskTool = createTool({
         taskClientId: localClientId as any,
         taskCorClientId: args.corClientId,
         taskCorClientName: args.corClientName,
+        taskClientBrandId: resolvedBrand?._id as any,
+        taskBrandId: resolvedBrand?.corBrandId,
+        taskBrandName: resolvedBrand?.name,
+        taskSubBrandId: resolvedSubBrand?._id as any,
+        taskProductId: resolvedSubBrand?.corProductId,
+        taskSubBrandName: resolvedSubBrand?.name,
         // Shared
         threadId,
         existingProjectId: existingProjectId as any,
       });
     } catch (error) {
       console.error("[CreateTask] ❌ Error creando proyecto/task:", error);
+      if (error instanceof Error && error.message.startsWith("❌")) {
+        return error.message;
+      }
       return "❌ Error: No se pudo crear el proyecto y task asociados.";
     }
 

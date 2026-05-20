@@ -86,6 +86,9 @@ export default defineSchema({
     clientBrandId: v.optional(v.id("clientBrands")),
     brandId: v.optional(v.number()), // Marca en COR (brand_id)
     brandName: v.optional(v.string()),
+    subBrandId: v.optional(v.id("subBrands")),
+    productId: v.optional(v.number()), // Producto en COR (product_id)
+    subBrandName: v.optional(v.string()),
     // === Campos de sincronización con herramienta externa (COR, Trello, etc.) ===
     corTaskId: v.optional(v.string()),
     corProjectId: v.optional(v.number()),
@@ -118,6 +121,7 @@ export default defineSchema({
     .index("by_createdBy_clientId_status", ["createdBy", "clientId", "status"])
     .index("by_strategicPriority", ["strategicPriority"])
     .index("by_clientBrandId", ["clientBrandId"])
+    .index("by_subBrandId", ["subBrandId"])
     .index("by_createdBy_clientBrandId_status", [
       "createdBy",
       "clientBrandId",
@@ -410,6 +414,8 @@ export default defineSchema({
     source: v.optional(v.union(v.literal("internal"), v.literal("external"))),
     clientBrandId: v.optional(v.id("clientBrands")),
     brandName: v.optional(v.string()),
+    subBrandId: v.optional(v.id("subBrands")),
+    subBrandName: v.optional(v.string()),
     // === Campos de sincronización con COR ===
     corProjectId: v.optional(v.number()),
     corClientId: v.optional(v.number()), // Denormalized para fast publish
@@ -429,6 +435,7 @@ export default defineSchema({
     .index("by_status", ["status"])
     .index("by_source", ["source"])
     .index("by_clientBrandId", ["clientBrandId"])
+    .index("by_subBrandId", ["subBrandId"])
     .index("by_corClientId", ["corClientId"])
     .index("by_corProjectId", ["corProjectId"])
     .index("by_createdBy", ["createdBy"])
