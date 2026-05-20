@@ -110,6 +110,9 @@ export default defineSchema({
     trelloSyncStatus: v.optional(v.string()), // "pending" | "syncing" | "synced" | "error"
     trelloSyncError: v.optional(v.string()),
     trelloSyncedAt: v.optional(v.number()),
+    trelloAttachmentSyncStatus: v.optional(v.string()), // "pending" | "synced" | "partial" | "error"
+    trelloAttachmentSyncError: v.optional(v.string()),
+    trelloAttachmentSyncedAt: v.optional(v.number()),
   })
     .index("by_thread", ["threadId"])
     .index("by_status", ["status"])
@@ -152,11 +155,19 @@ export default defineSchema({
     // === Sincronización con COR ===
     corAttachmentId: v.optional(v.number()), // ID del attachment en COR (null = no sincronizado)
     corUrl: v.optional(v.string()), // URL del archivo en COR
+    // === Sincronización con Trello ===
+    trelloAttachmentId: v.optional(v.string()),
+    trelloAttachmentUrl: v.optional(v.string()),
+    trelloSyncStatus: v.optional(v.string()), // "pending" | "synced" | "error"
+    trelloSyncError: v.optional(v.string()),
+    trelloSyncedAt: v.optional(v.number()),
     // === Metadata ===
     createdAt: v.number(),
   })
     .index("by_task", ["taskId"])
-    .index("by_task_and_cor", ["taskId", "corAttachmentId"]),
+    .index("by_task_and_cor", ["taskId", "corAttachmentId"])
+    .index("by_task_and_trello", ["taskId", "trelloAttachmentId"])
+    .index("by_trelloSyncStatus", ["trelloSyncStatus"]),
 
   evaluationThreads: defineTable({
     taskId: v.id("tasks"),

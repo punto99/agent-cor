@@ -674,6 +674,54 @@ export const updateAttachmentCORSync = internalMutation({
   },
 });
 
+export const updateAttachmentTrelloSync = internalMutation({
+  args: {
+    attachmentId: v.id("taskAttachments"),
+    trelloAttachmentId: v.string(),
+    trelloAttachmentUrl: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    await ctx.db.patch(args.attachmentId, {
+      trelloAttachmentId: args.trelloAttachmentId,
+      trelloAttachmentUrl: args.trelloAttachmentUrl,
+      trelloSyncStatus: "synced",
+      trelloSyncError: undefined,
+      trelloSyncedAt: Date.now(),
+    });
+  },
+});
+
+export const updateAttachmentTrelloError = internalMutation({
+  args: {
+    attachmentId: v.id("taskAttachments"),
+    error: v.string(),
+  },
+  handler: async (ctx, args) => {
+    await ctx.db.patch(args.attachmentId, {
+      trelloSyncStatus: "error",
+      trelloSyncError: args.error,
+    });
+  },
+});
+
+export const updateTaskTrelloAttachmentSummary = internalMutation({
+  args: {
+    taskId: v.id("tasks"),
+    status: v.string(),
+    error: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    await ctx.db.patch(args.taskId, {
+      trelloAttachmentSyncStatus: args.status,
+      trelloAttachmentSyncError: args.error,
+      trelloAttachmentSyncedAt:
+        args.status === "synced" || args.status === "partial"
+          ? Date.now()
+          : undefined,
+    });
+  },
+});
+
 // Mutation interna para eliminar un attachment local de task
 export const deleteTaskAttachment = internalMutation({
   args: {
@@ -700,6 +748,18 @@ export const getPendingAttachments = internalQuery({
 
 // Query interna para obtener todos los attachments de una task
 export const getTaskAttachments = internalQuery({
+  args: {
+    taskId: v.id("tasks"),
+  },
+  handler: async (ctx, args) => {
+    return await ctx.db
+      .query("taskAttachments")
+      .withIndex("by_task", (q) => q.eq("taskId", args.taskId))
+      .collect();
+  },
+});
+
+export const getTaskAttachmentsForTrello = internalQuery({
   args: {
     taskId: v.id("tasks"),
   },

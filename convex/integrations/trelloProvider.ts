@@ -30,6 +30,12 @@ type TrelloLabel = {
   color: string | null;
 };
 
+type TrelloAttachment = {
+  id: string;
+  name: string;
+  url: string;
+};
+
 function getCredentials() {
   const key = process.env.TRELLO_API_KEY;
   const token = process.env.TRELLO_TOKEN;
@@ -148,6 +154,27 @@ export const trelloProvider = {
         idBoard: args.boardId,
         name: args.name,
         color: args.color,
+      },
+    );
+  },
+
+  async addCardAttachment(args: {
+    cardId: string;
+    name: string;
+    file: Blob;
+  }): Promise<TrelloAttachment> {
+    const formData = new FormData();
+    formData.append("file", args.file, args.name);
+    formData.append("name", args.name);
+
+    return await trelloFetch<TrelloAttachment>(
+      `/cards/${args.cardId}/attachments`,
+      {
+        method: "POST",
+        body: formData,
+      },
+      {
+        setCover: false,
       },
     );
   },

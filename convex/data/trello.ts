@@ -595,6 +595,89 @@ async function ensureTrelloLabelForSubBrand(ctx: any, args: {
   throw new Error("No se pudo sincronizar la etiqueta Trello de la marca.");
 }
 
+async function syncTaskAttachmentsToTrello(ctx: any, args: {
+  taskId: any;
+  cardId: string;
+}) {
+  const attachments = await ctx.runQuery(
+    internal.data.tasks.getTaskAttachmentsForTrello,
+    { taskId: args.taskId },
+  );
+
+  if (attachments.length === 0) {
+    await ctx.runMutation(internal.data.tasks.updateTaskTrelloAttachmentSummary, {
+      taskId: args.taskId,
+      status: "synced",
+    });
+    return { total: 0, synced: 0, failed: 0 };
+  }
+
+  console.log(
+    `[TrelloSync][Attachments] Subiendo ${attachments.length} archivo(s) a card ${args.cardId}`
+  );
+
+  let synced = 0;
+  let failed = 0;
+  const errors: string[] = [];
+
+  for (const attachment of attachments) {
+    if (attachment.trelloAttachmentId) {
+      synced += 1;
+      continue;
+    }
+
+    try {
+      const blob = await ctx.storage.get(attachment.storageId as any);
+      if (!blob) {
+        throw new Error(`Blob no encontrado para storageId ${attachment.storageId}`);
+      }
+
+      const trelloAttachment = await trelloProvider.addCardAttachment({
+        cardId: args.cardId,
+        name: attachment.filename,
+        file: blob,
+      });
+
+      await ctx.runMutation(internal.data.tasks.updateAttachmentTrelloSync, {
+        attachmentId: attachment._id,
+        trelloAttachmentId: trelloAttachment.id,
+        trelloAttachmentUrl: trelloAttachment.url,
+      });
+
+      synced += 1;
+      console.log(
+        `[TrelloSync][Attachments] ✅ ${attachment.filename} → Trello attachment ${trelloAttachment.id}`
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      failed += 1;
+      errors.push(`${attachment.filename}: ${message}`);
+      console.error(
+        `[TrelloSync][Attachments] ⚠️ Error subiendo ${attachment.filename}: ${message}`
+      );
+
+      await ctx.runMutation(internal.data.tasks.updateAttachmentTrelloError, {
+        attachmentId: attachment._id,
+        error: message,
+      });
+    }
+  }
+
+  const status =
+    failed === 0 ? "synced" : synced > 0 ? "partial" : "error";
+  await ctx.runMutation(internal.data.tasks.updateTaskTrelloAttachmentSummary, {
+    taskId: args.taskId,
+    status,
+    error: errors.length > 0 ? errors.join(" | ") : undefined,
+  });
+
+  console.log(
+    `[TrelloSync][Attachments] Resultado task ${args.taskId}: ${synced}/${attachments.length} subidos, ${failed} error(es)`
+  );
+
+  return { total: attachments.length, synced, failed };
+}
+
 export const scheduleCreateCardForExternalTask = internalMutation({
   args: {
     taskId: v.id("tasks"),
@@ -697,6 +780,11 @@ export const createCardForExternalTask: any = internalAction({
           value: customValue.value,
         });
       }
+
+      await syncTaskAttachmentsToTrello(ctx, {
+        taskId: data.task._id,
+        cardId: card.id,
+      });
 
       await ctx.runMutation(internalTrello.markTrelloCardSynced, {
         taskId: data.task._id,
