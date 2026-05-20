@@ -27,7 +27,7 @@ const AUDIO_RESTRICTED_MESSAGE =
 
 // Generar respuesta del agente (interna, llamada async)
 // CON ORQUESTADOR: Clasifica intención → enruta al agente correcto
-// CON SISTEMA DE FALLBACK: Gemini -> OpenAI GPT-5.4
+// CON SISTEMA DE FALLBACK: Gemini -> OpenAI GPT-5.5
 export const generateResponseAsync = internalAction({
   args: {
     threadId: v.string(),
