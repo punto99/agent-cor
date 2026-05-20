@@ -493,7 +493,7 @@ export default function ControlPanelPage() {
                             : "border-border bg-card text-muted-foreground hover:border-primary/40 hover:bg-accent hover:text-foreground"
                         }`}
                       >
-                        Todas las marcas
+                        Todas las categorías
                       </button>
                       {selectedClient.brands.map((brand, index) => {
                         const isSelected =
