@@ -69,11 +69,11 @@ async function resolveCreationTaxonomy(
 
   let brand = args.clientBrandId ? await ctx.db.get(args.clientBrandId) : null;
   if (args.clientBrandId && !brand) {
-    throw new Error("❌ La marca seleccionada no existe.");
+    throw new Error("❌ La categoría seleccionada no existe.");
   }
 
   if (clientId && brand?.clientId && brand.clientId !== clientId) {
-    throw new Error("❌ La marca seleccionada no pertenece al cliente validado.");
+    throw new Error("❌ La categoría seleccionada no pertenece al cliente validado.");
   }
 
   if (clientId && !brand) {
@@ -83,14 +83,14 @@ async function resolveCreationTaxonomy(
       .collect();
     if (clientBrands.length > 0) {
       throw new Error(
-        "❌ Este cliente tiene marcas configuradas. Debes seleccionar una marca antes de crear el requerimiento.",
+        "❌ Este cliente tiene categorías configuradas. Debes seleccionar una categoría antes de crear el requerimiento.",
       );
     }
   }
 
   let subBrand = args.subBrandId ? await ctx.db.get(args.subBrandId) : null;
   if (args.subBrandId && !subBrand) {
-    throw new Error("❌ La subBrand/producto seleccionada no existe.");
+    throw new Error("❌ La marca seleccionada no existe.");
   }
 
   if (!brand && subBrand) {
@@ -105,13 +105,13 @@ async function resolveCreationTaxonomy(
 
     if (subBrands.length > 0 && !subBrand) {
       throw new Error(
-        `❌ La marca "${brand.name}" tiene productos/subBrands configurados. Debes seleccionar una subBrand antes de crear el requerimiento.`,
+        `❌ La categoría "${brand.name}" tiene marcas configuradas. Debes seleccionar una marca antes de crear el requerimiento.`,
       );
     }
 
     if (subBrand && subBrand.clientBrandId !== brand._id) {
       throw new Error(
-        "❌ La subBrand/producto seleccionada no pertenece a la marca validada.",
+        "❌ La marca seleccionada no pertenece a la categoría validada.",
       );
     }
   }
@@ -985,14 +985,14 @@ export const validateAndPrepareExternalTask = internalQuery({
     if (!brand) {
       return {
         ok: false as const,
-        error: "❌ La marca seleccionada no existe.",
+        error: "❌ La categoría seleccionada no existe.",
       };
     }
     if (!brand.clientId) {
       return {
         ok: false as const,
         error:
-          "❌ La marca no está vinculada a un cliente local. Contacta al administrador.",
+          "❌ La categoría no está vinculada a un cliente local. Contacta al administrador.",
       };
     }
 
@@ -1000,7 +1000,7 @@ export const validateAndPrepareExternalTask = internalQuery({
     if (!client) {
       return {
         ok: false as const,
-        error: "❌ El cliente asociado a esta marca no existe localmente.",
+        error: "❌ El cliente asociado a esta categoría no existe localmente.",
       };
     }
 
@@ -1020,7 +1020,7 @@ export const validateAndPrepareExternalTask = internalQuery({
     if (!hasAccess) {
       return {
         ok: false as const,
-        error: `❌ No tienes autorización para crear briefs para la marca "${brand.name}".`,
+        error: `❌ No tienes autorización para crear briefs para la categoría "${brand.name}".`,
       };
     }
 
@@ -1034,7 +1034,7 @@ export const validateAndPrepareExternalTask = internalQuery({
       if (!args.subBrandId) {
         return {
           ok: false as const,
-          error: `❌ La marca "${brand.name}" tiene productos/subBrands configurados. Debes pedirle al cliente que elija una antes de crear el requerimiento.`,
+          error: `❌ La categoría "${brand.name}" tiene marcas configuradas. Debes pedirle al cliente que elija una antes de crear el requerimiento.`,
           availableSubBrands: subBrands.map((candidate) => ({
             subBrandId: String(candidate._id),
             name: candidate.name,
@@ -1048,7 +1048,7 @@ export const validateAndPrepareExternalTask = internalQuery({
         return {
           ok: false as const,
           error:
-            "❌ La subBrand/producto seleccionada no pertenece a la marca validada.",
+            "❌ La marca seleccionada no pertenece a la categoría validada.",
           availableSubBrands: subBrands.map((candidate) => ({
             subBrandId: String(candidate._id),
             name: candidate.name,
@@ -1060,7 +1060,7 @@ export const validateAndPrepareExternalTask = internalQuery({
       return {
         ok: false as const,
         error:
-          "❌ Esta marca no tiene productos/subBrands configurados. No envíes una subBrand para este requerimiento.",
+          "❌ Esta categoría no tiene marcas configuradas. No envíes una marca adicional para este requerimiento.",
       };
     }
 

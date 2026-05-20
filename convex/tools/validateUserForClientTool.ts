@@ -11,7 +11,9 @@ import {
 
 export const validateUserForClientTool = createTool({
   description: `Validar que el usuario actual existe en el sistema de gestión (COR) y está autorizado para trabajar con un cliente específico.
-  Usar INMEDIATAMENTE cuando el usuario indique para qué cliente/marca quiere crear un brief.
+  Usar INMEDIATAMENTE cuando el usuario indique para qué cliente quiere crear un brief.
+  Si el cliente devuelve brands, de cara al usuario esas brands se llaman categorías.
+  Si una categoría devuelve subBrands, de cara al usuario esas subBrands se llaman marcas.
   
   Esta herramienta hace 3 validaciones:
   1. El usuario actual existe en COR
@@ -23,7 +25,7 @@ export const validateUserForClientTool = createTool({
   args: z.object({
     clientName: z
       .string()
-      .describe("Nombre de la marca o cliente a validar"),
+      .describe("Nombre del cliente a validar"),
   }),
   handler: async (ctx, args): Promise<string> => {
     console.log(
@@ -235,6 +237,7 @@ export const validateUserForClientTool = createTool({
       brands: brands.map((brand: any) => ({
         clientBrandId: String(brand._id),
         name: brand.name,
+        categoryName: brand.name,
         corBrandId: brand.corBrandId,
         subBrands: brand.subBrands.map((subBrand: any) => ({
           subBrandId: String(subBrand._id),

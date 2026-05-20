@@ -65,24 +65,28 @@ export const createTaskTool = createTool({
         "Titulo breve y descriptivo del proyecto (ej: Campaña de verano Coca-Cola)",
       ),
     requestType: z.string().describe("Tipo de requerimiento - OBLIGATORIO"),
-    brand: z.string().describe("Marca o empresa - OBLIGATORIO"),
+    brand: z
+      .string()
+      .describe(
+        "Cliente, categoría o marca indicada por el usuario - OBLIGATORIO",
+      ),
     clientBrandId: z
       .string()
       .optional()
       .describe(
-        "ID local de clientBrands si validateUserForClient devolvio marcas para el cliente.",
+        "ID local de clientBrands si validateUserForClient devolvio categorías para el cliente.",
       ),
     subBrand: z
       .string()
       .optional()
       .describe(
-        "Producto/subBrand indicado por el usuario cuando la marca tiene subBrands.",
+        "Marca indicada por el usuario cuando la categoría tiene subBrands.",
       ),
     subBrandId: z
       .string()
       .optional()
       .describe(
-        "ID local de subBrands si validateUserForClient devolvio productos/subBrands para la marca.",
+        "ID local de subBrands si validateUserForClient devolvio marcas para la categoría.",
       ),
     deadline: z
       .string()
@@ -214,12 +218,12 @@ export const createTaskTool = createTool({
     if (!taxonomy.ok) {
       const taxonomyAny = taxonomy as any;
       const availableBrands = taxonomyAny.availableBrands
-        ? `\n\nMarcas disponibles:\n${taxonomyAny.availableBrands
+        ? `\n\nCategorías disponibles:\n${taxonomyAny.availableBrands
             .map((brand: any) => `- ${brand.name} (clientBrandId: ${brand.clientBrandId})`)
             .join("\n")}`
         : "";
       const availableSubBrands = taxonomyAny.availableSubBrands
-        ? `\n\nSubBrands/productos disponibles:\n${taxonomyAny.availableSubBrands
+        ? `\n\nMarcas disponibles:\n${taxonomyAny.availableSubBrands
             .map((subBrand: any) => `- ${subBrand.name} (subBrandId: ${subBrand.subBrandId})`)
             .join("\n")}`
         : "";

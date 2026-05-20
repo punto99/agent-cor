@@ -105,7 +105,7 @@ export const resolveBrandAndSubBrandForClient = internalQuery({
         return {
           ok: false as const,
           error:
-            "Hay más de una marca posible. El usuario debe elegir una marca exacta.",
+            "Hay más de una categoría posible. El usuario debe elegir una categoría exacta.",
           requiresBrand: true,
           availableBrands: fuzzyMatches.map((candidate) => ({
             clientBrandId: String(candidate._id),
@@ -119,7 +119,7 @@ export const resolveBrandAndSubBrandForClient = internalQuery({
       return {
         ok: false as const,
         error:
-          "Este cliente tiene marcas configuradas. Debes validar una marca exacta antes de crear el requerimiento.",
+          "Este cliente tiene categorías configuradas. Debes validar una categoría exacta antes de crear el requerimiento.",
         requiresBrand: true,
         availableBrands: brands.map((candidate) => ({
           clientBrandId: String(candidate._id),
@@ -167,7 +167,7 @@ export const resolveBrandAndSubBrandForClient = internalQuery({
         return {
           ok: false as const,
           error:
-            "Hay más de una subBrand/producto posible. El usuario debe elegir una opción exacta.",
+            "Hay más de una marca posible. El usuario debe elegir una opción exacta.",
           requiresBrand: true,
           requiresSubBrand: true,
           brand,
@@ -184,7 +184,7 @@ export const resolveBrandAndSubBrandForClient = internalQuery({
       return {
         ok: false as const,
         error:
-          `La marca "${brand.name}" tiene productos/subBrands configurados. Debes elegir una subBrand antes de crear el requerimiento.`,
+          `La categoría "${brand.name}" tiene marcas configuradas. Debes elegir una marca antes de crear el requerimiento.`,
         requiresBrand: true,
         requiresSubBrand: true,
         brand,

@@ -8,7 +8,7 @@ import { agentConfig, getBriefAgentInstructions } from "../lib/serverConfig";
 import { isProjectManagementEnabled } from "../integrations/registry";
 
 // Gemini model (thinking config is passed in providerOptions)
-const languageModel = google("gemini-3.1-pro-preview");
+const languageModel = google("gemini-3.5-flash");
 
 // ==================== MAIN AGENT: Brief Collector ====================
 // NOTA: Las RAG tools (searchDocuments, searchEntities, getRAGStatistics, searchByImage)

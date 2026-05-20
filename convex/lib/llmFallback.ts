@@ -1,6 +1,6 @@
 // convex/lib/llmFallback.ts
 // Sistema de fallback para LLMs: Gemini -> OpenAI GPT
-// Si Gemini falla, automáticamente usa GPT-5.2 como respaldo
+// Si Gemini falla, automáticamente usa GPT-5.4 como respaldo
 
 import { google } from "@ai-sdk/google";
 import { openai } from "@ai-sdk/openai";
@@ -44,8 +44,8 @@ export const LLM_CALL_TIMEOUT_MS = 180_000;
 // Modelo principal: Gemini 3 Pro Preview
 export const geminiConfig: LLMConfig = {
   provider: "gemini",
-  model: google("gemini-3.1-pro-preview"),
-  modelId: "gemini-3.1-pro-preview",
+  model: google("gemini-3.5-flash"),
+  modelId: "gemini-3.5-flash",
   providerOptions: {
     google: {
       thinkingConfig: {
@@ -55,11 +55,11 @@ export const geminiConfig: LLMConfig = {
   },
 };
 
-// Modelo fallback: OpenAI GPT-5.2
+// Modelo fallback: OpenAI GPT-5.4
 export const openaiConfig: LLMConfig = {
   provider: "openai",
-  model: openai("gpt-5.2"),
-  modelId: "gpt-5.2",
+  model: openai("gpt-5.4"),
+  modelId: "gpt-5.4",
   providerOptions: undefined,
 };
 

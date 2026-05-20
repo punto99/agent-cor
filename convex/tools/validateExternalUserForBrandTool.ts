@@ -11,11 +11,12 @@ function normalizeText(value: string) {
 }
 
 export const validateExternalUserForBrandTool = createTool({
-  description: `Valida que el usuario externo tenga acceso a una marca/board.
-  Usar antes de crear un brief externo. Puedes validar por clientBrandId exacto o por nombre de marca.`,
+  description: `Valida que el usuario externo tenga acceso a una categoría.
+  Internamente la categoría es clientBrands. Si la categoría devuelve subBrands, de cara al usuario esas subBrands se llaman marcas.
+  Usar antes de crear un brief externo. Puedes validar por clientBrandId exacto o por nombre de categoría.`,
   args: z.object({
     clientBrandId: z.string().optional().describe("ID local de clientBrands si ya fue listado por listAccessibleBrands."),
-    brandName: z.string().optional().describe("Nombre de la marca indicado por el usuario."),
+    brandName: z.string().optional().describe("Nombre de la categoría indicada por el usuario."),
   }),
   handler: async (ctx, args): Promise<string> => {
     const threadId = ctx.threadId;
@@ -44,7 +45,7 @@ export const validateExternalUserForBrandTool = createTool({
     if (brands.length === 0) {
       return JSON.stringify({
         authorized: false,
-        error: "No tienes marcas asignadas todavía. Contacta al equipo para que te habiliten el acceso.",
+        error: "No tienes categorías asignadas todavía. Contacta al equipo para que te habiliten el acceso.",
       });
     }
 
@@ -67,7 +68,11 @@ export const validateExternalUserForBrandTool = createTool({
     if (matches.length === 0) {
       return JSON.stringify({
         authorized: false,
-        error: "No tienes autorización para trabajar con esa marca, o no pude encontrarla entre tus marcas asignadas.",
+        error: "No tienes autorización para trabajar con esa categoría, o no pude encontrarla entre tus categorías asignadas.",
+        availableCategories: brands.map((brand: any) => ({
+          clientBrandId: String(brand._id),
+          name: brand.name,
+        })),
         availableBrands: brands.map((brand: any) => ({
           clientBrandId: String(brand._id),
           name: brand.name,
@@ -78,7 +83,11 @@ export const validateExternalUserForBrandTool = createTool({
     if (matches.length > 1) {
       return JSON.stringify({
         authorized: false,
-        error: "Encontré más de una marca posible. Pídele al usuario que elija una opción exacta.",
+        error: "Encontré más de una categoría posible. Pídele al usuario que elija una opción exacta.",
+        availableCategories: matches.map((brand: any) => ({
+          clientBrandId: String(brand._id),
+          name: brand.name,
+        })),
         availableBrands: matches.map((brand: any) => ({
           clientBrandId: String(brand._id),
           name: brand.name,
@@ -96,10 +105,12 @@ export const validateExternalUserForBrandTool = createTool({
       authorized: true,
       clientBrandId: String(brand._id),
       brandName: brand.name,
+      categoryName: brand.name,
       corBrandId: brand.corBrandId,
       corClientId: brand.corClientId,
       localClientId: brand.clientId ? String(brand.clientId) : undefined,
       requiresSubBrand: subBrands.length > 0,
+      requiresBrand: subBrands.length > 0,
       subBrands: subBrands.map((subBrand: any) => ({
         subBrandId: String(subBrand._id),
         name: subBrand.name,

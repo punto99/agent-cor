@@ -5,7 +5,7 @@ import { components } from "../_generated/api";
 import { google } from "@ai-sdk/google";
 import { agentConfig, getReviewerAgentInstructions } from "../lib/serverConfig";
 
-const languageModel = google("gemini-3.1-pro-preview");
+const languageModel = google("gemini-3.5-flash");
 
 // ==================== AGENTE SUPERVISOR: Quality Reviewer ====================
 // Este agente revisa el trabajo del briefAgent y da feedback

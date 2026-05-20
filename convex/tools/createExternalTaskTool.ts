@@ -30,7 +30,8 @@ function inferDeliverablesCount(deliverablesText: string): number {
 export const createExternalTaskTool = createTool({
   description: `Crear un requerimiento externo en Convex para revisión del equipo interno.
   SOLO usar esta herramienta cuando el cliente haya confirmado explícitamente que el resumen está correcto.
-  No publica en COR. Para usuarios externos, el sistema también agenda la creación de una card en Trello.`,
+  No publica en COR. Para usuarios externos, el sistema también agenda la creación de una card en Trello.
+  Vocabulario para hablar con el usuario: clientBrandId = categoría; subBrandId = marca.`,
   args: z.object({
     title: z
       .string()
@@ -41,14 +42,14 @@ export const createExternalTaskTool = createTool({
     clientBrandId: z
       .string()
       .describe(
-        "ID local de clientBrands validado con validateExternalUserForBrand - OBLIGATORIO",
+        "ID local de clientBrands validado con validateExternalUserForBrand. De cara al usuario esto es la categoría - OBLIGATORIO",
       ),
-    brand: z.string().describe("Marca validada - OBLIGATORIO"),
+    brand: z.string().describe("Categoría validada - OBLIGATORIO"),
     subBrandId: z
       .string()
       .optional()
       .describe(
-        "ID local de subBrands cuando validateExternalUserForBrand indicó que la marca tiene productos/subBrands.",
+        "ID local de subBrands cuando validateExternalUserForBrand indicó que la categoría tiene marcas.",
       ),
     deadline: z
       .string()
@@ -93,7 +94,7 @@ export const createExternalTaskTool = createTool({
     }
 
     if (!args.clientBrandId) {
-      return `No se puede crear el requerimiento sin una marca validada. Usa primero "validateExternalUserForBrand".`;
+      return `No se puede crear el requerimiento sin una categoría validada. Usa primero "validateExternalUserForBrand".`;
     }
 
     const preparation = await ctx.runQuery(

@@ -3,8 +3,9 @@ import { z } from "zod";
 import { internal } from "../_generated/api";
 
 export const listAccessibleBrandsTool = createTool({
-  description: `Lista las marcas/boards a las que el usuario externo tiene acceso.
-  Usar al inicio de la conversación o cuando el usuario pregunte con qué marcas puede trabajar.`,
+  description: `Lista las categorías a las que el usuario externo tiene acceso.
+  Internamente son clientBrands. Si una categoría tiene subBrands, de cara al usuario esas subBrands se llaman marcas.
+  Usar al inicio de la conversación o cuando el usuario pregunte con qué categorías/marcas puede trabajar.`,
   args: z.object({}),
   handler: async (ctx): Promise<string> => {
     const threadId = ctx.threadId;
@@ -25,7 +26,7 @@ export const listAccessibleBrandsTool = createTool({
     });
 
     if (brands.length === 0) {
-      return "No tienes marcas asignadas todavía. Contacta al equipo para que te habiliten el acceso.";
+      return "No tienes categorías asignadas todavía. Contacta al equipo para que te habiliten el acceso.";
     }
 
     const lines = [];
@@ -37,7 +38,7 @@ export const listAccessibleBrandsTool = createTool({
       );
       const subBrandText =
         subBrands.length > 0
-          ? `\n   Productos/subBrands: ${subBrands
+          ? `\n   Marcas disponibles: ${subBrands
               .map(
                 (subBrand: any) =>
                   `${subBrand.name} (subBrandId: ${subBrand._id}, corProductId: ${subBrand.corProductId})`,
@@ -49,6 +50,6 @@ export const listAccessibleBrandsTool = createTool({
       );
     }
 
-    return `Marcas disponibles para este usuario:\n${lines.join("\n")}`;
+    return `Categorías disponibles para este usuario:\n${lines.join("\n")}`;
   },
 });
