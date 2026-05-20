@@ -18,6 +18,32 @@ const CUSTOM_FIELDS = [
 ];
 
 const internalTrello: any = (internal as any).data.trello;
+const TRELLO_LABEL_COLORS = [
+  "green",
+  "yellow",
+  "orange",
+  "red",
+  "purple",
+  "blue",
+  "sky",
+  "lime",
+  "pink",
+  "black",
+];
+const LABEL_SYNC_STALE_MS = 60_000;
+const LABEL_SYNC_RETRY_DELAYS_MS = [1000, 2000, 4000, 8000];
+
+function normalizeTrelloLabelName(value: string) {
+  return value
+    .trim()
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "");
+}
+
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 function htmlToTrelloMarkdown(value: string | undefined) {
   if (!value) return "";
@@ -215,6 +241,145 @@ export const upsertCustomFieldMapping = internalMutation({
   },
 });
 
+export const getSubBrandLabelContext = internalQuery({
+  args: {
+    subBrandId: v.id("subBrands"),
+    clientBrandId: v.id("clientBrands"),
+  },
+  handler: async (ctx, args) => {
+    const subBrand = await ctx.db.get(args.subBrandId);
+    if (!subBrand) {
+      return { ok: false as const, error: "Marca no encontrada." };
+    }
+    if (subBrand.clientBrandId !== args.clientBrandId) {
+      return {
+        ok: false as const,
+        error: "La marca no pertenece a la categoría de la task.",
+      };
+    }
+
+    const siblings = await ctx.db
+      .query("subBrands")
+      .withIndex("by_brand", (q) => q.eq("clientBrandId", args.clientBrandId))
+      .collect();
+
+    siblings.sort((a, b) => {
+      const byName = a.name.localeCompare(b.name);
+      if (byName !== 0) return byName;
+      return a.corProductId - b.corProductId;
+    });
+
+    return {
+      ok: true as const,
+      subBrand,
+      siblings: siblings.map((sibling) => ({
+        _id: sibling._id,
+        name: sibling.name,
+        corProductId: sibling.corProductId,
+      })),
+    };
+  },
+});
+
+export const claimSubBrandLabelSync = internalMutation({
+  args: {
+    subBrandId: v.id("subBrands"),
+    clientBrandId: v.id("clientBrands"),
+  },
+  handler: async (ctx, args) => {
+    const now = Date.now();
+    const subBrand = await ctx.db.get(args.subBrandId);
+    if (!subBrand) {
+      return { status: "error" as const, error: "Marca no encontrada." };
+    }
+    if (subBrand.clientBrandId !== args.clientBrandId) {
+      return {
+        status: "error" as const,
+        error: "La marca no pertenece a la categoría de la task.",
+      };
+    }
+
+    if (subBrand.trelloLabelId) {
+      if (subBrand.trelloLabelSyncStatus !== "synced") {
+        await ctx.db.patch(subBrand._id, {
+          trelloLabelSyncStatus: "synced",
+          trelloLabelSyncError: undefined,
+          trelloLabelSyncedAt: subBrand.trelloLabelSyncedAt ?? now,
+        });
+      }
+      return {
+        status: "synced" as const,
+        labelId: subBrand.trelloLabelId,
+        labelName: subBrand.trelloLabelName ?? subBrand.name,
+        labelColor: subBrand.trelloLabelColor,
+      };
+    }
+
+    if (
+      subBrand.trelloLabelSyncStatus === "syncing" &&
+      subBrand.trelloLabelSyncStartedAt &&
+      now - subBrand.trelloLabelSyncStartedAt < LABEL_SYNC_STALE_MS
+    ) {
+      return { status: "locked" as const };
+    }
+
+    await ctx.db.patch(subBrand._id, {
+      trelloLabelSyncStatus: "syncing",
+      trelloLabelSyncError: undefined,
+      trelloLabelSyncStartedAt: now,
+    });
+
+    return { status: "claimed" as const };
+  },
+});
+
+export const markSubBrandLabelSynced = internalMutation({
+  args: {
+    subBrandId: v.id("subBrands"),
+    clientBrandId: v.id("clientBrands"),
+    trelloLabelId: v.string(),
+    trelloLabelName: v.string(),
+    trelloLabelColor: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const subBrand = await ctx.db.get(args.subBrandId);
+    if (!subBrand) throw new Error("Marca no encontrada.");
+    if (subBrand.clientBrandId !== args.clientBrandId) {
+      throw new Error("La marca no pertenece a la categoría de la task.");
+    }
+
+    const now = Date.now();
+    await ctx.db.patch(subBrand._id, {
+      trelloLabelId: args.trelloLabelId,
+      trelloLabelName: args.trelloLabelName,
+      trelloLabelColor: args.trelloLabelColor,
+      trelloLabelSyncStatus: "synced",
+      trelloLabelSyncError: undefined,
+      trelloLabelSyncedAt: now,
+      trelloLabelSyncStartedAt: undefined,
+    });
+  },
+});
+
+export const markSubBrandLabelError = internalMutation({
+  args: {
+    subBrandId: v.id("subBrands"),
+    clientBrandId: v.id("clientBrands"),
+    error: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const subBrand = await ctx.db.get(args.subBrandId);
+    if (!subBrand) return;
+    if (subBrand.clientBrandId !== args.clientBrandId) return;
+
+    await ctx.db.patch(subBrand._id, {
+      trelloLabelSyncStatus: "error",
+      trelloLabelSyncError: args.error,
+      trelloLabelSyncStartedAt: undefined,
+    });
+  },
+});
+
 export const markTrelloCardSyncing = internalMutation({
   args: {
     taskId: v.id("tasks"),
@@ -329,6 +494,107 @@ export const markTrelloCardError = internalMutation({
   },
 });
 
+async function ensureTrelloLabelForSubBrand(ctx: any, args: {
+  subBrandId: any;
+  clientBrandId: any;
+  boardId: string;
+}) {
+  for (let attempt = 0; attempt <= LABEL_SYNC_RETRY_DELAYS_MS.length; attempt += 1) {
+    const claim = await ctx.runMutation(internalTrello.claimSubBrandLabelSync, {
+      subBrandId: args.subBrandId,
+      clientBrandId: args.clientBrandId,
+    });
+
+    if (claim.status === "synced") {
+      console.log(
+        `[TrelloSync] Usando label Trello existente para marca ${args.subBrandId}: ${claim.labelId}`
+      );
+      return claim.labelId;
+    }
+
+    if (claim.status === "locked") {
+      const delay = LABEL_SYNC_RETRY_DELAYS_MS[attempt];
+      if (delay === undefined) {
+        throw new Error(
+          "La etiqueta Trello de esta marca todavía se está sincronizando. Intenta nuevamente en unos segundos.",
+        );
+      }
+      console.log(
+        `[TrelloSync] Label Trello para marca ${args.subBrandId} en sincronización; reintento en ${delay}ms`
+      );
+      await sleep(delay);
+      continue;
+    }
+
+    if (claim.status === "error") {
+      throw new Error(claim.error);
+    }
+
+    try {
+      const context = await ctx.runQuery(internalTrello.getSubBrandLabelContext, {
+        subBrandId: args.subBrandId,
+        clientBrandId: args.clientBrandId,
+      });
+      if (!context.ok) throw new Error(context.error);
+
+      const subBrand = context.subBrand;
+      const siblingIndex = Math.max(
+        0,
+        context.siblings.findIndex(
+          (sibling: any) => String(sibling._id) === String(args.subBrandId),
+        ),
+      );
+      const color = TRELLO_LABEL_COLORS[siblingIndex % TRELLO_LABEL_COLORS.length];
+      const desiredName = subBrand.name.trim();
+      const desiredNameNormalized = normalizeTrelloLabelName(desiredName);
+
+      console.log(
+        `[TrelloSync] Asegurando label Trello "${desiredName}" para marca ${args.subBrandId}`
+      );
+
+      const labels = await trelloProvider.getBoardLabels(args.boardId);
+      let label = labels.find(
+        (candidate) => normalizeTrelloLabelName(candidate.name || "") === desiredNameNormalized,
+      );
+
+      if (label) {
+        console.log(
+          `[TrelloSync] Label Trello encontrada por nombre "${desiredName}": ${label.id}`
+        );
+      } else {
+        label = await trelloProvider.createBoardLabel({
+          boardId: args.boardId,
+          name: desiredName,
+          color,
+        });
+        console.log(
+          `[TrelloSync] Label Trello creada "${desiredName}" (${color}): ${label.id}`
+        );
+      }
+
+      await ctx.runMutation(internalTrello.markSubBrandLabelSynced, {
+        subBrandId: args.subBrandId,
+        clientBrandId: args.clientBrandId,
+        trelloLabelId: label.id,
+        trelloLabelName: label.name || desiredName,
+        trelloLabelColor: label.color || color,
+      });
+
+      return label.id;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      await ctx.runMutation(internalTrello.markSubBrandLabelError, {
+        subBrandId: args.subBrandId,
+        clientBrandId: args.clientBrandId,
+        error: message,
+      });
+      throw error;
+    }
+  }
+
+  throw new Error("No se pudo sincronizar la etiqueta Trello de la marca.");
+}
+
 export const scheduleCreateCardForExternalTask = internalMutation({
   args: {
     taskId: v.id("tasks"),
@@ -387,6 +653,16 @@ export const createCardForExternalTask: any = internalAction({
       console.log(
         `[TrelloSync] Creando card en board ${data.boardId}, list ${data.listId}, brand "${data.brand.name}"`
       );
+      const idLabels: string[] = [];
+      if (data.task.subBrandId) {
+        const labelId = await ensureTrelloLabelForSubBrand(ctx, {
+          subBrandId: data.task.subBrandId,
+          clientBrandId: data.brand._id,
+          boardId: data.boardId,
+        });
+        idLabels.push(labelId);
+      }
+
       const card = await trelloProvider.createCard({
         idList: data.listId,
         name: data.task.title,
@@ -397,6 +673,7 @@ export const createCardForExternalTask: any = internalAction({
           deliverablesCount: args.deliverablesCount,
         }),
         due: data.task.deadline,
+        idLabels: idLabels.length > 0 ? idLabels : undefined,
       });
 
       const fieldsByKey = new Map(

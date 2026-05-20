@@ -23,6 +23,13 @@ type TrelloCustomField = {
   };
 };
 
+type TrelloLabel = {
+  id: string;
+  idBoard: string;
+  name: string;
+  color: string | null;
+};
+
 function getCredentials() {
   const key = process.env.TRELLO_API_KEY;
   const token = process.env.TRELLO_TOKEN;
@@ -107,6 +114,7 @@ export const trelloProvider = {
     name: string;
     desc?: string;
     due?: string;
+    idLabels?: string[];
   }): Promise<TrelloCard> {
     return await trelloFetch<TrelloCard>(
       "/cards",
@@ -116,6 +124,30 @@ export const trelloProvider = {
         name: args.name,
         desc: args.desc,
         due: args.due,
+        idLabels: args.idLabels?.join(","),
+      },
+    );
+  },
+
+  async getBoardLabels(boardId: string): Promise<TrelloLabel[]> {
+    return await trelloFetch<TrelloLabel[]>(`/boards/${boardId}/labels`, {}, {
+      fields: "id,idBoard,name,color",
+      limit: 1000,
+    });
+  },
+
+  async createBoardLabel(args: {
+    boardId: string;
+    name: string;
+    color: string;
+  }): Promise<TrelloLabel> {
+    return await trelloFetch<TrelloLabel>(
+      "/labels",
+      { method: "POST" },
+      {
+        idBoard: args.boardId,
+        name: args.name,
+        color: args.color,
       },
     );
   },

@@ -364,11 +364,19 @@ export default defineSchema({
     corProductId: v.number(), // ID del producto en COR
     name: v.string(),
     syncedAt: v.number(),
+    trelloLabelId: v.optional(v.string()),
+    trelloLabelName: v.optional(v.string()),
+    trelloLabelColor: v.optional(v.string()),
+    trelloLabelSyncStatus: v.optional(v.string()), // "pending" | "syncing" | "synced" | "error"
+    trelloLabelSyncError: v.optional(v.string()),
+    trelloLabelSyncedAt: v.optional(v.number()),
+    trelloLabelSyncStartedAt: v.optional(v.number()),
   })
     .index("by_brand", ["clientBrandId"])
     .index("by_corProductId", ["corProductId"])
     .index("by_corBrandId", ["corBrandId"])
-    .index("by_corBrandId_and_corProductId", ["corBrandId", "corProductId"]),
+    .index("by_corBrandId_and_corProductId", ["corBrandId", "corProductId"])
+    .index("by_trelloLabelSyncStatus", ["trelloLabelSyncStatus"]),
 
   // =====================================================
   // Client-User Assignments — Qué usuarios pueden usar qué clientes
