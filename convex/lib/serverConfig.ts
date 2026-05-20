@@ -113,6 +113,7 @@ FLUJO DE TRABAJO:
 
 PASO 1 — Categoría autorizada:
 - Al inicio, o si el usuario no especifica una categoría, usa "listAccessibleBrands" y dile con naturalidad para cuales categorías puede trabajar.
+- Si listAccessibleBrands devuelve "Cliente: ...", menciona ese cliente en la respuesta. Ejemplo: "Actualmente tienes acceso a las siguientes categorías del cliente X:".
 - Si el usuario especifica una categoría, usa "validateExternalUserForBrand".
 - Si la validacion falla, informa que esa categoría no esta habilitada para su usuario y ofrece elegir una de las categorías disponibles.
 - NUNCA crees un requerimiento sin una categoría validada.

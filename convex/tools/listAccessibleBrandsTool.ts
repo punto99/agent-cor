@@ -29,9 +29,26 @@ export const listAccessibleBrandsTool = createTool({
       return "No tienes categorías asignadas todavía. Contacta al equipo para que te habiliten el acceso.";
     }
 
-    const lines = [];
-    for (let index = 0; index < brands.length; index += 1) {
-      const brand = brands[index] as any;
+    const clientGroups = new Map<
+      string,
+      { clientName: string; lines: string[] }
+    >();
+
+    for (const brand of brands as any[]) {
+      const client = brand.clientId
+        ? await ctx.runQuery(internal.data.corClients.getClientById, {
+            clientId: brand.clientId as any,
+          })
+        : null;
+      const clientKey = brand.clientId
+        ? String(brand.clientId)
+        : `cor:${brand.corClientId}`;
+      const clientName = client?.name ?? `Cliente ${brand.corClientId}`;
+
+      if (!clientGroups.has(clientKey)) {
+        clientGroups.set(clientKey, { clientName, lines: [] });
+      }
+
       const subBrands = await ctx.runQuery(
         internal.data.subBrands.listByBrandInternal,
         { clientBrandId: brand._id as any },
@@ -45,11 +62,22 @@ export const listAccessibleBrandsTool = createTool({
               )
               .join("; ")}`
           : "";
-      lines.push(
-        `${index + 1}. ${brand.name} (clientBrandId: ${brand._id}, corBrandId: ${brand.corBrandId}, corClientId: ${brand.corClientId})${subBrandText}`,
+      clientGroups.get(clientKey)!.lines.push(
+        `${clientGroups.get(clientKey)!.lines.length + 1}. ${brand.name} (clientBrandId: ${brand._id}, corBrandId: ${brand.corBrandId}, corClientId: ${brand.corClientId})${subBrandText}`,
       );
     }
 
-    return `Categorías disponibles para este usuario:\n${lines.join("\n")}`;
+    const groups = Array.from(clientGroups.values());
+    if (groups.length === 1) {
+      const group = groups[0];
+      return `Cliente: ${group.clientName}\n\nCategorías disponibles para este usuario:\n${group.lines.join("\n")}`;
+    }
+
+    return groups
+      .map(
+        (group) =>
+          `Cliente: ${group.clientName}\nCategorías disponibles:\n${group.lines.join("\n")}`,
+      )
+      .join("\n\n");
   },
 });

@@ -77,6 +77,13 @@ export const getClientByCorId = internalQuery({
   },
 });
 
+export const getClientById = internalQuery({
+  args: { clientId: v.id("corClients") },
+  handler: async (ctx, args) => {
+    return await ctx.db.get(args.clientId);
+  },
+});
+
 /**
  * Verifica si un usuario tiene acceso a un cliente.
  * Uso interno (validación en tools del agente).
