@@ -7,13 +7,10 @@ import {
 } from "../_generated/server";
 import { internal } from "../_generated/api";
 import { trelloProvider } from "../integrations/trelloProvider";
-import { PRIORITY_LABELS } from "../lib/briefFormat";
 import { TASK_STATUS_OPTIONS, getTaskStatusName } from "../lib/taskStatuses";
 
 const CUSTOM_FIELDS = [
-  { key: "brand", name: "Marca", type: "text" as const },
   { key: "requestType", name: "Tipo de requerimiento", type: "text" as const },
-  { key: "priority", name: "Prioridad", type: "text" as const },
   { key: "deliverablesCount", name: "Cantidad de entregables", type: "number" as const },
 ];
 
@@ -32,6 +29,8 @@ const TRELLO_LABEL_COLORS = [
 ];
 const LABEL_SYNC_STALE_MS = 60_000;
 const LABEL_SYNC_RETRY_DELAYS_MS = [1000, 2000, 4000, 8000];
+const CONVEX_TRELLO_CLIENT_IDENTIFIER = "agent-core-convex-trello-sync";
+const BUSINESS_TIME_ZONE = "America/Guayaquil";
 
 function normalizeTrelloLabelName(value: string) {
   return value
@@ -43,6 +42,29 @@ function normalizeTrelloLabelName(value: string) {
 
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function jsonValue(value: unknown) {
+  return value === undefined ? undefined : JSON.stringify(value);
+}
+
+function formatDateInBusinessTimeZone(value: string) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return null;
+
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: BUSINESS_TIME_ZONE,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(date);
+
+  const year = parts.find((part) => part.type === "year")?.value;
+  const month = parts.find((part) => part.type === "month")?.value;
+  const day = parts.find((part) => part.type === "day")?.value;
+
+  if (!year || !month || !day) return null;
+  return `${year}-${month}-${day}`;
 }
 
 function htmlToTrelloMarkdown(value: string | undefined) {
@@ -69,11 +91,9 @@ function buildTrelloDescription(args: {
   const lines = [
     `## Proyecto`,
     `**Nombre:** ${args.project.name}`,
-    `**Marca:** ${args.task.brandName || args.project.brandName || "No especificada"}`,
     `**Tipo de requerimiento:** ${args.requestType}`,
     `**Deadline:** ${args.task.deadline || args.project.endDate || "No especificado"}`,
     `**Cantidad de entregables:** ${args.deliverablesCount}`,
-    `**Prioridad:** ${PRIORITY_LABELS[args.task.priority ?? 1] ?? "Media"}`,
     "",
     `## Brief`,
     htmlToTrelloMarkdown(args.task.description),
@@ -237,6 +257,281 @@ export const upsertCustomFieldMapping = internalMutation({
       type: args.type,
       trelloCustomFieldId: args.trelloCustomFieldId,
       syncedAt: now,
+    });
+  },
+});
+
+export const upsertWebhookMapping = internalMutation({
+  args: {
+    clientBrandId: v.id("clientBrands"),
+    trelloBoardId: v.string(),
+    trelloWebhookId: v.string(),
+    callbackURL: v.string(),
+    active: v.boolean(),
+  },
+  handler: async (ctx, args) => {
+    const now = Date.now();
+    const existing = await ctx.db
+      .query("trelloWebhooks")
+      .withIndex("by_board", (q) => q.eq("trelloBoardId", args.trelloBoardId))
+      .first();
+
+    if (existing) {
+      await ctx.db.patch(existing._id, {
+        clientBrandId: args.clientBrandId,
+        trelloWebhookId: args.trelloWebhookId,
+        callbackURL: args.callbackURL,
+        active: args.active,
+        updatedAt: now,
+        lastError: undefined,
+      });
+      return existing._id;
+    }
+
+    return await ctx.db.insert("trelloWebhooks", {
+      clientBrandId: args.clientBrandId,
+      trelloBoardId: args.trelloBoardId,
+      trelloWebhookId: args.trelloWebhookId,
+      callbackURL: args.callbackURL,
+      active: args.active,
+      createdAt: now,
+      updatedAt: now,
+    });
+  },
+});
+
+export const markWebhookError = internalMutation({
+  args: {
+    clientBrandId: v.id("clientBrands"),
+    trelloBoardId: v.string(),
+    error: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const existing = await ctx.db
+      .query("trelloWebhooks")
+      .withIndex("by_board", (q) => q.eq("trelloBoardId", args.trelloBoardId))
+      .first();
+
+    if (existing) {
+      await ctx.db.patch(existing._id, {
+        active: false,
+        updatedAt: Date.now(),
+        lastError: args.error,
+      });
+      return existing._id;
+    }
+
+    return await ctx.db.insert("trelloWebhooks", {
+      clientBrandId: args.clientBrandId,
+      trelloBoardId: args.trelloBoardId,
+      trelloWebhookId: "",
+      callbackURL: "",
+      active: false,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      lastError: args.error,
+    });
+  },
+});
+
+export const recordWebhookEvent = internalMutation({
+  args: {
+    trelloActionId: v.string(),
+    trelloWebhookId: v.optional(v.string()),
+    trelloBoardId: v.optional(v.string()),
+    trelloCardId: v.optional(v.string()),
+    actionType: v.string(),
+    sourceIdentifier: v.optional(v.string()),
+    payloadJson: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const existing = await ctx.db
+      .query("trelloWebhookEvents")
+      .withIndex("by_action", (q) => q.eq("trelloActionId", args.trelloActionId))
+      .unique();
+
+    if (existing) {
+      return { eventId: existing._id, duplicate: true };
+    }
+
+    const now = Date.now();
+    const eventId = await ctx.db.insert("trelloWebhookEvents", {
+      trelloActionId: args.trelloActionId,
+      trelloWebhookId: args.trelloWebhookId,
+      trelloBoardId: args.trelloBoardId,
+      trelloCardId: args.trelloCardId,
+      actionType: args.actionType,
+      sourceIdentifier: args.sourceIdentifier,
+      payloadJson: args.payloadJson,
+      status: "received",
+      receivedAt: now,
+    });
+
+    if (args.trelloWebhookId) {
+      const webhook = await ctx.db
+        .query("trelloWebhooks")
+        .withIndex("by_webhook", (q) =>
+          q.eq("trelloWebhookId", args.trelloWebhookId!),
+        )
+        .first();
+      if (webhook) {
+        await ctx.db.patch(webhook._id, {
+          lastEventAt: now,
+          updatedAt: now,
+        });
+      }
+    }
+
+    await ctx.scheduler.runAfter(0, internalTrello.processWebhookEvent, {
+      eventId,
+    });
+
+    return { eventId, duplicate: false };
+  },
+});
+
+export const getWebhookEventById = internalQuery({
+  args: {
+    eventId: v.id("trelloWebhookEvents"),
+  },
+  handler: async (ctx, args) => {
+    return await ctx.db.get(args.eventId);
+  },
+});
+
+export const getTrelloCardContextByCardId = internalQuery({
+  args: {
+    trelloCardId: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const card = await ctx.db
+      .query("trelloCards")
+      .withIndex("by_card", (q) => q.eq("trelloCardId", args.trelloCardId))
+      .first();
+    if (!card) return null;
+
+    const task = await ctx.db.get(card.taskId);
+    const project = await ctx.db.get(card.projectId);
+    return { card, task, project };
+  },
+});
+
+export const getStatusByTrelloListId = internalQuery({
+  args: {
+    trelloListId: v.string(),
+  },
+  handler: async (ctx, args) => {
+    return await ctx.db
+      .query("trelloBoardLists")
+      .withIndex("by_list", (q) => q.eq("trelloListId", args.trelloListId))
+      .first();
+  },
+});
+
+export const markWebhookEventStatus = internalMutation({
+  args: {
+    eventId: v.id("trelloWebhookEvents"),
+    status: v.string(),
+    reason: v.optional(v.string()),
+    error: v.optional(v.string()),
+    taskId: v.optional(v.id("tasks")),
+  },
+  handler: async (ctx, args) => {
+    await ctx.db.patch(args.eventId, {
+      status: args.status,
+      reason: args.reason,
+      error: args.error,
+      taskId: args.taskId,
+      processedAt: Date.now(),
+    });
+  },
+});
+
+export const recordInboundChange = internalMutation({
+  args: {
+    eventId: v.id("trelloWebhookEvents"),
+    taskId: v.optional(v.id("tasks")),
+    projectId: v.optional(v.id("projects")),
+    trelloCardId: v.optional(v.string()),
+    actionType: v.string(),
+    field: v.string(),
+    oldValueJson: v.optional(v.string()),
+    newValueJson: v.optional(v.string()),
+    applied: v.boolean(),
+    requiresReview: v.boolean(),
+    reviewStatus: v.optional(v.string()),
+    note: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    return await ctx.db.insert("trelloInboundChanges", {
+      ...args,
+      createdAt: Date.now(),
+    });
+  },
+});
+
+export const applySafeInboundCardUpdate = internalMutation({
+  args: {
+    taskId: v.id("tasks"),
+    projectId: v.optional(v.id("projects")),
+    updates: v.object({
+      title: v.optional(v.string()),
+      deadline: v.optional(v.string()),
+      status: v.optional(v.string()),
+      trelloListId: v.optional(v.string()),
+    }),
+  },
+  handler: async (ctx, args) => {
+    const now = Date.now();
+    const taskPatch: Record<string, any> = {
+      trelloInboundSyncStatus: "pending_review",
+      trelloLastInboundAt: now,
+      trelloInboundSyncError: undefined,
+    };
+
+    if (args.updates.title !== undefined) taskPatch.title = args.updates.title;
+    if (args.updates.deadline !== undefined) {
+      taskPatch.deadline = args.updates.deadline;
+    }
+    if (args.updates.status !== undefined) taskPatch.status = args.updates.status;
+
+    await ctx.db.patch(args.taskId, taskPatch);
+
+    if (args.projectId) {
+      const projectPatch: Record<string, any> = {};
+      if (args.updates.title !== undefined) projectPatch.name = args.updates.title;
+      if (args.updates.deadline !== undefined) {
+        projectPatch.endDate = args.updates.deadline;
+      }
+      if (Object.keys(projectPatch).length > 0) {
+        await ctx.db.patch(args.projectId, projectPatch);
+      }
+    }
+
+    if (args.updates.trelloListId) {
+      const trelloCard = await ctx.db
+        .query("trelloCards")
+        .withIndex("by_task", (q) => q.eq("taskId", args.taskId))
+        .first();
+      if (trelloCard) {
+        await ctx.db.patch(trelloCard._id, {
+          trelloListId: args.updates.trelloListId,
+        });
+      }
+    }
+  },
+});
+
+export const markTaskInboundReviewNeeded = internalMutation({
+  args: {
+    taskId: v.id("tasks"),
+    error: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    await ctx.db.patch(args.taskId, {
+      trelloInboundSyncStatus: "pending_review",
+      trelloInboundSyncError: args.error,
+      trelloLastInboundAt: Date.now(),
     });
   },
 });
@@ -764,9 +1059,7 @@ export const createCardForExternalTask: any = internalAction({
       );
 
       const customValues = [
-        { key: "brand", value: data.brand.name },
         { key: "requestType", value: args.requestType },
-        { key: "priority", value: PRIORITY_LABELS[data.task.priority ?? 1] ?? "Media" },
         { key: "deliverablesCount", value: args.deliverablesCount },
       ];
 
@@ -805,6 +1098,369 @@ export const createCardForExternalTask: any = internalAction({
         error: message,
       });
       return { success: false, error: message };
+    }
+  },
+});
+
+export const processWebhookEvent: any = internalAction({
+  args: {
+    eventId: v.id("trelloWebhookEvents"),
+  },
+  handler: async (ctx, args) => {
+    const event = await ctx.runQuery(internalTrello.getWebhookEventById, {
+      eventId: args.eventId,
+    });
+    if (!event) return { success: false, error: "Evento no encontrado." };
+
+    if (event.status !== "received") {
+      return { success: true, ignored: true, reason: "Evento ya procesado." };
+    }
+
+    let payload: any;
+    try {
+      payload = JSON.parse(event.payloadJson);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      await ctx.runMutation(internalTrello.markWebhookEventStatus, {
+        eventId: args.eventId,
+        status: "failed",
+        error: `Payload inválido: ${message}`,
+      });
+      return { success: false, error: message };
+    }
+
+    if (event.sourceIdentifier === CONVEX_TRELLO_CLIENT_IDENTIFIER) {
+      await ctx.runMutation(internalTrello.markWebhookEventStatus, {
+        eventId: args.eventId,
+        status: "ignored",
+        reason: "Evento originado por Convex.",
+      });
+      return { success: true, ignored: true };
+    }
+
+    const cardId =
+      event.trelloCardId ||
+      payload?.action?.data?.card?.id ||
+      payload?.action?.data?.card?.idShort;
+    if (!cardId) {
+      await ctx.runMutation(internalTrello.markWebhookEventStatus, {
+        eventId: args.eventId,
+        status: "ignored",
+        reason: "Evento sin card asociada.",
+      });
+      return { success: true, ignored: true };
+    }
+
+    const context = await ctx.runQuery(internalTrello.getTrelloCardContextByCardId, {
+      trelloCardId: cardId,
+    });
+    if (!context?.task || !context.project) {
+      await ctx.runMutation(internalTrello.markWebhookEventStatus, {
+        eventId: args.eventId,
+        status: "ignored",
+        reason: "Card Trello sin mapping local.",
+      });
+      return { success: true, ignored: true };
+    }
+
+    const action = payload.action;
+    const data = action?.data ?? {};
+    const oldValues = data.old ?? {};
+    const card = data.card ?? {};
+    const safeUpdates: {
+      title?: string;
+      deadline?: string;
+      status?: string;
+      trelloListId?: string;
+    } = {};
+    let appliedCount = 0;
+    let reviewCount = 0;
+
+    try {
+      if (event.actionType === "updateCard") {
+        if (Object.prototype.hasOwnProperty.call(oldValues, "name")) {
+          safeUpdates.title = String(card.name ?? "");
+          await ctx.runMutation(internalTrello.recordInboundChange, {
+            eventId: args.eventId,
+            taskId: context.task._id,
+            projectId: context.project._id,
+            trelloCardId: cardId,
+            actionType: event.actionType,
+            field: "title",
+            oldValueJson: jsonValue(oldValues.name),
+            newValueJson: jsonValue(card.name),
+            applied: true,
+            requiresReview: false,
+            note: "Título actualizado desde Trello en Convex. No se publicó en COR.",
+          });
+          appliedCount += 1;
+        }
+
+        if (Object.prototype.hasOwnProperty.call(oldValues, "due")) {
+          if (typeof card.due === "string" && card.due.length > 0) {
+            const businessDeadline = formatDateInBusinessTimeZone(card.due);
+            if (!businessDeadline) {
+              await ctx.runMutation(internalTrello.recordInboundChange, {
+                eventId: args.eventId,
+                taskId: context.task._id,
+                projectId: context.project._id,
+                trelloCardId: cardId,
+                actionType: event.actionType,
+                field: "deadline",
+                oldValueJson: jsonValue(oldValues.due),
+                newValueJson: jsonValue(card.due),
+                applied: false,
+                requiresReview: true,
+                reviewStatus: "pending",
+                note: "Trello envió una fecha inválida; requiere revisión interna.",
+              });
+              reviewCount += 1;
+            } else {
+              safeUpdates.deadline = businessDeadline;
+              await ctx.runMutation(internalTrello.recordInboundChange, {
+                eventId: args.eventId,
+                taskId: context.task._id,
+                projectId: context.project._id,
+                trelloCardId: cardId,
+                actionType: event.actionType,
+                field: "deadline",
+                oldValueJson: jsonValue(oldValues.due),
+                newValueJson: jsonValue({
+                  trelloDue: card.due,
+                  businessDate: businessDeadline,
+                  timeZone: BUSINESS_TIME_ZONE,
+                }),
+                applied: true,
+                requiresReview: false,
+                note: "Deadline actualizado desde Trello como fecha calendario de Ecuador. No se publicó en COR.",
+              });
+              appliedCount += 1;
+            }
+          } else {
+            await ctx.runMutation(internalTrello.recordInboundChange, {
+              eventId: args.eventId,
+              taskId: context.task._id,
+              projectId: context.project._id,
+              trelloCardId: cardId,
+              actionType: event.actionType,
+              field: "deadline",
+              oldValueJson: jsonValue(oldValues.due),
+              newValueJson: jsonValue(card.due),
+              applied: false,
+              requiresReview: true,
+              reviewStatus: "pending",
+              note: "Remover deadline desde Trello requiere revisión interna.",
+            });
+            reviewCount += 1;
+          }
+        }
+
+        if (Object.prototype.hasOwnProperty.call(oldValues, "idList")) {
+          const mapping = card.idList
+            ? await ctx.runQuery(internalTrello.getStatusByTrelloListId, {
+                trelloListId: card.idList,
+              })
+            : null;
+
+          if (mapping?.status) {
+            safeUpdates.status = mapping.status;
+            safeUpdates.trelloListId = card.idList;
+            await ctx.runMutation(internalTrello.recordInboundChange, {
+              eventId: args.eventId,
+              taskId: context.task._id,
+              projectId: context.project._id,
+              trelloCardId: cardId,
+              actionType: event.actionType,
+              field: "status",
+              oldValueJson: jsonValue(oldValues.idList),
+              newValueJson: jsonValue(card.idList),
+              applied: true,
+              requiresReview: false,
+              note: "Status actualizado desde lista Trello en Convex. No se publicó en COR.",
+            });
+            appliedCount += 1;
+          } else {
+            await ctx.runMutation(internalTrello.recordInboundChange, {
+              eventId: args.eventId,
+              taskId: context.task._id,
+              projectId: context.project._id,
+              trelloCardId: cardId,
+              actionType: event.actionType,
+              field: "status",
+              oldValueJson: jsonValue(oldValues.idList),
+              newValueJson: jsonValue(card.idList),
+              applied: false,
+              requiresReview: true,
+              reviewStatus: "pending",
+              note: "La lista Trello no tiene mapping local de status.",
+            });
+            reviewCount += 1;
+          }
+        }
+
+        if (Object.prototype.hasOwnProperty.call(oldValues, "desc")) {
+          await ctx.runMutation(internalTrello.recordInboundChange, {
+            eventId: args.eventId,
+            taskId: context.task._id,
+            projectId: context.project._id,
+            trelloCardId: cardId,
+            actionType: event.actionType,
+            field: "description",
+            oldValueJson: jsonValue(oldValues.desc),
+            newValueJson: jsonValue(card.desc),
+            applied: false,
+            requiresReview: true,
+            reviewStatus: "pending",
+            note: "La descripción requiere revisión antes de modificar el brief estructurado.",
+          });
+          reviewCount += 1;
+        }
+
+        if (Object.prototype.hasOwnProperty.call(oldValues, "closed")) {
+          await ctx.runMutation(internalTrello.recordInboundChange, {
+            eventId: args.eventId,
+            taskId: context.task._id,
+            projectId: context.project._id,
+            trelloCardId: cardId,
+            actionType: event.actionType,
+            field: "closed",
+            oldValueJson: jsonValue(oldValues.closed),
+            newValueJson: jsonValue(card.closed),
+            applied: false,
+            requiresReview: true,
+            reviewStatus: "pending",
+            note: "Archivado/cierre en Trello requiere revisión.",
+          });
+          reviewCount += 1;
+        }
+
+        if (Object.keys(safeUpdates).length > 0) {
+          await ctx.runMutation(internalTrello.applySafeInboundCardUpdate, {
+            taskId: context.task._id,
+            projectId: context.project._id,
+            updates: safeUpdates,
+          });
+        }
+      } else if (
+        event.actionType === "addAttachmentToCard" ||
+        event.actionType === "deleteAttachmentFromCard" ||
+        event.actionType === "addLabelToCard" ||
+        event.actionType === "removeLabelFromCard"
+      ) {
+        const fieldMap: Record<string, string> = {
+          addAttachmentToCard: "attachment_added",
+          deleteAttachmentFromCard: "attachment_removed",
+          addLabelToCard: "label_added",
+          removeLabelFromCard: "label_removed",
+        };
+        await ctx.runMutation(internalTrello.recordInboundChange, {
+          eventId: args.eventId,
+          taskId: context.task._id,
+          projectId: context.project._id,
+          trelloCardId: cardId,
+          actionType: event.actionType,
+          field: fieldMap[event.actionType] ?? event.actionType,
+          oldValueJson: undefined,
+          newValueJson: jsonValue(data),
+          applied: false,
+          requiresReview: true,
+          reviewStatus: "pending",
+          note: "Cambio recibido desde Trello; requiere revisión antes de modificar datos locales sensibles.",
+        });
+        reviewCount += 1;
+      } else {
+        await ctx.runMutation(internalTrello.markWebhookEventStatus, {
+          eventId: args.eventId,
+          status: "ignored",
+          taskId: context.task._id,
+          reason: `Tipo de evento no manejado: ${event.actionType}`,
+        });
+        return { success: true, ignored: true };
+      }
+
+      if (reviewCount > 0) {
+        await ctx.runMutation(internalTrello.markTaskInboundReviewNeeded, {
+          taskId: context.task._id,
+          error: `${reviewCount} cambio(s) de Trello requieren revisión interna.`,
+        });
+      }
+
+      await ctx.runMutation(internalTrello.markWebhookEventStatus, {
+        eventId: args.eventId,
+        status: reviewCount > 0 ? "needs_review" : "processed",
+        taskId: context.task._id,
+        reason: `${appliedCount} cambio(s) aplicado(s), ${reviewCount} pendiente(s) de revisión.`,
+      });
+
+      return { success: true, appliedCount, reviewCount };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      await ctx.runMutation(internalTrello.markWebhookEventStatus, {
+        eventId: args.eventId,
+        status: "failed",
+        taskId: context.task._id,
+        error: message,
+      });
+      await ctx.runMutation(internalTrello.markTaskInboundReviewNeeded, {
+        taskId: context.task._id,
+        error: message,
+      });
+      return { success: false, error: message };
+    }
+  },
+});
+
+export const syncTrelloWebhookForBrand: any = action({
+  args: {
+    clientBrandId: v.id("clientBrands"),
+  },
+  handler: async (ctx, args) => {
+    const callbackURL = process.env.TRELLO_WEBHOOK_CALLBACK_URL;
+    if (!callbackURL) {
+      throw new Error(
+        "Falta TRELLO_WEBHOOK_CALLBACK_URL en Convex. Debe ser la URL pública exacta del endpoint /trello/webhook.",
+      );
+    }
+
+    const brand = await ctx.runQuery(internal.data.clientBrands.getById, {
+      clientBrandId: args.clientBrandId,
+    });
+    if (!brand) throw new Error("Categoría no encontrada.");
+    if (!brand.trelloBoardId) {
+      throw new Error(`La categoría "${brand.name}" no tiene trelloBoardId configurado.`);
+    }
+
+    try {
+      const webhook = await trelloProvider.createWebhook({
+        callbackURL,
+        idModel: brand.trelloBoardId,
+        description: `Agent Core inbound sync - ${brand.name}`,
+      });
+
+      await ctx.runMutation(internalTrello.upsertWebhookMapping, {
+        clientBrandId: brand._id,
+        trelloBoardId: brand.trelloBoardId,
+        trelloWebhookId: webhook.id,
+        callbackURL,
+        active: webhook.active,
+      });
+
+      return {
+        success: true,
+        clientBrandId: brand._id,
+        brand: brand.name,
+        trelloBoardId: brand.trelloBoardId,
+        trelloWebhookId: webhook.id,
+        callbackURL,
+      };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      await ctx.runMutation(internalTrello.markWebhookError, {
+        clientBrandId: brand._id,
+        trelloBoardId: brand.trelloBoardId,
+        error: message,
+      });
+      throw error;
     }
   },
 });

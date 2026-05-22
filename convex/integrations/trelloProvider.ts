@@ -1,4 +1,5 @@
 const TRELLO_API_BASE_URL = "https://api.trello.com/1";
+const TRELLO_CLIENT_IDENTIFIER = "agent-core-convex-trello-sync";
 
 type TrelloList = {
   id: string;
@@ -36,6 +37,14 @@ type TrelloAttachment = {
   url: string;
 };
 
+type TrelloWebhook = {
+  id: string;
+  active: boolean;
+  callbackURL: string;
+  idModel: string;
+  description?: string;
+};
+
 function getCredentials() {
   const key = process.env.TRELLO_API_KEY;
   const token = process.env.TRELLO_TOKEN;
@@ -61,7 +70,13 @@ async function trelloFetch<T>(
     if (value !== undefined) url.searchParams.set(name, String(value));
   }
 
-  const response = await fetch(url, options);
+  const headers = new Headers(options.headers);
+  headers.set("X-Trello-Client-Identifier", TRELLO_CLIENT_IDENTIFIER);
+
+  const response = await fetch(url, {
+    ...options,
+    headers,
+  });
   if (!response.ok) {
     const body = await response.text();
     throw new Error(`Trello API error: ${response.status} ${body}`);
@@ -176,6 +191,29 @@ export const trelloProvider = {
       {
         setCover: false,
       },
+    );
+  },
+
+  async createWebhook(args: {
+    callbackURL: string;
+    idModel: string;
+    description: string;
+  }): Promise<TrelloWebhook> {
+    return await trelloFetch<TrelloWebhook>(
+      "/webhooks",
+      { method: "POST" },
+      {
+        callbackURL: args.callbackURL,
+        idModel: args.idModel,
+        description: args.description,
+      },
+    );
+  },
+
+  async deleteWebhook(webhookId: string): Promise<unknown> {
+    return await trelloFetch(
+      `/webhooks/${webhookId}`,
+      { method: "DELETE" },
     );
   },
 

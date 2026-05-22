@@ -113,6 +113,9 @@ export default defineSchema({
     trelloAttachmentSyncStatus: v.optional(v.string()), // "pending" | "synced" | "partial" | "error"
     trelloAttachmentSyncError: v.optional(v.string()),
     trelloAttachmentSyncedAt: v.optional(v.number()),
+    trelloInboundSyncStatus: v.optional(v.string()), // "clean" | "pending_review" | "conflict" | "error"
+    trelloInboundSyncError: v.optional(v.string()),
+    trelloLastInboundAt: v.optional(v.number()),
   })
     .index("by_thread", ["threadId"])
     .index("by_status", ["status"])
@@ -139,7 +142,8 @@ export default defineSchema({
     .index("by_corTaskId", ["corTaskId"])
     .index("by_corSyncStatus", ["corSyncStatus"])
     .index("by_trelloCardId", ["trelloCardId"])
-    .index("by_trelloSyncStatus", ["trelloSyncStatus"]),
+    .index("by_trelloSyncStatus", ["trelloSyncStatus"])
+    .index("by_trelloInboundSyncStatus", ["trelloInboundSyncStatus"]),
 
   // === Task Attachments: Archivos adjuntos de tasks ===
   // Estructura espejada con COR para sincronización directa.
@@ -517,4 +521,72 @@ export default defineSchema({
     .index("by_brand", ["clientBrandId"])
     .index("by_card", ["trelloCardId"])
     .index("by_syncStatus", ["syncStatus"]),
+
+  // =====================================================
+  // Trello Webhooks — Suscripciones por board/categoría
+  // =====================================================
+  trelloWebhooks: defineTable({
+    clientBrandId: v.id("clientBrands"),
+    trelloBoardId: v.string(),
+    trelloWebhookId: v.string(),
+    callbackURL: v.string(),
+    active: v.boolean(),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+    lastEventAt: v.optional(v.number()),
+    lastError: v.optional(v.string()),
+  })
+    .index("by_brand", ["clientBrandId"])
+    .index("by_board", ["trelloBoardId"])
+    .index("by_webhook", ["trelloWebhookId"])
+    .index("by_active", ["active"]),
+
+  // =====================================================
+  // Trello Webhook Events — Eventos entrantes idempotentes
+  // =====================================================
+  trelloWebhookEvents: defineTable({
+    trelloActionId: v.string(),
+    trelloWebhookId: v.optional(v.string()),
+    trelloBoardId: v.optional(v.string()),
+    trelloCardId: v.optional(v.string()),
+    taskId: v.optional(v.id("tasks")),
+    actionType: v.string(),
+    sourceIdentifier: v.optional(v.string()),
+    payloadJson: v.string(),
+    status: v.string(), // "received" | "ignored" | "processed" | "failed" | "needs_review"
+    reason: v.optional(v.string()),
+    error: v.optional(v.string()),
+    receivedAt: v.number(),
+    processedAt: v.optional(v.number()),
+  })
+    .index("by_action", ["trelloActionId"])
+    .index("by_webhook", ["trelloWebhookId"])
+    .index("by_board", ["trelloBoardId"])
+    .index("by_card", ["trelloCardId"])
+    .index("by_task", ["taskId"])
+    .index("by_status", ["status"])
+    .index("by_receivedAt", ["receivedAt"]),
+
+  // =====================================================
+  // Trello Inbound Changes — Cambios para auditoría/revisión
+  // =====================================================
+  trelloInboundChanges: defineTable({
+    eventId: v.id("trelloWebhookEvents"),
+    taskId: v.optional(v.id("tasks")),
+    projectId: v.optional(v.id("projects")),
+    trelloCardId: v.optional(v.string()),
+    actionType: v.string(),
+    field: v.string(),
+    oldValueJson: v.optional(v.string()),
+    newValueJson: v.optional(v.string()),
+    applied: v.boolean(),
+    requiresReview: v.boolean(),
+    reviewStatus: v.optional(v.string()), // "pending" | "accepted" | "rejected"
+    note: v.optional(v.string()),
+    createdAt: v.number(),
+  })
+    .index("by_event", ["eventId"])
+    .index("by_task", ["taskId"])
+    .index("by_reviewStatus", ["reviewStatus"])
+    .index("by_createdAt", ["createdAt"]),
 });
