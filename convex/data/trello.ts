@@ -268,6 +268,18 @@ export const getTaskProjectForTrello = internalQuery({
       .withIndex("by_brand", (q) => q.eq("clientBrandId", brand._id))
       .collect();
 
+    let trelloMemberId: string | undefined;
+    if (task.createdBy) {
+      const createdByUserId = ctx.db.normalizeId("users", task.createdBy);
+      if (createdByUserId) {
+        const approvedExternalUser = await ctx.db
+          .query("approvedExternalUsers")
+          .withIndex("by_user", (q) => q.eq("userId", createdByUserId))
+          .unique();
+        trelloMemberId = approvedExternalUser?.trelloMemberId;
+      }
+    }
+
     return {
       ok: true as const,
       task,
@@ -277,6 +289,7 @@ export const getTaskProjectForTrello = internalQuery({
       listId: listMapping.trelloListId,
       existingCard,
       customFields,
+      trelloMemberId,
     };
   },
 });
@@ -406,6 +419,72 @@ export const listBoardMembers: any = action({
         memberType: member.memberType,
         confirmed: member.confirmed,
       })),
+    };
+  },
+});
+
+export const validateExternalUserBoardMembership: any = internalAction({
+  args: {
+    userId: v.id("users"),
+    clientBrandId: v.id("clientBrands"),
+  },
+  handler: async (ctx, args) => {
+    const approvedExternalUser = await ctx.runQuery(
+      internal.data.approvedExternalUsers.getApprovedExternalUserByUserId,
+      { userId: args.userId },
+    );
+
+    if (!approvedExternalUser) {
+      return {
+        ok: false as const,
+        error: "Este flujo solo está disponible para usuarios externos aprobados.",
+      };
+    }
+
+    if (!approvedExternalUser.trelloMemberId) {
+      return {
+        ok: false as const,
+        error:
+          "No tienes un usuario de Trello vinculado. Pide a un administrador que configure tu acceso antes de crear este requerimiento.",
+      };
+    }
+
+    const brand = await ctx.runQuery(internal.data.clientBrands.getById, {
+      clientBrandId: args.clientBrandId,
+    });
+
+    if (!brand) {
+      return { ok: false as const, error: "La categoría seleccionada no existe." };
+    }
+
+    if (!brand.trelloBoardId) {
+      return {
+        ok: false as const,
+        error:
+          "Esta categoría todavía no tiene un tablero de Trello configurado. Pide a un administrador que lo configure antes de crear este requerimiento.",
+      };
+    }
+
+    const members = await trelloProvider.getBoardMembers(brand.trelloBoardId);
+    const member = members.find(
+      (candidate) => candidate.id === approvedExternalUser.trelloMemberId,
+    );
+
+    if (!member) {
+      return {
+        ok: false as const,
+        error:
+          "No tienes permiso en el tablero de Trello de esta categoría. Pide a un administrador que te agregue a Trello antes de crear este requerimiento.",
+      };
+    }
+
+    return {
+      ok: true as const,
+      trelloBoardId: brand.trelloBoardId,
+      trelloMemberId: member.id,
+      trelloUsername: member.username,
+      trelloMemberFullName: member.fullName,
+      trelloMemberEmail: member.email,
     };
   },
 });
@@ -1353,6 +1432,26 @@ export const createCardForExternalTask: any = internalAction({
         trelloCardId: card.id,
         trelloCardUrl: card.url || card.shortUrl || "",
       });
+
+      if (data.trelloMemberId) {
+        try {
+          await trelloProvider.addMemberToCard({
+            cardId: card.id,
+            memberId: data.trelloMemberId,
+          });
+        } catch (memberError) {
+          const message =
+            memberError instanceof Error ? memberError.message : String(memberError);
+          console.error(
+            `[TrelloSync] Error agregando miembro ${data.trelloMemberId} a card ${card.id}: ${message}`,
+          );
+          await ctx.runMutation(internalTrello.markTrelloCardError, {
+            taskId: data.task._id,
+            projectId: data.project._id,
+            error: `Card creada, pero no se pudo agregar al usuario externo como miembro: ${message}`,
+          });
+        }
+      }
 
       console.log(`[TrelloSync] Card creada para task ${args.taskId}: ${card.id}`);
       return { success: true, cardId: card.id, url: card.url || card.shortUrl };

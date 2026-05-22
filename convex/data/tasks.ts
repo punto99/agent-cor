@@ -1204,8 +1204,17 @@ export const createProjectAndTask = internalMutation({
     // Shared
     threadId: v.string(),
     existingProjectId: v.optional(v.id("projects")),
+    externalTrelloAccessVerified: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
+    const isExternalCreation =
+      args.taskSource === "external" || args.projectSource === "external";
+    if (isExternalCreation && !args.externalTrelloAccessVerified) {
+      throw new Error(
+        "❌ No se verificó el acceso del usuario externo al tablero de Trello.",
+      );
+    }
+
     const existingProject = args.existingProjectId
       ? await ctx.db.get(args.existingProjectId)
       : null;

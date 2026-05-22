@@ -96,6 +96,21 @@ export const validateExternalUserForBrandTool = createTool({
     }
 
     const brand = matches[0];
+    const trelloAccess = await ctx.runAction(
+      (internal as any).data.trello.validateExternalUserBoardMembership,
+      {
+        userId: profile.userId as any,
+        clientBrandId: brand._id as any,
+      },
+    );
+
+    if (!trelloAccess.ok) {
+      return JSON.stringify({
+        authorized: false,
+        error: trelloAccess.error,
+      });
+    }
+
     const subBrands = await ctx.runQuery(
       internal.data.subBrands.listByBrandInternal,
       { clientBrandId: brand._id as any },

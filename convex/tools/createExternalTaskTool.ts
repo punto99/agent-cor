@@ -110,6 +110,18 @@ export const createExternalTaskTool = createTool({
       return preparation.error;
     }
 
+    const trelloAccess = await ctx.runAction(
+      (internal as any).data.trello.validateExternalUserBoardMembership,
+      {
+        userId: preparation.userId as any,
+        clientBrandId: preparation.clientBrandId as any,
+      },
+    );
+
+    if (!trelloAccess.ok) {
+      return `❌ ${trelloAccess.error}`;
+    }
+
     const fullTitle = `${preparation.brandName} - ${args.title}`;
     const description = buildBriefDescription({
       requestType: args.requestType,
@@ -190,6 +202,7 @@ export const createExternalTaskTool = createTool({
         taskSubBrandName: preparation.subBrandName,
         threadId,
         existingProjectId: preparation.existingProjectId as any,
+        externalTrelloAccessVerified: true,
       });
     } catch (error) {
       console.error("[CreateExternalTask] Error creando proyecto/task:", error);
