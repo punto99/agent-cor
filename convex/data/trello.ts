@@ -82,28 +82,8 @@ function htmlToTrelloMarkdown(value: string | undefined) {
     .trim();
 }
 
-function buildTrelloDescription(args: {
-  project: any;
-  task: any;
-  requestType: string;
-  deliverablesCount: number;
-}) {
-  const lines = [
-    `## Proyecto`,
-    `**Nombre:** ${args.project.name}`,
-    `**Tipo de requerimiento:** ${args.requestType}`,
-    `**Deadline:** ${args.task.deadline || args.project.endDate || "No especificado"}`,
-    `**Cantidad de entregables:** ${args.deliverablesCount}`,
-    "",
-    `## Brief`,
-    htmlToTrelloMarkdown(args.task.description),
-  ];
-
-  if (args.project.brief) {
-    lines.push("", "## Archivos de referencia", args.project.brief);
-  }
-
-  return lines.filter((line) => line !== undefined).join("\n");
+function buildTrelloDescription(args: { task: any }) {
+  return htmlToTrelloMarkdown(args.task.description);
 }
 
 export const getTaskProjectForTrello = internalQuery({
@@ -476,6 +456,7 @@ export const applySafeInboundCardUpdate = internalMutation({
     projectId: v.optional(v.id("projects")),
     updates: v.object({
       title: v.optional(v.string()),
+      description: v.optional(v.string()),
       deadline: v.optional(v.string()),
       status: v.optional(v.string()),
       trelloListId: v.optional(v.string()),
@@ -490,6 +471,9 @@ export const applySafeInboundCardUpdate = internalMutation({
     };
 
     if (args.updates.title !== undefined) taskPatch.title = args.updates.title;
+    if (args.updates.description !== undefined) {
+      taskPatch.description = args.updates.description;
+    }
     if (args.updates.deadline !== undefined) {
       taskPatch.deadline = args.updates.deadline;
     }
@@ -1046,9 +1030,6 @@ export const createCardForExternalTask: any = internalAction({
         name: data.task.title,
         desc: buildTrelloDescription({
           task: data.task,
-          project: data.project,
-          requestType: args.requestType,
-          deliverablesCount: args.deliverablesCount,
         }),
         due: data.task.deadline,
         idLabels: idLabels.length > 0 ? idLabels : undefined,
@@ -1169,6 +1150,7 @@ export const processWebhookEvent: any = internalAction({
     const card = data.card ?? {};
     const safeUpdates: {
       title?: string;
+      description?: string;
       deadline?: string;
       status?: string;
       trelloListId?: string;
@@ -1299,6 +1281,7 @@ export const processWebhookEvent: any = internalAction({
         }
 
         if (Object.prototype.hasOwnProperty.call(oldValues, "desc")) {
+          safeUpdates.description = String(card.desc ?? "");
           await ctx.runMutation(internalTrello.recordInboundChange, {
             eventId: args.eventId,
             taskId: context.task._id,
@@ -1308,12 +1291,11 @@ export const processWebhookEvent: any = internalAction({
             field: "description",
             oldValueJson: jsonValue(oldValues.desc),
             newValueJson: jsonValue(card.desc),
-            applied: false,
-            requiresReview: true,
-            reviewStatus: "pending",
-            note: "La descripción requiere revisión antes de modificar el brief estructurado.",
+            applied: true,
+            requiresReview: false,
+            note: "Descripción completa actualizada desde Trello en Convex. No se publicó en COR.",
           });
-          reviewCount += 1;
+          appliedCount += 1;
         }
 
         if (Object.prototype.hasOwnProperty.call(oldValues, "closed")) {
