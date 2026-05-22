@@ -94,6 +94,113 @@ function htmlToTrelloMarkdown(value: string | undefined) {
     .trim();
 }
 
+function escapeHtml(value: string) {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+function formatInlineMarkdownWithoutLinks(value: string) {
+  return escapeHtml(value)
+    .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
+    .replace(/__([^_]+)__/g, "<strong>$1</strong>")
+    .replace(/\*([^*\n]+)\*/g, "<em>$1</em>")
+    .replace(/_([^_\n]+)_/g, "<em>$1</em>");
+}
+
+function formatInlineMarkdown(value: string) {
+  const links: string[] = [];
+  const textWithPlaceholders = value.replace(
+    /\[([^\]]+)\]\((https?:\/\/[^)\s]+|mailto:[^)\s]+)\)/g,
+    (_match, label: string, href: string) => {
+      const index = links.length;
+      links.push(
+        `<a href="${escapeHtml(href)}" target="_blank" rel="noopener noreferrer">${formatInlineMarkdownWithoutLinks(label)}</a>`,
+      );
+      return `\u0000LINK${index}\u0000`;
+    },
+  );
+
+  return formatInlineMarkdownWithoutLinks(textWithPlaceholders).replace(
+    /\u0000LINK(\d+)\u0000/g,
+    (_match, index: string) => links[Number(index)] ?? "",
+  );
+}
+
+function trelloMarkdownToConvexHtml(value: string | undefined) {
+  if (!value) return "";
+
+  const lines = value.replace(/\r\n/g, "\n").replace(/\r/g, "\n").split("\n");
+  const blocks: string[] = [];
+  let paragraph: string[] = [];
+  let listItems: string[] = [];
+  let listType: "ul" | "ol" | null = null;
+
+  const flushParagraph = () => {
+    if (paragraph.length === 0) return;
+    blocks.push(`<p>${paragraph.map(formatInlineMarkdown).join("<br>")}</p>`);
+    paragraph = [];
+  };
+
+  const flushList = () => {
+    if (!listType || listItems.length === 0) return;
+    blocks.push(`<${listType}>${listItems.join("")}</${listType}>`);
+    listItems = [];
+    listType = null;
+  };
+
+  for (const rawLine of lines) {
+    const line = rawLine.trim();
+
+    if (!line) {
+      flushParagraph();
+      flushList();
+      continue;
+    }
+
+    const heading = line.match(/^#{1,6}\s+(.+)$/);
+    if (heading) {
+      flushParagraph();
+      flushList();
+      blocks.push(`<p><strong>${formatInlineMarkdown(heading[1])}</strong></p>`);
+      continue;
+    }
+
+    const unorderedItem = line.match(/^[-*]\s+(.+)$/);
+    if (unorderedItem) {
+      flushParagraph();
+      if (listType !== "ul") {
+        flushList();
+        listType = "ul";
+      }
+      listItems.push(`<li>${formatInlineMarkdown(unorderedItem[1])}</li>`);
+      continue;
+    }
+
+    const orderedItem = line.match(/^\d+[.)]\s+(.+)$/);
+    if (orderedItem) {
+      flushParagraph();
+      if (listType !== "ol") {
+        flushList();
+        listType = "ol";
+      }
+      listItems.push(`<li>${formatInlineMarkdown(orderedItem[1])}</li>`);
+      continue;
+    }
+
+    flushList();
+    paragraph.push(line);
+  }
+
+  flushParagraph();
+  flushList();
+
+  return blocks.join("\n").trim();
+}
+
 function buildTrelloDescription(args: { task: any }) {
   return htmlToTrelloMarkdown(args.task.description);
 }
@@ -1293,7 +1400,7 @@ export const processWebhookEvent: any = internalAction({
         }
 
         if (Object.prototype.hasOwnProperty.call(oldValues, "desc")) {
-          safeUpdates.description = String(card.desc ?? "");
+          safeUpdates.description = trelloMarkdownToConvexHtml(String(card.desc ?? ""));
           await ctx.runMutation(internalTrello.recordInboundChange, {
             eventId: args.eventId,
             taskId: context.task._id,
@@ -1305,7 +1412,7 @@ export const processWebhookEvent: any = internalAction({
             newValueJson: jsonValue(card.desc),
             applied: true,
             requiresReview: false,
-            note: "Descripción completa actualizada desde Trello en Convex. No se publicó en COR.",
+            note: "Descripción completa actualizada desde Trello en Convex como HTML. No se publicó en COR.",
           });
           appliedCount += 1;
         }
