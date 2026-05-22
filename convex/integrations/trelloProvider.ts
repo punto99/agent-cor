@@ -150,6 +150,19 @@ export const trelloProvider = {
     );
   },
 
+  async updateCard(args: {
+    cardId: string;
+    idList?: string;
+  }): Promise<TrelloCard> {
+    return await trelloFetch<TrelloCard>(
+      `/cards/${args.cardId}`,
+      { method: "PUT" },
+      {
+        idList: args.idList,
+      },
+    );
+  },
+
   async getBoardLabels(boardId: string): Promise<TrelloLabel[]> {
     return await trelloFetch<TrelloLabel[]>(`/boards/${boardId}/labels`, {}, {
       fields: "id,idBoard,name,color",

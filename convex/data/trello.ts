@@ -281,6 +281,91 @@ export const getTaskProjectForTrello = internalQuery({
   },
 });
 
+export const getTaskStatusTrelloSyncContext = internalQuery({
+  args: {
+    taskId: v.id("tasks"),
+  },
+  handler: async (ctx, args) => {
+    const task = await ctx.db.get(args.taskId);
+    if (!task || task.convexStatus === "deleted") {
+      return { ok: false as const, skip: true as const, error: "Task no encontrada." };
+    }
+
+    if (task.source !== "external" && !task.trelloCardId) {
+      return {
+        ok: false as const,
+        skip: true as const,
+        taskId: task._id,
+        projectId: task.projectId,
+        error: "La task no tiene integración Trello.",
+      };
+    }
+
+    const clientBrandId = task.clientBrandId;
+    if (!clientBrandId) {
+      return {
+        ok: false as const,
+        skip: false as const,
+        taskId: task._id,
+        projectId: task.projectId,
+        error: "La task no tiene categoría asociada para mover card en Trello.",
+      };
+    }
+
+    const trelloCard = await ctx.db
+      .query("trelloCards")
+      .withIndex("by_task", (q) => q.eq("taskId", task._id))
+      .first();
+
+    if (!trelloCard?.trelloCardId) {
+      return {
+        ok: false as const,
+        skip: true as const,
+        taskId: task._id,
+        projectId: task.projectId,
+        error: "La task no tiene card Trello creada.",
+      };
+    }
+
+    const listMapping = await ctx.db
+      .query("trelloBoardLists")
+      .withIndex("by_brand_and_status", (q) =>
+        q.eq("clientBrandId", clientBrandId).eq("status", task.status),
+      )
+      .unique();
+
+    if (!listMapping) {
+      return {
+        ok: false as const,
+        skip: false as const,
+        taskId: task._id,
+        projectId: task.projectId,
+        error: `No hay lista Trello configurada para el status "${getTaskStatusName(task.status)}".`,
+      };
+    }
+
+    if (trelloCard.trelloBoardId !== listMapping.trelloBoardId) {
+      return {
+        ok: false as const,
+        skip: false as const,
+        taskId: task._id,
+        projectId: task.projectId,
+        error: "La card Trello pertenece a un board distinto al mapping del status.",
+      };
+    }
+
+    return {
+      ok: true as const,
+      taskId: task._id,
+      projectId: task.projectId,
+      trelloCardId: trelloCard.trelloCardId,
+      currentTrelloListId: trelloCard.trelloListId,
+      targetTrelloListId: listMapping.trelloListId,
+      status: task.status,
+    };
+  },
+});
+
 export const upsertBoardListMapping = internalMutation({
   args: {
     clientBrandId: v.id("clientBrands"),
@@ -859,6 +944,44 @@ export const markTrelloCardSynced = internalMutation({
   },
 });
 
+export const markTrelloCardListSynced = internalMutation({
+  args: {
+    taskId: v.id("tasks"),
+    projectId: v.optional(v.id("projects")),
+    trelloListId: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const now = Date.now();
+    const existing = await ctx.db
+      .query("trelloCards")
+      .withIndex("by_task", (q) => q.eq("taskId", args.taskId))
+      .first();
+
+    if (existing) {
+      await ctx.db.patch(existing._id, {
+        trelloListId: args.trelloListId,
+        syncStatus: "synced",
+        syncError: undefined,
+        syncedAt: now,
+      });
+    }
+
+    await ctx.db.patch(args.taskId, {
+      trelloSyncStatus: "synced",
+      trelloSyncError: undefined,
+      trelloSyncedAt: now,
+    });
+
+    if (args.projectId) {
+      await ctx.db.patch(args.projectId, {
+        trelloSyncStatus: "synced",
+        trelloSyncError: undefined,
+        trelloSyncedAt: now,
+      });
+    }
+  },
+});
+
 export const markTrelloCardError = internalMutation({
   args: {
     taskId: v.id("tasks"),
@@ -1195,6 +1318,69 @@ export const createCardForExternalTask: any = internalAction({
       await ctx.runMutation(internalTrello.markTrelloCardError, {
         taskId: data.task._id,
         projectId: data.project._id,
+        error: message,
+      });
+      return { success: false, error: message };
+    }
+  },
+});
+
+export const syncTaskStatusToTrello: any = internalAction({
+  args: {
+    taskId: v.id("tasks"),
+  },
+  handler: async (ctx, args) => {
+    const context = await ctx.runQuery(
+      internalTrello.getTaskStatusTrelloSyncContext,
+      { taskId: args.taskId },
+    );
+
+    if (!context.ok) {
+      console.log(
+        `[TrelloSync] No se mueve card para task ${args.taskId}: ${context.error}`,
+      );
+      if (!context.skip && context.taskId) {
+        await ctx.runMutation(internalTrello.markTrelloCardError, {
+          taskId: context.taskId,
+          projectId: context.projectId,
+          error: context.error,
+        });
+      }
+      return { success: false, skipped: context.skip, error: context.error };
+    }
+
+    if (context.currentTrelloListId === context.targetTrelloListId) {
+      return {
+        success: true,
+        skipped: true,
+        reason: "La card Trello ya está en la lista correcta.",
+      };
+    }
+
+    try {
+      console.log(
+        `[TrelloSync] Moviendo card ${context.trelloCardId} a lista ${context.targetTrelloListId} por status "${context.status}"`,
+      );
+      await trelloProvider.updateCard({
+        cardId: context.trelloCardId,
+        idList: context.targetTrelloListId,
+      });
+
+      await ctx.runMutation(internalTrello.markTrelloCardListSynced, {
+        taskId: context.taskId,
+        projectId: context.projectId,
+        trelloListId: context.targetTrelloListId,
+      });
+
+      return { success: true };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.error(
+        `[TrelloSync] Error moviendo card Trello para task ${args.taskId}: ${message}`,
+      );
+      await ctx.runMutation(internalTrello.markTrelloCardError, {
+        taskId: context.taskId,
+        projectId: context.projectId,
         error: message,
       });
       return { success: false, error: message };
