@@ -67,6 +67,18 @@ function formatDateInBusinessTimeZone(value: string) {
   return `${year}-${month}-${day}`;
 }
 
+function formatDeadlineForTrelloDue(value: string | undefined) {
+  if (!value) return undefined;
+
+  const match = value.trim().match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (!match) return value;
+
+  const [, year, month, day] = match;
+  // Trello stores due dates as instants. Noon Ecuador avoids UTC conversion
+  // showing the previous calendar day in Trello.
+  return `${year}-${month}-${day}T17:00:00.000Z`;
+}
+
 function htmlToTrelloMarkdown(value: string | undefined) {
   if (!value) return "";
   return value
@@ -1031,7 +1043,7 @@ export const createCardForExternalTask: any = internalAction({
         desc: buildTrelloDescription({
           task: data.task,
         }),
-        due: data.task.deadline,
+        due: formatDeadlineForTrelloDue(data.task.deadline),
         idLabels: idLabels.length > 0 ? idLabels : undefined,
       });
 
