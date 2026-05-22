@@ -45,6 +45,15 @@ type TrelloWebhook = {
   description?: string;
 };
 
+type TrelloMember = {
+  id: string;
+  username?: string;
+  fullName?: string;
+  email?: string;
+  memberType?: string;
+  confirmed?: boolean;
+};
+
 function getCredentials() {
   const key = process.env.TRELLO_API_KEY;
   const token = process.env.TRELLO_TOKEN;
@@ -106,6 +115,12 @@ export const trelloProvider = {
 
   async getBoardCustomFields(boardId: string): Promise<TrelloCustomField[]> {
     return await trelloFetch<TrelloCustomField[]>(`/boards/${boardId}/customFields`);
+  },
+
+  async getBoardMembers(boardId: string): Promise<TrelloMember[]> {
+    return await trelloFetch<TrelloMember[]>(`/boards/${boardId}/members`, {}, {
+      fields: "id,username,fullName,email,memberType,confirmed",
+    });
   },
 
   async createCustomField(args: {

@@ -30,6 +30,13 @@ export default defineSchema({
     email: v.string(),
     name: v.optional(v.string()),
     userId: v.optional(v.id("users")),
+    trelloMemberId: v.optional(v.string()),
+    trelloUsername: v.optional(v.string()),
+    trelloMemberEmail: v.optional(v.string()),
+    trelloMemberFullName: v.optional(v.string()),
+    trelloMemberSyncStatus: v.optional(v.string()),
+    trelloMemberSyncError: v.optional(v.string()),
+    trelloMemberVerifiedAt: v.optional(v.number()),
     createdAt: v.number(),
     addedBy: v.optional(v.id("users")),
   })

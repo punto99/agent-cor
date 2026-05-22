@@ -366,6 +366,50 @@ export const getTaskStatusTrelloSyncContext = internalQuery({
   },
 });
 
+export const listBoardMembers: any = action({
+  args: {
+    clientBrandId: v.optional(v.id("clientBrands")),
+    trelloBoardId: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    let trelloBoardId = args.trelloBoardId;
+    let brandName: string | undefined;
+
+    if (!trelloBoardId && args.clientBrandId) {
+      const brand = await ctx.runQuery(internal.data.clientBrands.getById, {
+        clientBrandId: args.clientBrandId,
+      });
+      if (!brand) throw new Error("Categoría no encontrada.");
+      if (!brand.trelloBoardId) {
+        throw new Error(`La categoría "${brand.name}" no tiene trelloBoardId configurado.`);
+      }
+      trelloBoardId = brand.trelloBoardId;
+      brandName = brand.name;
+    }
+
+    if (!trelloBoardId) {
+      throw new Error("Debes pasar clientBrandId o trelloBoardId.");
+    }
+
+    const members = await trelloProvider.getBoardMembers(trelloBoardId);
+
+    return {
+      clientBrandId: args.clientBrandId,
+      brandName,
+      trelloBoardId,
+      count: members.length,
+      members: members.map((member) => ({
+        id: member.id,
+        username: member.username,
+        fullName: member.fullName,
+        email: member.email,
+        memberType: member.memberType,
+        confirmed: member.confirmed,
+      })),
+    };
+  },
+});
+
 export const upsertBoardListMapping = internalMutation({
   args: {
     clientBrandId: v.id("clientBrands"),
