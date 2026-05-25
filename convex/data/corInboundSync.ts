@@ -312,7 +312,7 @@ export const pullFromCORAction = internalAction({
         });
 
         // Aplicar cambios de la task
-        await ctx.runMutation(
+        const taskUpdateResult = await ctx.runMutation(
           internal.data.corInboundSync.applyInboundTaskUpdate,
           {
             taskId: args.taskId,
@@ -323,6 +323,14 @@ export const pullFromCORAction = internalAction({
             corStatus: corTask.status ?? undefined,
           }
         );
+
+        if (taskUpdateResult?.statusChanged) {
+          await ctx.scheduler.runAfter(
+            0,
+            (internal as any).data.trello.syncTaskStatusFromCORToTrello,
+            { taskId: args.taskId },
+          );
+        }
 
         await syncTaskAttachmentsFromCOR(
           ctx,
@@ -583,7 +591,7 @@ export const pullTaskFromCORWorker = internalAction({
       missing: false,
     });
 
-    await ctx.runMutation(internal.data.corInboundSync.applyInboundTaskUpdate, {
+    const taskUpdateResult = await ctx.runMutation(internal.data.corInboundSync.applyInboundTaskUpdate, {
       taskId: args.taskId,
       corTitle: corTask.title,
       corDescription: corTask.description ?? undefined,
@@ -591,6 +599,14 @@ export const pullTaskFromCORWorker = internalAction({
       corPriority: corTask.priority ?? undefined,
       corStatus: corTask.status ?? undefined,
     });
+
+    if (taskUpdateResult?.statusChanged) {
+      await ctx.scheduler.runAfter(
+        0,
+        (internal as any).data.trello.syncTaskStatusFromCORToTrello,
+        { taskId: args.taskId },
+      );
+    }
 
     await syncTaskAttachmentsFromCOR(
       ctx,
@@ -781,7 +797,7 @@ export const applyInboundTaskUpdate = internalMutation({
   handler: async (ctx, args) => {
     // Re-leer la task (estado fresco, atómico dentro de la mutation)
     const task = await ctx.db.get(args.taskId);
-    if (!task) return;
+    if (!task) return { updated: false, statusChanged: false };
 
     // Guarda de conflicto: si un outbound sync se inició, no tocar
     if (
@@ -792,7 +808,7 @@ export const applyInboundTaskUpdate = internalMutation({
       console.log(
         `[InboundSync] ⏭️ Task ${args.taskId} en estado "${task.corSyncStatus}", omitiendo update inbound`
       );
-      return;
+      return { updated: false, statusChanged: false };
     }
 
     // Comparar campos — solo escribir si hay diferencia
@@ -808,7 +824,9 @@ export const applyInboundTaskUpdate = internalMutation({
     if (args.corPriority !== undefined && args.corPriority !== task.priority) {
       updates.priority = args.corPriority;
     }
-    if (args.corStatus !== undefined && args.corStatus !== task.status) {
+    const statusChanged =
+      args.corStatus !== undefined && args.corStatus !== task.status;
+    if (statusChanged) {
       updates.status = args.corStatus;
     }
 
@@ -816,7 +834,7 @@ export const applyInboundTaskUpdate = internalMutation({
       console.log(
         `[InboundSync] ✅ Task ${args.taskId} ya está al día — sin cambios`
       );
-      return;
+      return { updated: false, statusChanged: false };
     }
 
     // Actualizar timestamps de sync (NO lastLocalEditAt — esto no es edición local)
@@ -829,6 +847,7 @@ export const applyInboundTaskUpdate = internalMutation({
     console.log(
       `[InboundSync] ✅ Task ${args.taskId} actualizada: ${Object.keys(updates).filter((k) => !k.startsWith("cor")).join(", ")}`
     );
+    return { updated: true, statusChanged };
   },
 });
 

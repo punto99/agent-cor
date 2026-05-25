@@ -165,6 +165,19 @@ export const trelloProvider = {
     );
   },
 
+  async updateCardList(args: {
+    cardId: string;
+    idList: string;
+  }): Promise<TrelloCard> {
+    return await trelloFetch<TrelloCard>(
+      `/cards/${args.cardId}`,
+      { method: "PUT" },
+      {
+        idList: args.idList,
+      },
+    );
+  },
+
   async addMemberToCard(args: {
     cardId: string;
     memberId: string;
