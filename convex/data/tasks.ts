@@ -545,17 +545,6 @@ export const updateTaskFields = mutation({
       changedFields,
     });
 
-    if (
-      Object.prototype.hasOwnProperty.call(updateData, "status") &&
-      updateData.status !== task.status
-    ) {
-      await ctx.scheduler.runAfter(
-        0,
-        (internal as any).data.trello.syncTaskStatusToTrello,
-        { taskId: args.taskId },
-      );
-    }
-
     return args.taskId;
   },
 });
