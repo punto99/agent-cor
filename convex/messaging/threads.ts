@@ -1,9 +1,27 @@
-import { query, mutation } from "../_generated/server";
+import { query, mutation, internalMutation } from "../_generated/server";
 import { v } from "convex/values";
 import { paginationOptsValidator } from "convex/server";
 import { getAuthUserId } from "@convex-dev/auth/server";
-import { createThread as createAgentThread, listMessages } from "@convex-dev/agent";
+import {
+  createThread as createAgentThread,
+  listMessages,
+} from "@convex-dev/agent";
 import { components } from "../_generated/api";
+
+const DEFAULT_THREAD_TITLE_PATTERNS = [
+  /^nueva conversaci[oó]n$/i,
+  /^nuevo brief$/i,
+  /^nuevo chat(?:\s*•.*)?$/i,
+  /^sin t[ií]tulo$/i,
+];
+
+function shouldAutoRenameThread(title: string | undefined) {
+  const normalized = title?.trim();
+  if (!normalized) return true;
+  return DEFAULT_THREAD_TITLE_PATTERNS.some((pattern) =>
+    pattern.test(normalized),
+  );
+}
 
 // Obtener threads del usuario con paginación
 export const getMyThreads = query({
@@ -113,7 +131,7 @@ export const createThread = mutation({
     }
 
     const title = args.title || "Nueva conversación";
-    
+
     // CLAVE: Crear el thread en el componente Agent usando createThread de @convex-dev/agent
     // Esto crea el documento en la tabla "threads" del componente que espera listUIMessages
     const threadId = await createAgentThread(ctx, components.agent, {
@@ -177,6 +195,50 @@ export const updateThreadTitle = mutation({
         title: args.title,
       },
     });
+  },
+});
+
+// Actualizar título desde procesos internos del backend.
+// No requiere auth porque se llama después de que la task ya fue creada
+// para el thread validado. Solo pisa títulos genéricos para respetar
+// renombres manuales hechos por el usuario.
+export const updateThreadTitleInternal = internalMutation({
+  args: {
+    threadId: v.string(),
+    title: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const title = args.title.trim();
+    if (!title) {
+      return { updated: false, reason: "empty_title" };
+    }
+
+    const thread = await ctx.db
+      .query("chatThreads")
+      .withIndex("by_thread", (q) => q.eq("threadId", args.threadId))
+      .first();
+
+    if (!thread) {
+      return { updated: false, reason: "thread_not_found" };
+    }
+
+    if (!shouldAutoRenameThread(thread.title)) {
+      return { updated: false, reason: "manual_title_preserved" };
+    }
+
+    await ctx.db.patch(thread._id, {
+      title,
+      updatedAt: Date.now(),
+    });
+
+    await ctx.runMutation(components.agent.threads.updateThread, {
+      threadId: args.threadId,
+      patch: {
+        title,
+      },
+    });
+
+    return { updated: true, title };
   },
 });
 

@@ -56,6 +56,7 @@ import type * as lib_speechToText from "../lib/speechToText.js";
 import type * as lib_taskStatuses from "../lib/taskStatuses.js";
 import type * as messaging_chat from "../messaging/chat.js";
 import type * as messaging_chatGenerate from "../messaging/chatGenerate.js";
+import type * as messaging_threadTitle from "../messaging/threadTitle.js";
 import type * as messaging_threads from "../messaging/threads.js";
 import type * as rag_entityImages from "../rag/entityImages.js";
 import type * as rag_rag from "../rag/rag.js";
@@ -135,6 +136,7 @@ declare const fullApi: ApiFromModules<{
   "lib/taskStatuses": typeof lib_taskStatuses;
   "messaging/chat": typeof messaging_chat;
   "messaging/chatGenerate": typeof messaging_chatGenerate;
+  "messaging/threadTitle": typeof messaging_threadTitle;
   "messaging/threads": typeof messaging_threads;
   "rag/entityImages": typeof rag_entityImages;
   "rag/rag": typeof rag_rag;

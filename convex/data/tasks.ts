@@ -73,7 +73,9 @@ async function resolveCreationTaxonomy(
   }
 
   if (clientId && brand?.clientId && brand.clientId !== clientId) {
-    throw new Error("❌ La categoría seleccionada no pertenece al cliente validado.");
+    throw new Error(
+      "❌ La categoría seleccionada no pertenece al cliente validado.",
+    );
   }
 
   if (clientId && !brand) {
@@ -1254,7 +1256,8 @@ export const createProjectAndTask = internalMutation({
       console.log(`[CreateProjectAndTask] ✅ Proyecto creado: ${projectId}`);
     }
 
-    let taskClientId = resolved.clientId ?? args.taskClientId ?? args.projectClientId;
+    let taskClientId =
+      resolved.clientId ?? args.taskClientId ?? args.projectClientId;
     if (!taskClientId && args.existingProjectId) {
       if (existingProject?.clientId) taskClientId = existingProject.clientId;
     }
@@ -1292,6 +1295,22 @@ export const createProjectAndTask = internalMutation({
       corClientName: args.taskCorClientName,
     });
     console.log(`[CreateProjectAndTask] ✅ Task creada: ${taskId}`);
+
+    try {
+      await ctx.scheduler.runAfter(
+        0,
+        (internal as any).messaging.threadTitle.generateAndApplyThreadTitle,
+        {
+          threadId: args.threadId,
+          taskId: taskId as string,
+        },
+      );
+    } catch (error) {
+      console.log(
+        "[CreateProjectAndTask] No se pudo programar renombrado del thread:",
+        error,
+      );
+    }
 
     return { projectId, taskId: taskId as string };
   },
