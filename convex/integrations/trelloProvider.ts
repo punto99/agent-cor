@@ -54,6 +54,14 @@ type TrelloMember = {
   confirmed?: boolean;
 };
 
+type TrelloBoard = {
+  id: string;
+  name: string;
+  url?: string;
+  shortUrl?: string;
+  closed?: boolean;
+};
+
 function getCredentials() {
   const key = process.env.TRELLO_API_KEY;
   const token = process.env.TRELLO_TOKEN;
@@ -95,6 +103,27 @@ async function trelloFetch<T>(
 }
 
 export const trelloProvider = {
+  async getBoard(boardId: string): Promise<TrelloBoard> {
+    return await trelloFetch<TrelloBoard>(
+      `/boards/${boardId}`,
+      {},
+      {
+        fields: "id,name,url,shortUrl,closed",
+      },
+    );
+  },
+
+  async listMyBoards(): Promise<TrelloBoard[]> {
+    return await trelloFetch<TrelloBoard[]>(
+      `/members/me/boards`,
+      {},
+      {
+        filter: "open",
+        fields: "id,name,url,shortUrl,closed",
+      },
+    );
+  },
+
   async getBoardLists(boardId: string): Promise<TrelloList[]> {
     return await trelloFetch<TrelloList[]>(`/boards/${boardId}/lists`, {}, {
       filter: "open",

@@ -11,11 +11,13 @@ import { useRouter } from "next/navigation";
 import {
   AlertTriangle,
   CheckCircle2,
+  ExternalLink,
   LinkIcon,
   Mail,
   Search,
   ShieldCheck,
   UserPlus,
+  X,
 } from "lucide-react";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
@@ -101,6 +103,26 @@ type TrelloSearchResult = {
   candidates: TrelloCandidate[];
 };
 
+type TrelloBoardCandidate = {
+  id: string;
+  name: string;
+  url?: string;
+  shortUrl?: string;
+  matchReason: string;
+};
+
+type TrelloBoardSearchResult = {
+  brandName: string;
+  boards: TrelloBoardCandidate[];
+};
+
+type BoardDialogBrand = {
+  _id: Id<"clientBrands">;
+  name: string;
+  trelloBoardId?: string;
+  trelloBoardUrl?: string;
+};
+
 export default function ExternalUsersAdminPage() {
   const router = useRouter();
   const access = useQuery(
@@ -135,6 +157,12 @@ export default function ExternalUsersAdminPage() {
   const verifyTrelloAccess = useAction(
     api.data.externalUserAdminActions.verifyExternalUserTrelloAccess,
   );
+  const searchTrelloBoards = useAction(
+    api.data.externalUserAdminActions.searchTrelloBoardsForBrand,
+  );
+  const associateTrelloBoard = useAction(
+    api.data.externalUserAdminActions.associateTrelloBoardToBrand,
+  );
 
   const [search, setSearch] = useState("");
   const [selectedUserId, setSelectedUserId] = useState<string | null>(null);
@@ -150,6 +178,15 @@ export default function ExternalUsersAdminPage() {
   const [searchingTrello, setSearchingTrello] = useState(false);
   const [verifyingTrello, setVerifyingTrello] = useState(false);
   const [trelloResult, setTrelloResult] = useState<TrelloSearchResult | null>(
+    null,
+  );
+  const [boardDialogBrand, setBoardDialogBrand] =
+    useState<BoardDialogBrand | null>(null);
+  const [boardSearchTerm, setBoardSearchTerm] = useState("");
+  const [boardResult, setBoardResult] =
+    useState<TrelloBoardSearchResult | null>(null);
+  const [searchingBoards, setSearchingBoards] = useState(false);
+  const [associatingBoardId, setAssociatingBoardId] = useState<string | null>(
     null,
   );
   const [toast, setToast] = useState<Toast | null>(null);
@@ -380,6 +417,78 @@ export default function ExternalUsersAdminPage() {
       });
     } finally {
       setVerifyingTrello(false);
+    }
+  };
+
+  const handleOpenBoardDialog = (brand: BoardDialogBrand) => {
+    setBoardDialogBrand(brand);
+    setBoardSearchTerm(brand.name);
+    setBoardResult(null);
+    void handleSearchBoards(brand, brand.name);
+  };
+
+  const handleSearchBoards = async (
+    brandOverride?: BoardDialogBrand,
+    queryOverride?: string,
+  ) => {
+    const brand = brandOverride ?? boardDialogBrand;
+    if (!brand) return;
+
+    try {
+      setSearchingBoards(true);
+      const result = await searchTrelloBoards({
+        clientBrandId: brand._id,
+        query: queryOverride ?? boardSearchTerm,
+      });
+      if (!result.ok) {
+        setBoardResult(null);
+        setToast({ type: "error", message: result.error });
+        return;
+      }
+      setBoardResult(result);
+    } catch (error) {
+      setToast({
+        type: "error",
+        message: getErrorMessage(
+          error,
+          "No pudimos buscar tableros en Trello.",
+        ),
+      });
+    } finally {
+      setSearchingBoards(false);
+    }
+  };
+
+  const handleAssociateBoard = async (board: TrelloBoardCandidate) => {
+    if (!boardDialogBrand) return;
+
+    try {
+      setAssociatingBoardId(board.id);
+      const result = await associateTrelloBoard({
+        clientBrandId: boardDialogBrand._id,
+        trelloBoardId: board.id,
+      });
+      if (!result.ok) {
+        setToast({ type: "error", message: result.error });
+        return;
+      }
+
+      setBoardDialogBrand(null);
+      setBoardResult(null);
+      setToast({
+        type: "success",
+        message:
+          result.warnings.length > 0
+            ? `Tablero asociado. ${result.warnings.join(" ")}`
+            : `Tablero asociado: ${result.board.name}.`,
+      });
+    } catch (error) {
+      setToast({
+        type: "error",
+        message: getErrorMessage(error, "No pudimos asociar ese tablero."),
+      });
+    } finally {
+      setAssociatingBoardId(null);
     }
   };
 
@@ -640,27 +749,45 @@ export default function ExternalUsersAdminPage() {
                                     String(brand._id),
                                   );
                                   return (
-                                    <label
+                                    <div
                                       key={brand._id}
-                                      className="flex cursor-pointer items-center gap-2 rounded-md border border-border bg-background px-3 py-2 text-sm text-foreground transition-colors hover:bg-accent"
+                                      className="flex items-center gap-2 rounded-md border border-border bg-background px-3 py-2 text-sm text-foreground transition-colors hover:bg-accent"
                                     >
-                                      <input
-                                        type="checkbox"
-                                        checked={selected}
-                                        onChange={() =>
-                                          toggleBrand(String(brand._id))
-                                        }
-                                        className="h-4 w-4 cursor-pointer rounded border-border text-primary focus:ring-primary"
-                                      />
-                                      <span className="min-w-0 flex-1 truncate">
-                                        {brand.name}
-                                      </span>
-                                      {!brand.trelloBoardId && (
-                                        <span className="text-xs text-amber-600 dark:text-amber-300">
-                                          Sin tablero
+                                      <label className="flex min-w-0 flex-1 cursor-pointer items-center gap-2">
+                                        <input
+                                          type="checkbox"
+                                          checked={selected}
+                                          onChange={() =>
+                                            toggleBrand(String(brand._id))
+                                          }
+                                          className="h-4 w-4 cursor-pointer rounded border-border text-primary focus:ring-primary"
+                                        />
+                                        <span className="min-w-0 flex-1 truncate">
+                                          {brand.name}
                                         </span>
+                                      </label>
+                                      {brand.trelloBoardId ? (
+                                        <button
+                                          type="button"
+                                          className="shrink-0 cursor-pointer rounded border border-border bg-card px-2 py-1 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                                          onClick={() =>
+                                            handleOpenBoardDialog(brand)
+                                          }
+                                        >
+                                          Cambiar
+                                        </button>
+                                      ) : (
+                                        <button
+                                          type="button"
+                                          className="shrink-0 cursor-pointer rounded border border-amber-200 bg-amber-50 px-2 py-1 text-xs text-amber-700 transition-colors hover:bg-amber-100 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-200 dark:hover:bg-amber-950"
+                                          onClick={() =>
+                                            handleOpenBoardDialog(brand)
+                                          }
+                                        >
+                                          Sin tablero
+                                        </button>
                                       )}
-                                    </label>
+                                    </div>
                                   );
                                 })}
                               </div>
@@ -719,6 +846,23 @@ export default function ExternalUsersAdminPage() {
             )}
           </main>
         </div>
+
+        {boardDialogBrand && (
+          <BoardAssociationDialog
+            brand={boardDialogBrand}
+            searchTerm={boardSearchTerm}
+            result={boardResult}
+            searching={searchingBoards}
+            associatingBoardId={associatingBoardId}
+            onSearchTermChange={setBoardSearchTerm}
+            onSearch={() => handleSearchBoards()}
+            onAssociate={handleAssociateBoard}
+            onClose={() => {
+              setBoardDialogBrand(null);
+              setBoardResult(null);
+            }}
+          />
+        )}
       </div>
     </WorkspaceLayout>
   );
@@ -729,6 +873,146 @@ function SummaryPill({ label, value }: { label: string; value: number }) {
     <div className="rounded-md border border-border bg-background px-3 py-2">
       <div className="text-lg font-semibold text-foreground">{value}</div>
       <div className="text-xs text-muted-foreground">{label}</div>
+    </div>
+  );
+}
+
+function BoardAssociationDialog({
+  brand,
+  searchTerm,
+  result,
+  searching,
+  associatingBoardId,
+  onSearchTermChange,
+  onSearch,
+  onAssociate,
+  onClose,
+}: {
+  brand: BoardDialogBrand;
+  searchTerm: string;
+  result: TrelloBoardSearchResult | null;
+  searching: boolean;
+  associatingBoardId: string | null;
+  onSearchTermChange: (value: string) => void;
+  onSearch: () => void;
+  onAssociate: (board: TrelloBoardCandidate) => void;
+  onClose: () => void;
+}) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/35 p-4">
+      <div className="w-full max-w-2xl rounded-lg border border-border bg-card shadow-xl">
+        <div className="flex items-start justify-between gap-4 border-b border-border bg-muted/30 px-4 py-3 dark:bg-muted/20">
+          <div className="min-w-0">
+            <div className="flex items-center gap-2">
+              <LinkIcon className="h-4 w-4 text-primary" />
+              <h3 className="text-sm font-semibold text-foreground">
+                Asociar tablero
+              </h3>
+            </div>
+            <p className="mt-1 truncate text-xs text-muted-foreground">
+              {brand.name}
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="cursor-pointer rounded-md p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+            aria-label="Cerrar"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+
+        <div className="space-y-4 p-4">
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="relative min-w-[240px] flex-1">
+              <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+              <input
+                value={searchTerm}
+                onChange={(event) => onSearchTermChange(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") onSearch();
+                }}
+                placeholder="Buscar tablero existente"
+                className="h-9 w-full rounded-md border border-border bg-background pl-9 pr-3 text-sm text-foreground outline-none focus:ring-2 focus:ring-primary"
+              />
+            </div>
+            <Button
+              type="button"
+              variant="outline"
+              className="cursor-pointer"
+              onClick={onSearch}
+              disabled={searching}
+            >
+              {searching ? "Buscando..." : "Buscar"}
+            </Button>
+          </div>
+
+          {brand.trelloBoardId && (
+            <div className="rounded-md border border-border bg-background px-3 py-2 text-xs text-muted-foreground">
+              Esta categoría ya tiene un tablero asociado. Si seleccionas otro,
+              se reemplazará por el nuevo tablero.
+            </div>
+          )}
+
+          <div className="max-h-[420px] overflow-y-auto">
+            {!result ? (
+              <div className="rounded-md border border-dashed border-border px-4 py-8 text-center text-sm text-muted-foreground">
+                Busca por nombre para elegir un tablero existente de Trello.
+              </div>
+            ) : (
+              <div className="space-y-2">
+                {result.boards.map((board) => {
+                  const isCurrent = brand.trelloBoardId === board.id;
+                  return (
+                    <div
+                      key={board.id}
+                      className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-border bg-background px-3 py-2"
+                    >
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-2">
+                          <div className="truncate text-sm font-medium text-foreground">
+                            {board.name}
+                          </div>
+                          {(board.url || board.shortUrl) && (
+                            <a
+                              href={board.url || board.shortUrl}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="shrink-0 cursor-pointer text-muted-foreground transition-colors hover:text-foreground"
+                              aria-label="Abrir tablero en Trello"
+                            >
+                              <ExternalLink className="h-3.5 w-3.5" />
+                            </a>
+                          )}
+                        </div>
+                        <div className="truncate text-xs text-muted-foreground">
+                          {isCurrent ? "Tablero actual" : board.matchReason}
+                        </div>
+                      </div>
+                      <Button
+                        type="button"
+                        variant={isCurrent ? "outline" : "default"}
+                        className="cursor-pointer"
+                        onClick={() => onAssociate(board)}
+                        disabled={
+                          associatingBoardId !== null || searching || isCurrent
+                        }
+                      >
+                        {associatingBoardId === board.id
+                          ? "Asociando..."
+                          : isCurrent
+                            ? "Asociado"
+                            : "Asociar"}
+                      </Button>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
     </div>
   );
 }

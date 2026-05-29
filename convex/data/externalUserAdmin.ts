@@ -393,3 +393,41 @@ export const markExternalTrelloStatus = internalMutation({
     });
   },
 });
+
+export const setClientBrandTrelloBoard = internalMutation({
+  args: {
+    clientBrandId: v.id("clientBrands"),
+    trelloBoardId: v.string(),
+    trelloBoardUrl: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const brand = await ctx.db.get(args.clientBrandId);
+    if (!brand) throw new Error("No encontramos esta categoría.");
+
+    await ctx.db.patch(args.clientBrandId, {
+      trelloBoardId: args.trelloBoardId,
+      trelloBoardUrl: normalizeText(args.trelloBoardUrl),
+    });
+
+    const assignments = await ctx.db
+      .query("clientUserAssignments")
+      .withIndex("by_brand", (q) => q.eq("brandId", args.clientBrandId))
+      .collect();
+
+    for (const assignment of assignments) {
+      const approvedUser = await ctx.db
+        .query("approvedExternalUsers")
+        .withIndex("by_user", (q) => q.eq("userId", assignment.userId))
+        .unique();
+
+      if (!approvedUser?.trelloMemberId) continue;
+      await ctx.db.patch(approvedUser._id, {
+        trelloMemberSyncStatus: "needs_verification",
+        trelloMemberSyncError: undefined,
+        trelloMemberVerifiedAt: undefined,
+      });
+    }
+
+    return { ok: true };
+  },
+});

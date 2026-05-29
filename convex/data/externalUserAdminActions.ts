@@ -1,11 +1,27 @@
 "use node";
 
 import { getAuthUserId } from "@convex-dev/auth/server";
+import { makeFunctionReference } from "convex/server";
 import { v } from "convex/values";
 import { internal } from "../_generated/api";
 import { action } from "../_generated/server";
 import { trelloProvider } from "../integrations/trelloProvider";
 import { canUserAccessInternalUserAdmin } from "../lib/internalUserAdminAccess";
+
+const syncTrelloBoardConfigForBrand = makeFunctionReference<"action">(
+  "data/trello:syncTrelloBoardConfigForBrand",
+);
+const syncTrelloWebhookForBrand = makeFunctionReference<"action">(
+  "data/trello:syncTrelloWebhookForBrand",
+);
+
+type TrelloBoardCandidate = {
+  id: string;
+  name: string;
+  url?: string;
+  shortUrl?: string;
+  matchReason: string;
+};
 
 type TrelloCandidate = {
   id: string;
@@ -28,6 +44,58 @@ async function requireExternalUserAdmin(ctx: any) {
 
 function normalize(value: string | undefined) {
   return value?.trim().toLowerCase() || "";
+}
+
+function rankBoards(args: {
+  boards: Array<{
+    id: string;
+    name: string;
+    url?: string;
+    shortUrl?: string;
+    closed?: boolean;
+  }>;
+  query: string;
+  brandName: string;
+}) {
+  const query = normalize(args.query);
+  const brandName = normalize(args.brandName);
+  const tokens = query.split(/\s+/).filter((token) => token.length > 1);
+
+  return args.boards
+    .filter((board) => !board.closed)
+    .map((board) => {
+      const boardName = normalize(board.name);
+      let score = 0;
+      let matchReason = "Tablero disponible";
+
+      if (query && boardName === query) {
+        score = 100;
+        matchReason = "Coincide con la búsqueda";
+      } else if (brandName && boardName === brandName) {
+        score = 90;
+        matchReason = "Coincide con la categoría";
+      } else if (query && boardName.includes(query)) {
+        score = 75;
+        matchReason = "Nombre parecido";
+      } else if (brandName && boardName.includes(brandName)) {
+        score = 65;
+        matchReason = "Nombre parecido a la categoría";
+      } else if (
+        tokens.length > 0 &&
+        tokens.some((token) => boardName.includes(token))
+      ) {
+        score = 45;
+        matchReason = "Coincidencia parcial";
+      } else if (!query) {
+        score = 10;
+      }
+
+      return { ...board, score, matchReason };
+    })
+    .filter((board) => board.score > 0)
+    .sort((a, b) => b.score - a.score || a.name.localeCompare(b.name))
+    .slice(0, 12)
+    .map(({ score: _score, closed: _closed, ...board }) => board);
 }
 
 function rankCandidates(args: {
@@ -77,6 +145,156 @@ function rankCandidates(args: {
     .sort((a, b) => b.score - a.score)
     .map(({ score: _score, ...member }) => member);
 }
+
+export const searchTrelloBoardsForBrand = action({
+  args: {
+    clientBrandId: v.id("clientBrands"),
+    query: v.optional(v.string()),
+  },
+  handler: async (
+    ctx,
+    args,
+  ): Promise<
+    | {
+        ok: true;
+        brandName: string;
+        boards: TrelloBoardCandidate[];
+      }
+    | { ok: false; error: string }
+  > => {
+    await requireExternalUserAdmin(ctx);
+
+    try {
+      const brand = await ctx.runQuery(internal.data.clientBrands.getById, {
+        clientBrandId: args.clientBrandId,
+      });
+
+      if (!brand) {
+        return { ok: false, error: "No encontramos esta categoría." };
+      }
+
+      const boards = await trelloProvider.listMyBoards();
+      const candidates = rankBoards({
+        boards,
+        query: args.query || brand.name,
+        brandName: brand.name,
+      });
+
+      if (candidates.length === 0) {
+        return {
+          ok: false,
+          error:
+            "No encontramos tableros disponibles con esa búsqueda. Prueba con otro nombre.",
+        };
+      }
+
+      return {
+        ok: true,
+        brandName: brand.name,
+        boards: candidates,
+      };
+    } catch (error) {
+      console.error("[ExternalUserAdmin] Error buscando tableros:", error);
+      return {
+        ok: false,
+        error:
+          "No pudimos consultar los tableros de Trello en este momento. Intenta nuevamente en unos minutos.",
+      };
+    }
+  },
+});
+
+export const associateTrelloBoardToBrand = action({
+  args: {
+    clientBrandId: v.id("clientBrands"),
+    trelloBoardId: v.string(),
+  },
+  handler: async (
+    ctx,
+    args,
+  ): Promise<
+    | {
+        ok: true;
+        board: {
+          id: string;
+          name: string;
+          url?: string;
+          shortUrl?: string;
+        };
+        warnings: string[];
+      }
+    | { ok: false; error: string }
+  > => {
+    await requireExternalUserAdmin(ctx);
+
+    try {
+      const brand = await ctx.runQuery(internal.data.clientBrands.getById, {
+        clientBrandId: args.clientBrandId,
+      });
+
+      if (!brand) {
+        return { ok: false, error: "No encontramos esta categoría." };
+      }
+
+      const board = await trelloProvider.getBoard(args.trelloBoardId);
+      if (board.closed) {
+        return {
+          ok: false,
+          error: "Ese tablero está cerrado en Trello. Elige un tablero activo.",
+        };
+      }
+
+      await ctx.runMutation(
+        internal.data.externalUserAdmin.setClientBrandTrelloBoard,
+        {
+          clientBrandId: args.clientBrandId,
+          trelloBoardId: board.id,
+          trelloBoardUrl: board.url || board.shortUrl,
+        },
+      );
+
+      const warnings: string[] = [];
+
+      try {
+        await ctx.runAction(syncTrelloBoardConfigForBrand, {
+          clientBrandId: args.clientBrandId,
+        });
+      } catch (error) {
+        console.error("[ExternalUserAdmin] Error configurando tablero:", error);
+        warnings.push("Falta finalizar su configuración automática.");
+      }
+
+      try {
+        await ctx.runAction(syncTrelloWebhookForBrand, {
+          clientBrandId: args.clientBrandId,
+        });
+      } catch (error) {
+        console.error("[ExternalUserAdmin] Error configurando webhook:", error);
+        warnings.push(
+          "Falta activar la sincronización de cambios desde Trello.",
+        );
+      }
+
+      return {
+        ok: true,
+        board: {
+          id: board.id,
+          name: board.name,
+          url: board.url,
+          shortUrl: board.shortUrl,
+        },
+        warnings,
+      };
+    } catch (error) {
+      console.error("[ExternalUserAdmin] Error asociando tablero:", error);
+      return {
+        ok: false,
+        error:
+          "No pudimos asociar ese tablero. Verifica que el tablero exista y que la cuenta conectada tenga acceso.",
+      };
+    }
+  },
+});
 
 export const searchTrelloMembersForExternalUser = action({
   args: {
