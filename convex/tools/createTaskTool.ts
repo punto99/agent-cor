@@ -56,7 +56,8 @@ export const createTaskTool = createTool({
   - title, deadline, priority → fields dedicados de la task
   - deliverables (texto) → description de la task
   - deliverables (cantidad) → field numérico del proyecto asociado
-  - El resto (requestType, brand, objective, keyMessage, kpis, budget, approvers) → se combinan en el campo description
+  - El resto (requestType, brand, objective, keyMessage, kpis, budget, approvers, additionalBriefDetails) → se combinan en el campo description
+  - Todo dato relevante que no tenga campo dedicado en COR debe ir en additionalBriefDetails para quedar guardado dentro de description.
   No necesitas preocuparte por la distribucion, el sistema lo maneja automaticamente.`,
   args: z.object({
     title: z
@@ -105,6 +106,12 @@ export const createTaskTool = createTool({
       .string()
       .optional()
       .describe("Personas que deben aprobar el proyecto"),
+    additionalBriefDetails: z
+      .string()
+      .optional()
+      .describe(
+        "Detalles relevantes del brief que no tienen campo propio: contexto, restricciones, mandatorios, referencias, tono, especificaciones, observaciones legales, links importantes y datos extraidos de documentos. Se guarda dentro de description, no como campo separado.",
+      ),
     priority: z
       .number()
       .optional()
@@ -219,12 +226,18 @@ export const createTaskTool = createTool({
       const taxonomyAny = taxonomy as any;
       const availableBrands = taxonomyAny.availableBrands
         ? `\n\nCategorías disponibles:\n${taxonomyAny.availableBrands
-            .map((brand: any) => `- ${brand.name} (clientBrandId: ${brand.clientBrandId})`)
+            .map(
+              (brand: any) =>
+                `- ${brand.name} (clientBrandId: ${brand.clientBrandId})`,
+            )
             .join("\n")}`
         : "";
       const availableSubBrands = taxonomyAny.availableSubBrands
         ? `\n\nMarcas disponibles:\n${taxonomyAny.availableSubBrands
-            .map((subBrand: any) => `- ${subBrand.name} (subBrandId: ${subBrand.subBrandId})`)
+            .map(
+              (subBrand: any) =>
+                `- ${subBrand.name} (subBrandId: ${subBrand.subBrandId})`,
+            )
             .join("\n")}`
         : "";
       return `❌ ${taxonomyAny.error}${availableBrands}${availableSubBrands}`;
@@ -258,6 +271,7 @@ export const createTaskTool = createTool({
       kpis: args.kpis,
       budget: args.budget,
       approvers: args.approvers,
+      additionalNotes: args.additionalBriefDetails,
     });
 
     const deliverablesCount = inferDeliverablesCount(args.deliverables);

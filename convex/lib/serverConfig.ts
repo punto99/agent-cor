@@ -1,15 +1,15 @@
 /**
  * Configuración del servidor para el tenant activo
- * 
+ *
  * Este archivo exporta la configuración de los agentes para el tenant activo.
  * Es usado por los archivos de Convex (agent.ts, reviewerAgent.ts, etc.)
- * 
+ *
  * NOTA: Este archivo debe mantenerse sincronizado con config/tenant.config.ts
  * Ver FORK_SETUP_GUIDE.md para instrucciones de configuración por cliente.
  */
 
-const CLIENT = "Beyond Prompting"
-const CLIENT_ID = "beyond-prompting"
+const CLIENT = "Beyond Prompting";
+const CLIENT_ID = "beyond-prompting";
 
 // =====================================================
 // TENANT ACTIVO
@@ -24,7 +24,7 @@ export const ACTIVE_TENANT = CLIENT_ID;
  * Controla qué agentes están activos para este tenant.
  * - Si solo 1 agente especializado está habilitado, el orquestador se salta.
  * - Si ≥2 están habilitados, el orquestador clasifica y enruta.
- * 
+ *
  * IMPORTANTE: Al forkear, mantener sincronizado con enabledAgents
  * en config/tenant.config.ts (configuración del frontend).
  */
@@ -42,12 +42,14 @@ export const agentConfig = {
   brief: {
     name: `Asistente de Brief ${CLIENT}`,
     companyName: CLIENT,
-    companyDescription: "una empresa especializada en soluciones de inteligencia artificial y automatización",
+    companyDescription:
+      "una empresa especializada en soluciones de inteligencia artificial y automatización",
   },
   externalBrief: {
     name: `Asistente de Brief Cliente ${CLIENT}`,
     companyName: CLIENT,
-    companyDescription: "una empresa especializada en soluciones de inteligencia artificial y automatización",
+    companyDescription:
+      "una empresa especializada en soluciones de inteligencia artificial y automatización",
   },
   orchestrator: {
     name: `Orquestador ${CLIENT}`,
@@ -56,7 +58,8 @@ export const agentConfig = {
   documentSearch: {
     name: `Asistente de Búsqueda ${CLIENT}`,
     companyName: CLIENT,
-    companyDescription: "una empresa especializada en soluciones de inteligencia artificial y automatización",
+    companyDescription:
+      "una empresa especializada en soluciones de inteligencia artificial y automatización",
   },
   evaluator: {
     name: `Evaluador de Resultados ${CLIENT}`,
@@ -175,7 +178,7 @@ REGLAS IMPORTANTES:
 
 export const getBriefAgentInstructions = () => {
   const { companyName, companyDescription } = agentConfig.brief;
-  
+
   return `Eres un asistente profesional de ${companyName}, ${companyDescription}. Tu función es ayudar a los usuarios a crear Briefs de proyectos de forma conversacional.
 
 IMPORTANTE - ALCANCE DE TU ASISTENCIA:
@@ -209,6 +212,13 @@ OPCIONAL (pregunta pero no insistas si el usuario no lo tiene):
 8. Presupuesto — Cual es el presupuesto disponible
 9. Aprobadores — Quienes deben aprobar este proyecto
 10. Archivos adjuntos — Hay documentos, imagenes o archivos de referencia
+
+INFORMACION ADICIONAL PARA LA DESCRIPCION:
+- Todo dato relevante que no encaje en los campos anteriores DEBE conservarse para la descripcion completa del brief.
+- Si el usuario adjunta documentos, PDFs, imagenes o referencias, extrae todos los detalles utiles para ejecucion creativa: contexto, restricciones, mandatorios, tono, especificaciones, medidas, formatos, copys, claims, referencias, observaciones legales, consideraciones de marca y cualquier instruccion operativa.
+- No resumas de forma agresiva. Conserva detalles concretos que el equipo creativo pueda necesitar.
+- Nunca reemplaces URLs por textos genericos como "link adjunto". Conserva la URL completa y, si hay texto descriptivo, incluye ambos.
+- Estos datos se envian a createTask en additionalBriefDetails para quedar guardados dentro de la description de la task. No son campos separados.
 
 INSTRUCCIONES DE COMPORTAMIENTO:
 - Saluda de manera calida y profesional al inicio
@@ -261,6 +271,7 @@ RESUMEN DEL BRIEF:
 - KPIs: [... o 'No especificado']
 - Presupuesto: [... o 'No especificado']
 - Aprobadores: [... o 'No especificado']
+- Información adicional para la descripción: [... detalles relevantes extraídos del chat/documentos/links o 'No especificado']
 - Archivos adjuntos: [... o 'Ninguno']
 
 Todo esta correcto? Por favor confirma si quieres que guarde el requerimiento o si necesitas modificar algo."
@@ -280,6 +291,7 @@ IMPORTANTE AL LLAMAR createTask: DEBES incluir los campos del paso 1:
 - clientBrandId si el cliente tiene categorías.
 - subBrandId si la categoría elegida tiene marcas.
 - deadline y deliverables son OBLIGATORIOS
+- additionalBriefDetails si hay informacion relevante que no pertenece a un campo dedicado. Incluye ahi detalles extraidos de documentos y URLs completas para que queden dentro de description.
 
 El sistema crea automaticamente el proyecto asociado en Convex.
 La publicacion a COR se hace desde el Panel de Control (boton del usuario).
@@ -354,7 +366,7 @@ REGLAS IMPORTANTES:
 
 export const getOrchestratorAgentInstructions = () => {
   const { companyName } = agentConfig.orchestrator;
-  
+
   // =====================================================
   // Construir servicios, clasificación y ejemplos
   // DINÁMICAMENTE según los agentes habilitados para este tenant
@@ -365,23 +377,37 @@ export const getOrchestratorAgentInstructions = () => {
   let serviceNum = 1;
 
   if (enabledAgents.brief) {
-    services.push(`${serviceNum}. Creación de Briefs: Ayudar al usuario a crear un Brief de proyecto (campañas, diseño, desarrollo web, contenido, video, etc.)`);
-    classificationOptions.push(`- "brief": El usuario expresó CLARAMENTE que quiere crear, modificar o consultar un Brief de proyecto. Ejemplos claros: "quiero crear una campaña para Nike", "necesito un brief", envía un documento con datos de un proyecto, dice "quiero modificar mi requerimiento"`);
-    examples.push(`- "quiero crear una campaña de navidad para Coca-Cola" → brief`);
+    services.push(
+      `${serviceNum}. Creación de Briefs: Ayudar al usuario a crear un Brief de proyecto (campañas, diseño, desarrollo web, contenido, video, etc.)`,
+    );
+    classificationOptions.push(
+      `- "brief": El usuario expresó CLARAMENTE que quiere crear, modificar o consultar un Brief de proyecto. Ejemplos claros: "quiero crear una campaña para Nike", "necesito un brief", envía un documento con datos de un proyecto, dice "quiero modificar mi requerimiento"`,
+    );
+    examples.push(
+      `- "quiero crear una campaña de navidad para Coca-Cola" → brief`,
+    );
     examples.push(`- "tengo un proyecto nuevo" → brief`);
     serviceNum++;
   }
 
   if (enabledAgents.documentSearch) {
-    services.push(`${serviceNum}. Búsqueda en Documentos: Buscar información en catálogos, productos o documentos indexados`);
-    classificationOptions.push(`- "document_search": El usuario expresó CLARAMENTE que quiere buscar en documentos, catálogos o productos. Ejemplos claros: "¿qué producto es este?", "busca en el catálogo", "¿cuánto cuesta X?", envía una imagen pidiendo identificar un producto`);
-    examples.push(`- "¿cuánto cuesta este producto?" + imagen → document_search`);
+    services.push(
+      `${serviceNum}. Búsqueda en Documentos: Buscar información en catálogos, productos o documentos indexados`,
+    );
+    classificationOptions.push(
+      `- "document_search": El usuario expresó CLARAMENTE que quiere buscar en documentos, catálogos o productos. Ejemplos claros: "¿qué producto es este?", "busca en el catálogo", "¿cuánto cuesta X?", envía una imagen pidiendo identificar un producto`,
+    );
+    examples.push(
+      `- "¿cuánto cuesta este producto?" + imagen → document_search`,
+    );
     examples.push(`- "busca en el catálogo" → document_search`);
     serviceNum++;
   }
 
   // needs_clarification siempre está disponible
-  classificationOptions.push(`- "needs_clarification": El mensaje es ambiguo, es un saludo, o NO queda claro qué quiere hacer. Ejemplos: "hola", "buenos días", "necesito ayuda", "qué puedes hacer?", cualquier mensaje que no encaje claramente en las categorías anteriores`);
+  classificationOptions.push(
+    `- "needs_clarification": El mensaje es ambiguo, es un saludo, o NO queda claro qué quiere hacer. Ejemplos: "hola", "buenos días", "necesito ayuda", "qué puedes hacer?", cualquier mensaje que no encaje claramente en las categorías anteriores`,
+  );
   examples.push(`- "hola" → needs_clarification`);
   examples.push(`- "buenos días, necesito ayuda" → needs_clarification`);
   examples.push(`- "qué puedes hacer?" → needs_clarification`);
@@ -409,7 +435,7 @@ ${examples.join("\n")}`;
 
 export const getDocumentSearchAgentInstructions = () => {
   const { companyName, companyDescription } = agentConfig.documentSearch;
-  
+
   return `Eres un asistente profesional de ${companyName}, ${companyDescription}. Tu única función es ayudar a los usuarios a buscar información en documentos y catálogos previamente cargados en el sistema.
 
 IMPORTANTE - ALCANCE DE TU ASISTENCIA:
@@ -449,7 +475,7 @@ REGLAS IMPORTANTES:
 
 export const getEvaluatorAgentInstructions = () => {
   const { companyName } = agentConfig.evaluator;
-  
+
   return `Eres un experto evaluador de calidad de ${companyName} que compara productos finales con requerimientos originales.
 
 TU OBJETIVO: Analizar el producto final entregado y compararlo con lo que se solicitó originalmente para determinar si cumple con los requisitos.
@@ -513,7 +539,7 @@ REGLAS:
 
 export const getReviewerAgentInstructions = () => {
   const { companyName } = agentConfig.reviewer;
-  
+
   return `Eres un supervisor de calidad de ${companyName} que revisa briefs de proyectos creativos.
 
 Tu tarea es analizar la informacion recolectada y determinar si es suficiente para crear un brief de calidad.
@@ -528,13 +554,15 @@ CAMPOS A EVALUAR:
 - KPIs (opcional): Metricas de exito
 - Presupuesto (opcional): Monto disponible
 - Aprobadores (opcional): Quienes deben aprobar
+- Informacion adicional del brief (opcional pero importante): contexto, restricciones, mandatorios, referencias, links y detalles extraidos de documentos que no tienen campo propio pero deben quedar en la descripcion
 
 CRITERIOS DE EVALUACION:
 1. Los 4 campos obligatorios (tipo de requerimiento, marca, deadline y entregables) DEBEN estar presentes
 2. Si falta CUALQUIERA de los 4 campos obligatorios, aprobado DEBE ser false
 3. La informacion debe ser clara y especifica, no vaga
 4. Si hay contradicciones, senalarlas
-5. Si falta informacion critica (aunque sea opcional), sugerirla
+5. Si hay archivos, referencias o links mencionados, verifica que los detalles importantes esten reflejados en la informacion adicional del brief
+6. Si falta informacion critica (aunque sea opcional), sugerirla
 
 FORMATO DE RESPUESTA (JSON):
 {
@@ -628,10 +656,10 @@ Para clasificar la tarea, debes evaluar:
 /**
  * Configuración del sistema de integraciones con herramientas externas
  * de gestión de proyectos (COR, Trello, etc.).
- * 
+ *
  * - enabled: Si la integración está activa para este tenant
  * - provider: Qué provider usar ("cor" | "trello" | "noop")
- * 
+ *
  * Para desactivar la integración en un fork/tenant:
  *   enabled: false  →  el agente no tendrá tools de búsqueda de cliente,
  *                       y el botón "Crear Tarea" no aparecerá en el Panel de Control.

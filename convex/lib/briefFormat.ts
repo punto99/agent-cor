@@ -16,8 +16,13 @@
 
 // ==================== BUILD BRIEF DESCRIPTION ====================
 
-export const STRATEGIC_PRIORITY_VALUES = ["I_U", "I_NU", "NI_U", "NI_NU"] as const;
-export type StrategicPriority = typeof STRATEGIC_PRIORITY_VALUES[number];
+export const STRATEGIC_PRIORITY_VALUES = [
+  "I_U",
+  "I_NU",
+  "NI_U",
+  "NI_NU",
+] as const;
+export type StrategicPriority = (typeof STRATEGIC_PRIORITY_VALUES)[number];
 
 function escapeHtml(value: string): string {
   return value
@@ -26,6 +31,27 @@ function escapeHtml(value: string): string {
     .replace(/>/g, "&gt;")
     .replace(/\"/g, "&quot;")
     .replace(/'/g, "&#39;");
+}
+
+function splitTrailingPunctuation(url: string) {
+  const match = url.match(/^(.+?)([),.;:!?]*)$/);
+  return {
+    href: match?.[1] || url,
+    trailing: match?.[2] || "",
+  };
+}
+
+function formatDescriptionValue(
+  value: string,
+  preserveLineBreaks = false,
+): string {
+  const escaped = escapeHtml(value);
+  const linked = escaped.replace(/https?:\/\/[^\s<>"']+/g, (rawUrl) => {
+    const { href, trailing } = splitTrailingPunctuation(rawUrl);
+    return `<a href="${href}" target="_blank" rel="noopener noreferrer">${href}</a>${trailing}`;
+  });
+
+  return preserveLineBreaks ? linked.replace(/\n/g, "<br>") : linked;
 }
 
 export function isStrategicPriority(value: string): value is StrategicPriority {
@@ -50,27 +76,46 @@ export function buildBriefDescription(fields: {
   objective?: string;
   keyMessage?: string;
   kpis?: string;
-  deadline?: string;       // Ignorado — se guarda en task.deadline
-  deliverables?: string;   // Incluido como texto en description
+  deadline?: string; // Ignorado — se guarda en task.deadline
+  deliverables?: string; // Incluido como texto en description
   budget?: string;
   approvers?: string;
   additionalNotes?: string;
 }): string {
   const lines: string[] = [];
 
-  lines.push(`<strong>Tipo de requerimiento:</strong> ${escapeHtml(fields.requestType)}`);
+  lines.push(
+    `<strong>Tipo de requerimiento:</strong> ${escapeHtml(fields.requestType)}`,
+  );
   // Marca NO se incluye — se guarda en task.corClientName (field dedicado)
   // deadline NO se incluye — tiene field dedicado
   if (fields.deliverables) {
-    lines.push(`<strong>Entregables:</strong> ${escapeHtml(fields.deliverables).replace(/\n/g, "<br>")}`);
+    lines.push(
+      `<strong>Entregables:</strong> ${formatDescriptionValue(fields.deliverables, true)}`,
+    );
   }
-  if (fields.objective) lines.push(`<strong>Objetivo:</strong> ${escapeHtml(fields.objective)}`);
-  if (fields.keyMessage) lines.push(`<strong>Mensaje clave:</strong> ${escapeHtml(fields.keyMessage)}`);
-  if (fields.kpis) lines.push(`<strong>KPIs:</strong> ${escapeHtml(fields.kpis)}`);
-  if (fields.budget) lines.push(`<strong>Presupuesto:</strong> ${escapeHtml(fields.budget)}`);
-  if (fields.approvers) lines.push(`<strong>Aprobadores:</strong> ${escapeHtml(fields.approvers)}`);
+  if (fields.objective)
+    lines.push(
+      `<strong>Objetivo:</strong> ${formatDescriptionValue(fields.objective)}`,
+    );
+  if (fields.keyMessage)
+    lines.push(
+      `<strong>Mensaje clave:</strong> ${formatDescriptionValue(fields.keyMessage)}`,
+    );
+  if (fields.kpis)
+    lines.push(`<strong>KPIs:</strong> ${formatDescriptionValue(fields.kpis)}`);
+  if (fields.budget)
+    lines.push(
+      `<strong>Presupuesto:</strong> ${formatDescriptionValue(fields.budget)}`,
+    );
+  if (fields.approvers)
+    lines.push(
+      `<strong>Aprobadores:</strong> ${formatDescriptionValue(fields.approvers)}`,
+    );
   if (fields.additionalNotes) {
-    lines.push(`<strong>Notas adicionales:</strong> ${escapeHtml(fields.additionalNotes).replace(/\n/g, "<br>")}`);
+    lines.push(
+      `<strong>Información adicional del brief:</strong> ${formatDescriptionValue(fields.additionalNotes, true)}`,
+    );
   }
 
   return lines.join("<br>\n");
@@ -91,7 +136,9 @@ export const PRIORITY_LABELS: Record<number, string> = {
  * COR: 0 = Low, 1 = Medium, 2 = High, 3 = Urgent
  * También acepta el número directamente.
  */
-export function mapPriorityToCOR(priority: string | number | undefined): number {
+export function mapPriorityToCOR(
+  priority: string | number | undefined,
+): number {
   if (typeof priority === "number") return priority;
   switch (priority?.toLowerCase()) {
     case "baja":
@@ -115,11 +162,15 @@ export function mapPriorityToCOR(priority: string | number | undefined): number 
  */
 export function mapCORPriorityToConvex(priority: number | undefined): string {
   switch (priority) {
-    case 0: return "baja";
-    case 2: return "alta";
-    case 3: return "urgente";
+    case 0:
+      return "baja";
+    case 2:
+      return "alta";
+    case 3:
+      return "urgente";
     case 1:
-    default: return "media";
+    default:
+      return "media";
   }
 }
 
