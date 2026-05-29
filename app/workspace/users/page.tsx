@@ -460,7 +460,7 @@ export default function InternalUsersAdminPage() {
                         key={user._id}
                         type="button"
                         onClick={() => setSelectedUserId(String(user._id))}
-                        className={`w-full rounded-md px-3 py-2 text-left transition-colors ${
+                        className={`w-full cursor-pointer rounded-md px-3 py-2 text-left transition-colors ${
                           isSelected
                             ? "bg-primary/10 text-primary"
                             : "text-foreground hover:bg-accent"
@@ -526,7 +526,7 @@ export default function InternalUsersAdminPage() {
                 </section>
 
                 <section className="rounded-lg border border-border bg-card">
-                  <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border px-4 py-3">
+                  <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border bg-muted/30 px-4 py-3 dark:bg-muted/20">
                     <div>
                       <div className="flex items-center gap-2">
                         <ShieldCheck className="h-4 w-4 text-primary" />
@@ -544,6 +544,7 @@ export default function InternalUsersAdminPage() {
                       <Button
                         type="button"
                         variant="outline"
+                        className="cursor-pointer"
                         onClick={handleResetDraft}
                         disabled={!hasPermissionChanges || saving}
                       >
@@ -551,6 +552,7 @@ export default function InternalUsersAdminPage() {
                       </Button>
                       <Button
                         type="button"
+                        className="cursor-pointer"
                         onClick={handleSaveAssignments}
                         disabled={!hasPermissionChanges || saving}
                       >
@@ -559,7 +561,7 @@ export default function InternalUsersAdminPage() {
                     </div>
                   </div>
 
-                  <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border bg-background/60 px-4 py-3">
+                  <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border bg-muted/30 px-4 py-3 dark:bg-muted/20">
                     <div className="relative min-w-[240px] flex-1">
                       <Search className="h-4 w-4 text-muted-foreground absolute left-3 top-1/2 -translate-y-1/2" />
                       <input
@@ -572,14 +574,14 @@ export default function InternalUsersAdminPage() {
                       />
                     </div>
 
-                    <label className="inline-flex h-9 items-center gap-3 rounded-md border border-border bg-card px-3 text-sm text-foreground">
+                    <label className="inline-flex h-9 cursor-pointer items-center gap-3 rounded-md border border-border bg-card px-3 text-sm text-foreground">
                       <input
                         type="checkbox"
                         checked={showAssignedClientsOnly}
                         onChange={(event) =>
                           setShowAssignedClientsOnly(event.target.checked)
                         }
-                        className="h-4 w-4 rounded border-border text-primary focus:ring-primary"
+                        className="h-4 w-4 cursor-pointer rounded border-border text-primary focus:ring-primary"
                       />
                       Solo asignados
                     </label>
@@ -627,12 +629,12 @@ export default function InternalUsersAdminPage() {
                                       }`}
                                 </span>
 
-                                <label className="inline-flex h-8 items-center gap-2 rounded-md border border-border bg-background px-3 text-xs font-medium text-foreground">
+                                <label className="inline-flex h-8 cursor-pointer items-center gap-2 rounded-md border border-border bg-background px-3 text-xs font-medium text-foreground">
                                   <input
                                     type="checkbox"
                                     checked={fullSelected}
                                     onChange={() => toggleFullClient(client)}
-                                    className="h-4 w-4 rounded border-border text-primary focus:ring-primary"
+                                    className="h-4 w-4 cursor-pointer rounded border-border text-primary focus:ring-primary"
                                   />
                                   Acceso completo
                                 </label>
@@ -646,8 +648,8 @@ export default function InternalUsersAdminPage() {
                                     key={brand._id}
                                     className={`flex items-center gap-2 rounded-md border px-3 py-2 text-sm transition-colors ${
                                       fullSelected
-                                        ? "border-border bg-muted/50 text-muted-foreground"
-                                        : "border-border bg-background text-foreground hover:bg-accent"
+                                        ? "cursor-not-allowed border-border bg-muted/50 text-muted-foreground"
+                                        : "cursor-pointer border-border bg-background text-foreground hover:bg-accent"
                                     }`}
                                   >
                                     <input
@@ -660,7 +662,7 @@ export default function InternalUsersAdminPage() {
                                       onChange={() =>
                                         toggleBrand(client, String(brand._id))
                                       }
-                                      className="h-4 w-4 rounded border-border text-primary focus:ring-primary disabled:opacity-50"
+                                      className="h-4 w-4 cursor-pointer rounded border-border text-primary focus:ring-primary disabled:cursor-not-allowed disabled:opacity-50"
                                     />
                                     <span className="min-w-0 flex-1 truncate">
                                       {brand.name}
@@ -774,6 +776,7 @@ function CorStatusPanel({
         <Button
           type="button"
           variant={user.corUser ? "outline" : "default"}
+          className="cursor-pointer"
           onClick={user.corUser ? onVerify : onResolve}
           disabled={isResolving || isVerifying}
         >
