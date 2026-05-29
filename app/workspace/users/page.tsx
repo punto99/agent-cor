@@ -606,32 +606,37 @@ export default function InternalUsersAdminPage() {
                         return (
                           <div key={client._id} className="px-4 py-4">
                             <div className="flex flex-wrap items-start justify-between gap-3">
-                              <label className="flex min-w-0 items-start gap-3">
-                                <input
-                                  type="checkbox"
-                                  checked={fullSelected}
-                                  onChange={() => toggleFullClient(client)}
-                                  className="mt-1 h-4 w-4 rounded border-border text-primary focus:ring-primary"
-                                />
-                                <span className="min-w-0">
-                                  <span className="block truncate text-sm font-medium text-foreground">
-                                    {client.name}
-                                  </span>
-                                  <span className="block text-xs text-muted-foreground">
-                                    COR {client.corClientId}
-                                    {client.nomenclature
-                                      ? ` · ${client.nomenclature}`
-                                      : ""}
-                                  </span>
+                              <div className="min-w-0">
+                                <div className="truncate text-sm font-medium text-foreground">
+                                  {client.name}
+                                </div>
+                                <div className="text-xs text-muted-foreground">
+                                  COR {client.corClientId}
+                                  {client.nomenclature
+                                    ? ` · ${client.nomenclature}`
+                                    : ""}
+                                </div>
+                              </div>
+
+                              <div className="flex flex-wrap items-center justify-end gap-3">
+                                <span className="text-xs text-muted-foreground">
+                                  {fullSelected
+                                    ? "Todas las categorías"
+                                    : `${selectedBrandCount} categoría${
+                                        selectedBrandCount !== 1 ? "s" : ""
+                                      }`}
                                 </span>
-                              </label>
-                              <span className="text-xs text-muted-foreground">
-                                {fullSelected
-                                  ? "Acceso completo"
-                                  : `${selectedBrandCount} categoría${
-                                      selectedBrandCount !== 1 ? "s" : ""
-                                    }`}
-                              </span>
+
+                                <label className="inline-flex h-8 items-center gap-2 rounded-md border border-border bg-background px-3 text-xs font-medium text-foreground">
+                                  <input
+                                    type="checkbox"
+                                    checked={fullSelected}
+                                    onChange={() => toggleFullClient(client)}
+                                    className="h-4 w-4 rounded border-border text-primary focus:ring-primary"
+                                  />
+                                  Acceso completo
+                                </label>
+                              </div>
                             </div>
 
                             {client.brands.length > 0 && (
