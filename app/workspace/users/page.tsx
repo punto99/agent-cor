@@ -604,6 +604,19 @@ export default function InternalUsersAdminPage() {
                         const selectedBrandCount = client.brands.filter(
                           (brand) => draftBrandIds.has(String(brand._id)),
                         ).length;
+                        const hasCategories = client.brands.length > 0;
+                        const assignmentLabel = hasCategories
+                          ? fullSelected
+                            ? "Todas las categorías"
+                            : `${selectedBrandCount} de ${client.brands.length} categoría${
+                                client.brands.length !== 1 ? "s" : ""
+                              }`
+                          : fullSelected
+                            ? "Cliente asignado"
+                            : "Sin categorías";
+                        const fullAccessLabel = hasCategories
+                          ? "Acceso completo"
+                          : "Acceso al cliente";
 
                         return (
                           <div key={client._id} className="px-4 py-4">
@@ -622,11 +635,7 @@ export default function InternalUsersAdminPage() {
 
                               <div className="flex flex-wrap items-center justify-end gap-3">
                                 <span className="text-xs text-muted-foreground">
-                                  {fullSelected
-                                    ? "Todas las categorías"
-                                    : `${selectedBrandCount} categoría${
-                                        selectedBrandCount !== 1 ? "s" : ""
-                                      }`}
+                                  {assignmentLabel}
                                 </span>
 
                                 <label className="inline-flex h-8 cursor-pointer items-center gap-2 rounded-md border border-border bg-background px-3 text-xs font-medium text-foreground">
@@ -636,7 +645,7 @@ export default function InternalUsersAdminPage() {
                                     onChange={() => toggleFullClient(client)}
                                     className="h-4 w-4 cursor-pointer rounded border-border text-primary focus:ring-primary"
                                   />
-                                  Acceso completo
+                                  {fullAccessLabel}
                                 </label>
                               </div>
                             </div>
