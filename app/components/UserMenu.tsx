@@ -3,7 +3,7 @@
 import { useState } from "react";
 import Link from "next/link";
 import { useQuery } from "convex/react";
-import { BarChart3, LogOut } from "lucide-react";
+import { BarChart3, LogOut, UserCog } from "lucide-react";
 import { api } from "@/convex/_generated/api";
 import { Button } from "./ui/Button";
 import {
@@ -19,6 +19,9 @@ import { useUser } from "../UserContextProvider";
 export function UserMenu() {
   const { user, signOut } = useUser();
   const analyticsAccess = useQuery(api.data.analytics.viewerCanAccessAnalytics);
+  const internalUserAdminAccess = useQuery(
+    api.data.internalUserAdmin.viewerCanAccessInternalUserAdmin,
+  );
   const [imageError, setImageError] = useState(false);
 
   if (!user) return null;
@@ -77,6 +80,17 @@ export function UserMenu() {
               <Link href="/workspace/analytics">
                 <BarChart3 className="mr-2 h-4 w-4" />
                 <span>Analytics</span>
+              </Link>
+            </DropdownMenuItem>
+            <DropdownMenuSeparator />
+          </>
+        )}
+        {internalUserAdminAccess?.canAccess && (
+          <>
+            <DropdownMenuItem asChild className="cursor-pointer">
+              <Link href="/workspace/users">
+                <UserCog className="mr-2 h-4 w-4" />
+                <span>Usuarios internos</span>
               </Link>
             </DropdownMenuItem>
             <DropdownMenuSeparator />
