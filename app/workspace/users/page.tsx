@@ -685,6 +685,40 @@ export default function InternalUsersAdminPage() {
                       })
                     )}
                   </div>
+
+                  {hasPermissionChanges && (
+                    <div className="sticky bottom-0 z-10 border-t border-border bg-card/95 px-4 py-3 shadow-[0_-8px_24px_rgba(15,23,42,0.08)] backdrop-blur dark:shadow-[0_-8px_24px_rgba(0,0,0,0.28)]">
+                      <div className="flex flex-wrap items-center justify-between gap-3">
+                        <div className="text-sm">
+                          <div className="font-medium text-foreground">
+                            Cambios sin guardar
+                          </div>
+                          <div className="text-xs text-muted-foreground">
+                            Guarda o descarta los permisos seleccionados.
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <Button
+                            type="button"
+                            variant="outline"
+                            className="cursor-pointer"
+                            onClick={handleResetDraft}
+                            disabled={saving}
+                          >
+                            Descartar
+                          </Button>
+                          <Button
+                            type="button"
+                            className="cursor-pointer"
+                            onClick={handleSaveAssignments}
+                            disabled={saving}
+                          >
+                            {saving ? "Guardando..." : "Guardar permisos"}
+                          </Button>
+                        </div>
+                      </div>
+                    </div>
+                  )}
                 </section>
               </div>
             )}
