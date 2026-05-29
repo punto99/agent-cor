@@ -9,6 +9,7 @@ import {
   MessageSquare,
   LayoutDashboard,
   UserCog,
+  UserPlus,
 } from "lucide-react";
 
 /**
@@ -21,6 +22,9 @@ export function TopNavigation() {
   const analyticsAccess = useQuery(api.data.analytics.viewerCanAccessAnalytics);
   const internalUserAdminAccess = useQuery(
     api.data.internalUserAdmin.viewerCanAccessInternalUserAdmin,
+  );
+  const externalUserAdminAccess = useQuery(
+    api.data.externalUserAdmin.viewerCanAccessExternalUserAdmin,
   );
   const isExternalUser = accessProfile?.kind === "external";
 
@@ -49,6 +53,12 @@ export function TopNavigation() {
       icon: UserCog,
       isActive: pathname === "/workspace/users",
     },
+    {
+      label: "Externos",
+      href: "/workspace/external-users",
+      icon: UserPlus,
+      isActive: pathname === "/workspace/external-users",
+    },
   ].filter((tab) => {
     if (isExternalUser && tab.href === "/workspace/control-panel") return false;
     if (tab.href === "/workspace/analytics") {
@@ -56,6 +66,9 @@ export function TopNavigation() {
     }
     if (tab.href === "/workspace/users") {
       return internalUserAdminAccess?.canAccess === true;
+    }
+    if (tab.href === "/workspace/external-users") {
+      return externalUserAdminAccess?.canAccess === true;
     }
     return true;
   });

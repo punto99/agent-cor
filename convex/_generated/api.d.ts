@@ -29,6 +29,8 @@ import type * as data_corInboundSync from "../data/corInboundSync.js";
 import type * as data_corUsers from "../data/corUsers.js";
 import type * as data_corUsersActions from "../data/corUsersActions.js";
 import type * as data_evaluation from "../data/evaluation.js";
+import type * as data_externalUserAdmin from "../data/externalUserAdmin.js";
+import type * as data_externalUserAdminActions from "../data/externalUserAdminActions.js";
 import type * as data_files from "../data/files.js";
 import type * as data_internalUserAdmin from "../data/internalUserAdmin.js";
 import type * as data_internalUserAdminActions from "../data/internalUserAdminActions.js";
@@ -112,6 +114,8 @@ declare const fullApi: ApiFromModules<{
   "data/corUsers": typeof data_corUsers;
   "data/corUsersActions": typeof data_corUsersActions;
   "data/evaluation": typeof data_evaluation;
+  "data/externalUserAdmin": typeof data_externalUserAdmin;
+  "data/externalUserAdminActions": typeof data_externalUserAdminActions;
   "data/files": typeof data_files;
   "data/internalUserAdmin": typeof data_internalUserAdmin;
   "data/internalUserAdminActions": typeof data_internalUserAdminActions;
