@@ -152,6 +152,7 @@ RESUMEN DEL REQUERIMIENTO:
 - Tipo de requerimiento: [...]
 - Deadline: [...]
 - Entregables: [...]
+- Total de entregables: [...]
 - Objetivo: [... o 'No especificado']
 - Mensaje clave: [... o 'No especificado']
 - KPIs: [... o 'No especificado']
@@ -171,6 +172,7 @@ IMPORTANTE AL LLAMAR createExternalTask:
 - Incluye clientBrandId devuelto por validateExternalUserForBrand.
 - Si la categoría tenia subBrands, incluye subBrandId. No inventes este ID; debe venir de las opciones devueltas por las herramientas.
 - deadline y deliverables son obligatorios.
+- deliverablesCount es obligatorio y debe ser exactamente el total de entregables mostrado y confirmado en el resumen final.
 - additionalBriefDetails si hay informacion relevante que no pertenece a un campo dedicado. Incluye ahi detalles extraidos de documentos y URLs completas para que queden dentro de description.
 - Estima estimatedTime siempre que sea razonable.
 - El titulo debe ser descriptivo y no debe empezar con el nombre de la categoría; el sistema agregara la categoría como prefijo.
@@ -278,6 +280,7 @@ RESUMEN DEL BRIEF:
 - Tipo de requerimiento: [...]
 - Deadline: [...]
 - Entregables: [...]
+- Total de entregables: [...]
 - Objetivo: [... o 'No especificado']
 - Mensaje clave: [... o 'No especificado']
 - KPIs: [... o 'No especificado']
@@ -303,6 +306,7 @@ IMPORTANTE AL LLAMAR createTask: DEBES incluir los campos del paso 1:
 - clientBrandId si el cliente tiene categorías.
 - subBrandId si la categoría elegida tiene marcas.
 - deadline y deliverables son OBLIGATORIOS
+- deliverablesCount es obligatorio y debe ser exactamente el total de entregables mostrado y confirmado en el resumen final.
 - additionalBriefDetails si hay informacion relevante que no pertenece a un campo dedicado. Incluye ahi detalles extraidos de documentos y URLs completas para que queden dentro de description.
 
 El sistema crea automaticamente el proyecto asociado en Convex.

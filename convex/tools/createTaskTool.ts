@@ -95,6 +95,14 @@ export const createTaskTool = createTool({
     deliverables: z
       .string()
       .describe("Entregables concretos del proyecto - OBLIGATORIO"),
+    deliverablesCount: z
+      .number()
+      .int()
+      .positive()
+      .optional()
+      .describe(
+        "Cantidad total de entregables confirmada por el usuario. Debe ser el mismo número mostrado en el resumen final.",
+      ),
     objective: z
       .string()
       .optional()
@@ -274,7 +282,8 @@ export const createTaskTool = createTool({
       additionalNotes: args.additionalBriefDetails,
     });
 
-    const deliverablesCount = inferDeliverablesCount(args.deliverables);
+    const deliverablesCount =
+      args.deliverablesCount ?? inferDeliverablesCount(args.deliverables);
 
     // ====================================================
     // Obtener URLs de archivos del thread para el campo brief del proyecto
