@@ -138,6 +138,11 @@ export function TaskDetailDialog({
 
   // Obtener syncStatus en vivo (preferir liveTask, fallback a task prop)
   const syncStatus = liveTask?.corSyncStatus || task.corSyncStatus || "pending";
+  const isPublishedInCOR =
+    syncStatus === "synced" ||
+    Boolean((liveTask as any)?.corTaskId ?? task.corTaskId);
+  const canEditFromDialog =
+    !isPublishedInCOR && syncStatus !== "syncing" && syncStatus !== "retrying";
   const taskMissingInCOR = Boolean(
     (liveTask as any)?.corTaskMissingInCOR ?? task.corTaskMissingInCOR,
   );
@@ -471,7 +476,7 @@ export function TaskDetailDialog({
                   </div>
                   <TaskBriefContent
                     task={liveTask ?? task}
-                    editable={syncStatus !== "syncing"}
+                    editable={canEditFromDialog}
                     syncStatus={syncStatus}
                   />
                 </>
@@ -561,7 +566,7 @@ export function TaskDetailDialog({
               )}
               <ProjectBriefContent
                 project={project}
-                editable={syncStatus !== "syncing"}
+                editable={canEditFromDialog}
                 syncStatus={project.corSyncStatus || "pending"}
               />
             </div>
