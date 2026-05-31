@@ -63,6 +63,9 @@ export function TaskDetailDialog({
   const retryProject = useMutation(api.data.projects.retryProjectSync);
   const softDeleteProject = useMutation(api.data.projects.softDeleteProject);
   const pullFromCOR = useMutation(api.data.corInboundSync.startPullFromCOR);
+  const startPublishToTrello = useMutation(
+    api.data.trello.startPublishTaskToTrello,
+  );
   const createEvaluationThread = useMutation(
     api.data.evaluation.createEvaluationThread,
   );
@@ -73,6 +76,7 @@ export function TaskDetailDialog({
   const registerUploadedFile = useAction(api.data.files.registerUploadedFile);
   const [publishError, setPublishError] = useState<string | null>(null);
   const [isPublishing, setIsPublishing] = useState(false);
+  const [isPublishingToTrello, setIsPublishingToTrello] = useState(false);
   const [isRetrying, setIsRetrying] = useState(false);
   const [isPulling, setIsPulling] = useState(false);
   const [isDeletingLocal, setIsDeletingLocal] = useState(false);
@@ -142,10 +146,13 @@ export function TaskDetailDialog({
   const liveTaskCorClientId = (liveTask as any)?.corClientId ?? task.corClientId;
   const liveTaskTrelloCardId =
     (liveTask as any)?.trelloCardId ?? task.trelloCardId;
+  const trelloSyncStatus =
+    (liveTask as any)?.trelloSyncStatus ?? task.trelloSyncStatus ?? "pending";
   const showPublishToTrelloButton =
     typeof liveTaskCorClientId === "number" &&
     clientConfig.ui.trelloPublishCorClientIds.includes(liveTaskCorClientId) &&
-    !liveTaskTrelloCardId;
+    !liveTaskTrelloCardId &&
+    trelloSyncStatus !== "synced";
 
   // Obtener syncStatus en vivo (preferir liveTask, fallback a task prop)
   const syncStatus = liveTask?.corSyncStatus || task.corSyncStatus || "pending";
@@ -190,6 +197,21 @@ export function TaskDetailDialog({
     }
   }, [syncStatus, isPublishing, liveTask, onClose, onPublishResult, toolName]);
 
+  useEffect(() => {
+    if (!isPublishingToTrello) return;
+    if (trelloSyncStatus === "synced") {
+      setIsPublishingToTrello(false);
+      setPublishError(null);
+    } else if (trelloSyncStatus === "error") {
+      setIsPublishingToTrello(false);
+      setPublishError(
+        (liveTask as any)?.trelloSyncError ||
+          task.trelloSyncError ||
+          "No se pudo publicar en Trello.",
+      );
+    }
+  }, [isPublishingToTrello, liveTask, task.trelloSyncError, trelloSyncStatus]);
+
   const handlePublish = async () => {
     try {
       setPublishError(null);
@@ -201,6 +223,17 @@ export function TaskDetailDialog({
       setIsPublishing(false);
       publishInitiatedRef.current = false;
       setPublishError(err.message || "Error al iniciar la publicación");
+    }
+  };
+
+  const handlePublishToTrello = async () => {
+    try {
+      setPublishError(null);
+      setIsPublishingToTrello(true);
+      await startPublishToTrello({ taskId: task._id });
+    } catch (err: any) {
+      setPublishError(err.message || "Error al publicar en Trello");
+      setIsPublishingToTrello(false);
     }
   };
 
@@ -726,12 +759,25 @@ export function TaskDetailDialog({
               {showPublishToTrelloButton && (
                 <button
                   type="button"
-                  disabled
-                  title="La publicación en Trello se conectará en el siguiente paso."
-                  className="flex items-center gap-2 px-4 py-2 border border-border rounded-lg text-sm font-medium text-muted-foreground bg-muted/40 disabled:cursor-not-allowed disabled:opacity-70"
+                  onClick={handlePublishToTrello}
+                  disabled={
+                    isPublishingToTrello || trelloSyncStatus === "syncing"
+                  }
+                  className="flex items-center gap-2 px-4 py-2 border border-border rounded-lg text-sm font-medium text-muted-foreground hover:bg-muted hover:text-foreground transition-colors disabled:cursor-not-allowed disabled:opacity-70 cursor-pointer"
                 >
-                  <ExternalLink className="h-4 w-4" />
-                  Publicar en Trello
+                  {isPublishingToTrello || trelloSyncStatus === "syncing" ? (
+                    <>
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                      Publicando en Trello...
+                    </>
+                  ) : (
+                    <>
+                      <ExternalLink className="h-4 w-4" />
+                      {trelloSyncStatus === "error"
+                        ? "Reintentar publicación en Trello"
+                        : "Publicar en Trello"}
+                    </>
+                  )}
                 </button>
               )}
 

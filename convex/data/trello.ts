@@ -1,13 +1,16 @@
 import { v } from "convex/values";
 import {
   action,
+  mutation,
   internalAction,
   internalMutation,
   internalQuery,
 } from "../_generated/server";
+import { getAuthUserId } from "@convex-dev/auth/server";
 import { internal } from "../_generated/api";
 import { trelloProvider } from "../integrations/trelloProvider";
 import { TASK_STATUS_OPTIONS, getTaskStatusName } from "../lib/taskStatuses";
+import { clientConfig } from "../../config/tenant.config";
 
 const CUSTOM_FIELDS = [
   { key: "requestType", name: "Tipo de requerimiento", type: "text" as const },
@@ -205,9 +208,16 @@ function buildTrelloDescription(args: { task: any }) {
   return htmlToTrelloMarkdown(args.task.description);
 }
 
+function extractRequestTypeFromDescription(value: string | undefined) {
+  const description = htmlToTrelloMarkdown(value);
+  const match = description.match(/\*\*Tipo de requerimiento:\*\*\s*([^\n]+)/i);
+  return match?.[1]?.replace(/<[^>]+>/g, "").trim() || undefined;
+}
+
 export const getTaskProjectForTrello = internalQuery({
   args: {
     taskId: v.id("tasks"),
+    allowInternal: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
     const task = await ctx.db.get(args.taskId);
@@ -215,7 +225,7 @@ export const getTaskProjectForTrello = internalQuery({
       return { ok: false as const, error: "Task no encontrada." };
     }
 
-    if (task.source !== "external") {
+    if (task.source !== "external" && !args.allowInternal) {
       return { ok: false as const, error: "Solo se sincronizan a Trello tasks externas." };
     }
 
@@ -1325,16 +1335,104 @@ export const scheduleCreateCardForExternalTask = internalMutation({
   },
 });
 
+export const startPublishTaskToTrello = mutation({
+  args: {
+    taskId: v.id("tasks"),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) throw new Error("No autenticado.");
+
+    const approvedExternalUser = await ctx.db
+      .query("approvedExternalUsers")
+      .withIndex("by_user", (q) => q.eq("userId", userId))
+      .unique();
+    if (approvedExternalUser) {
+      throw new Error("Este flujo está disponible solo para usuarios internos.");
+    }
+
+    const task = await ctx.db.get(args.taskId);
+    if (!task || task.convexStatus === "deleted") {
+      throw new Error("Task no encontrada.");
+    }
+
+    if (
+      typeof task.corClientId !== "number" ||
+      !clientConfig.ui.trelloPublishCorClientIds.includes(task.corClientId)
+    ) {
+      throw new Error("Esta task no está habilitada para publicación en Trello.");
+    }
+
+    if (task.trelloCardId) {
+      return {
+        success: true,
+        message: "Esta task ya está publicada en Trello.",
+        trelloCardId: task.trelloCardId,
+        trelloCardUrl: task.trelloCardUrl,
+      };
+    }
+
+    if (task.trelloSyncStatus === "syncing") {
+      throw new Error("Esta task ya se está publicando en Trello.");
+    }
+
+    if (!task.projectId) {
+      throw new Error("La task no tiene proyecto asociado.");
+    }
+
+    const project = await ctx.db.get(task.projectId);
+    if (!project || project.convexStatus === "deleted") {
+      throw new Error("Proyecto no encontrado.");
+    }
+
+    const deliverablesCount =
+      typeof project.deliverables === "number" &&
+      Number.isFinite(project.deliverables) &&
+      project.deliverables > 0
+        ? Math.trunc(project.deliverables)
+        : undefined;
+    if (!deliverablesCount) {
+      throw new Error(
+        "El proyecto no tiene una cantidad de entregables válida para publicar en Trello.",
+      );
+    }
+
+    const requestType =
+      extractRequestTypeFromDescription(task.description) || "Sin especificar";
+
+    await ctx.db.patch(task._id, {
+      trelloSyncStatus: "syncing",
+      trelloSyncError: undefined,
+    });
+
+    await ctx.scheduler.runAfter(0, internalTrello.createCardForExternalTask, {
+      taskId: task._id,
+      requestType,
+      deliverablesCount,
+      allowInternal: true,
+      assignCreatedByMember: false,
+    });
+
+    return {
+      success: true,
+      message: "Publicación en Trello iniciada.",
+    };
+  },
+});
+
 export const createCardForExternalTask: any = internalAction({
   args: {
     taskId: v.id("tasks"),
     requestType: v.string(),
     deliverablesCount: v.number(),
+    allowInternal: v.optional(v.boolean()),
+    assignCreatedByMember: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
     console.log(`[TrelloSync] Iniciando creación de card para task ${args.taskId}`);
     const data = await ctx.runQuery(internalTrello.getTaskProjectForTrello, {
       taskId: args.taskId,
+      allowInternal: args.allowInternal,
     });
 
     if (!data.ok) {
@@ -1350,6 +1448,13 @@ export const createCardForExternalTask: any = internalAction({
       console.log(
         `[TrelloSync] Task ${args.taskId} ya tiene card sincronizada: ${data.existingCard.trelloCardId}`
       );
+      await ctx.runMutation(internalTrello.markTrelloCardSynced, {
+        taskId: data.task._id,
+        projectId: data.project._id,
+        trelloListId: data.listId,
+        trelloCardId: data.existingCard.trelloCardId,
+        trelloCardUrl: data.existingCard.trelloCardUrl || "",
+      });
       return {
         success: true,
         cardId: data.existingCard.trelloCardId,
@@ -1422,7 +1527,7 @@ export const createCardForExternalTask: any = internalAction({
         trelloCardUrl: card.url || card.shortUrl || "",
       });
 
-      if (data.trelloMemberId) {
+      if (args.assignCreatedByMember !== false && data.trelloMemberId) {
         try {
           await trelloProvider.addMemberToCard({
             cardId: card.id,
