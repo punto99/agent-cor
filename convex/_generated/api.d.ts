@@ -53,6 +53,7 @@ import type * as integrations_types from "../integrations/types.js";
 import type * as lib_analyticsAccess from "../lib/analyticsAccess.js";
 import type * as lib_briefFormat from "../lib/briefFormat.js";
 import type * as lib_corRetry from "../lib/corRetry.js";
+import type * as lib_deliverableAnalytics from "../lib/deliverableAnalytics.js";
 import type * as lib_internalUserAdminAccess from "../lib/internalUserAdminAccess.js";
 import type * as lib_llmFallback from "../lib/llmFallback.js";
 import type * as lib_math from "../lib/math.js";
@@ -138,6 +139,7 @@ declare const fullApi: ApiFromModules<{
   "lib/analyticsAccess": typeof lib_analyticsAccess;
   "lib/briefFormat": typeof lib_briefFormat;
   "lib/corRetry": typeof lib_corRetry;
+  "lib/deliverableAnalytics": typeof lib_deliverableAnalytics;
   "lib/internalUserAdminAccess": typeof lib_internalUserAdminAccess;
   "lib/llmFallback": typeof lib_llmFallback;
   "lib/math": typeof lib_math;

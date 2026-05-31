@@ -1,6 +1,8 @@
 import { getAuthUserId } from "@convex-dev/auth/server";
-import { query } from "../_generated/server";
+import { v } from "convex/values";
+import { mutation, query } from "../_generated/server";
 import { canUserAccessAnalytics } from "../lib/analyticsAccess";
+import { applyProjectDeliverablesDelta } from "../lib/deliverableAnalytics";
 
 const TASK_STATUSES = [
   "nueva",
@@ -35,6 +37,57 @@ export const viewerCanAccessAnalytics = query({
       isAuthenticated: true,
       userId,
       canAccess: canUserAccessAnalytics(String(userId)),
+    };
+  },
+});
+
+export const rebuildDeliverableAnalyticsRollups = mutation({
+  args: {
+    confirm: v.string(),
+  },
+  handler: async (ctx, args) => {
+    if (args.confirm !== "REBUILD_DELIVERABLE_ANALYTICS") {
+      throw new Error(
+        "Confirmación inválida. Usa REBUILD_DELIVERABLE_ANALYTICS para recalcular.",
+      );
+    }
+
+    const existingRollups = await ctx.db
+      .query("deliverableAnalyticsRollups")
+      .collect();
+    for (const rollup of existingRollups) {
+      await ctx.db.delete(rollup._id);
+    }
+
+    const projects = await ctx.db.query("projects").collect();
+    let projectsProcessed = 0;
+    let projectsSkippedDeleted = 0;
+    let projectsWithDeliverables = 0;
+    let deliverablesTotal = 0;
+    for (const project of projects) {
+      if (project.convexStatus === "deleted") {
+        projectsSkippedDeleted += 1;
+        continue;
+      }
+      await applyProjectDeliverablesDelta(ctx, null, project);
+      projectsProcessed += 1;
+      if (
+        typeof project.deliverables === "number" &&
+        Number.isFinite(project.deliverables) &&
+        project.deliverables > 0
+      ) {
+        projectsWithDeliverables += 1;
+        deliverablesTotal += Math.trunc(project.deliverables);
+      }
+    }
+
+    return {
+      success: true,
+      rollupsCleared: existingRollups.length,
+      projectsProcessed,
+      projectsSkippedDeleted,
+      projectsWithDeliverables,
+      deliverablesTotal,
     };
   },
 });
@@ -201,6 +254,7 @@ export const getDashboard = query({
     });
 
     const weeklyTrend = buildWeeklyTrend(activeTasks, 8);
+    const deliverableAnalytics = await buildDeliverableAnalytics(ctx);
     const evaluationStatusCounts = EVALUATION_STATUSES.map((status) => ({
       key: status,
       label: getEvaluationStatusLabel(status),
@@ -240,6 +294,7 @@ export const getDashboard = query({
         overdueTasks: overdueTasks.length,
         dueSoonTasks: dueSoonTasks.length,
         evaluatedTasks: evaluatedTaskIds.size,
+        deliverables: deliverableAnalytics.historicalTotal,
       },
       statusCounts,
       projectStatusCounts,
@@ -250,6 +305,7 @@ export const getDashboard = query({
       tasksByUser,
       evaluationsByUser,
       weeklyTrend,
+      deliverables: deliverableAnalytics,
       evaluations: {
         total: recentEvaluations.length,
         evaluatedTasks: evaluatedTaskIds.size,
@@ -267,6 +323,141 @@ export const getDashboard = query({
     };
   },
 });
+
+async function buildDeliverableAnalytics(ctx: any) {
+  const rollups = await ctx.db
+    .query("deliverableAnalyticsRollups")
+    .collect();
+
+  const aggregated = new Map<
+    string,
+    {
+      scope: "global" | "client" | "brand" | "subBrand";
+      clientId?: string;
+      clientBrandId?: string;
+      subBrandId?: string;
+      deliverablesTotal: number;
+      projectCount: number;
+    }
+  >();
+
+  for (const rollup of rollups) {
+    if (
+      (rollup as any).periodType !== undefined ||
+      (rollup as any).periodKey !== undefined
+    ) {
+      continue;
+    }
+    if (rollup.deliverablesTotal <= 0) continue;
+    const key = [
+      rollup.scope,
+      rollup.clientId ? String(rollup.clientId) : "-",
+      rollup.clientBrandId ? String(rollup.clientBrandId) : "-",
+      rollup.subBrandId ? String(rollup.subBrandId) : "-",
+    ].join("|");
+    const current = aggregated.get(key);
+    if (current) {
+      current.deliverablesTotal += rollup.deliverablesTotal;
+      current.projectCount += rollup.projectCount;
+      continue;
+    }
+    aggregated.set(key, {
+      scope: rollup.scope,
+      clientId: rollup.clientId ? String(rollup.clientId) : undefined,
+      clientBrandId: rollup.clientBrandId
+        ? String(rollup.clientBrandId)
+        : undefined,
+      subBrandId: rollup.subBrandId ? String(rollup.subBrandId) : undefined,
+      deliverablesTotal: rollup.deliverablesTotal,
+      projectCount: rollup.projectCount,
+    });
+  }
+
+  const globalTotals = Array.from(aggregated.values()).filter(
+    (item) => item.scope === "global",
+  );
+  const clientRows = Array.from(aggregated.values()).filter(
+    (item) => item.scope === "client",
+  );
+  const brandRows = Array.from(aggregated.values()).filter(
+    (item) => item.scope === "brand",
+  );
+  const subBrandRows = Array.from(aggregated.values()).filter(
+    (item) => item.scope === "subBrand",
+  );
+
+  const clientNameById = await loadNames(ctx, clientRows, "clientId");
+  const brandNameById = await loadNames(
+    ctx,
+    brandRows,
+    "clientBrandId",
+  );
+  const subBrandNameById = await loadNames(
+    ctx,
+    subBrandRows,
+    "subBrandId",
+  );
+
+  const byClient = clientRows
+    .map((client) => {
+      const brands = brandRows
+        .filter((brand) => brand.clientId === client.clientId)
+        .map((brand) => {
+          const subBrands = subBrandRows
+            .filter((subBrand) => subBrand.clientBrandId === brand.clientBrandId)
+            .map((subBrand) => ({
+              subBrandId: subBrand.subBrandId!,
+              name:
+                subBrandNameById.get(subBrand.subBrandId!) ??
+                "Submarca sin nombre",
+              deliverablesTotal: subBrand.deliverablesTotal,
+              projectCount: subBrand.projectCount,
+            }))
+            .sort((a, b) => b.deliverablesTotal - a.deliverablesTotal);
+
+          return {
+            clientBrandId: brand.clientBrandId!,
+            name: brandNameById.get(brand.clientBrandId!) ?? "Marca sin nombre",
+            deliverablesTotal: brand.deliverablesTotal,
+            projectCount: brand.projectCount,
+            subBrands,
+          };
+        })
+        .sort((a, b) => b.deliverablesTotal - a.deliverablesTotal);
+
+      return {
+        clientId: client.clientId!,
+        name: clientNameById.get(client.clientId!) ?? "Cliente sin nombre",
+        deliverablesTotal: client.deliverablesTotal,
+        projectCount: client.projectCount,
+        brands,
+      };
+    })
+    .sort((a, b) => b.deliverablesTotal - a.deliverablesTotal);
+
+  return {
+    historicalTotal: globalTotals.reduce(
+      (sum, item) => sum + item.deliverablesTotal,
+      0,
+    ),
+    projectCount: globalTotals.reduce((sum, item) => sum + item.projectCount, 0),
+    byClient,
+  };
+}
+
+async function loadNames(
+  ctx: any,
+  rows: Array<Record<string, any>>,
+  key: string,
+) {
+  const names = new Map<string, string>();
+  const ids = Array.from(new Set(rows.map((row) => row[key]).filter(Boolean)));
+  for (const id of ids) {
+    const doc = await ctx.db.get(id as any);
+    if (doc?.name) names.set(id, doc.name);
+  }
+  return names;
+}
 
 function countBy<T>(items: T[], keyFn: (item: T) => string) {
   const counts = new Map<string, number>();

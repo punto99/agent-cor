@@ -27,6 +27,7 @@ import {
   isClientError,
   MAX_RETRY_ATTEMPTS,
 } from "../lib/corRetry";
+import { applyProjectDeliverablesDelta } from "../lib/deliverableAnalytics";
 import type { ActionCtx } from "../_generated/server";
 
 const STRATEGIC_PRIORITY_LABEL_IDS: Record<StrategicPriority, number> = {
@@ -1253,6 +1254,8 @@ export const createProjectAndTask = internalMutation({
         clientId: resolved.clientId ?? args.projectClientId,
         corSyncStatus: "pending",
       });
+      const createdProject = await ctx.db.get(projectId as any);
+      await applyProjectDeliverablesDelta(ctx, null, createdProject as any);
       console.log(`[CreateProjectAndTask] ✅ Proyecto creado: ${projectId}`);
     }
 

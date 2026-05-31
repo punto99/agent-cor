@@ -17,6 +17,7 @@ import {
   CheckCircle2,
   ClipboardList,
   FolderKanban,
+  PackageCheck,
   Send,
   Sparkles,
   Users,
@@ -90,7 +91,7 @@ export default function AnalyticsPage() {
             </p>
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-5 gap-3">
             <MetricCard
               title="Tasks"
               value={analytics.summary.tasks}
@@ -115,6 +116,12 @@ export default function AnalyticsPage() {
               detail={`${analytics.evaluations.total} threads de evaluación`}
               icon={Sparkles}
             />
+            <MetricCard
+              title="Entregables"
+              value={analytics.summary.deliverables}
+              detail={`${analytics.deliverables.projectCount} proyectos históricos`}
+              icon={PackageCheck}
+            />
           </div>
 
           <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
@@ -126,6 +133,26 @@ export default function AnalyticsPage() {
               <BarList
                 items={analytics.sourceCounts}
                 total={sumCounts(analytics.sourceCounts)}
+              />
+            </AnalyticsPanel>
+          </div>
+
+          <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
+            <AnalyticsPanel
+              title="Entregables Por Cliente"
+              className="xl:col-span-2"
+              icon={<PackageCheck className="h-4 w-4 text-primary" />}
+            >
+              <DeliverablesBreakdown
+                items={analytics.deliverables.byClient.slice(0, 8)}
+                total={analytics.deliverables.historicalTotal}
+              />
+            </AnalyticsPanel>
+
+            <AnalyticsPanel title="Prioridad Estratégica">
+              <BarList
+                items={analytics.strategicPriorityCounts}
+                total={priorityTotal}
               />
             </AnalyticsPanel>
           </div>
@@ -150,13 +177,6 @@ export default function AnalyticsPage() {
                   count: item.count,
                 }))}
                 total={analytics.summary.tasks}
-              />
-            </AnalyticsPanel>
-
-            <AnalyticsPanel title="Prioridad Estratégica">
-              <BarList
-                items={analytics.strategicPriorityCounts}
-                total={priorityTotal}
               />
             </AnalyticsPanel>
           </div>
@@ -259,7 +279,7 @@ function MetricCard({
         <div>
           <div className="text-sm text-muted-foreground">{title}</div>
           <div className="text-2xl font-semibold text-foreground mt-1">
-            {value}
+            {formatNumber(value)}
           </div>
         </div>
         <div className="h-10 w-10 rounded-md bg-primary/10 text-primary flex items-center justify-center">
@@ -322,6 +342,91 @@ function BarList({
                 style={{ width: `${Math.max(percentage, 2)}%` }}
               />
             </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function DeliverablesBreakdown({
+  items,
+  total,
+}: {
+  items: Array<{
+    clientId: string;
+    name: string;
+    deliverablesTotal: number;
+    projectCount: number;
+    brands: Array<{
+      clientBrandId: string;
+      name: string;
+      deliverablesTotal: number;
+      projectCount: number;
+      subBrands: Array<{
+        subBrandId: string;
+        name: string;
+        deliverablesTotal: number;
+        projectCount: number;
+      }>;
+    }>;
+  }>;
+  total: number;
+}) {
+  if (items.length === 0 || total === 0) {
+    return <EmptyState />;
+  }
+
+  return (
+    <div className="space-y-4">
+      {items.map((client) => {
+        const percentage = Math.round((client.deliverablesTotal / total) * 100);
+        return (
+          <div key={client.clientId} className="space-y-2">
+            <div className="flex items-center justify-between gap-3 text-xs">
+              <span className="text-foreground font-medium truncate">
+                {client.name}
+              </span>
+              <span className="text-muted-foreground whitespace-nowrap">
+                {formatNumber(client.deliverablesTotal)}
+              </span>
+            </div>
+            <div className="h-2 rounded-full bg-muted overflow-hidden">
+              <div
+                className="h-full rounded-full bg-primary"
+                style={{ width: `${Math.max(percentage, 2)}%` }}
+              />
+            </div>
+            {client.brands.length > 0 && (
+              <div className="rounded-md border border-border bg-muted/25 divide-y divide-border">
+                {client.brands.slice(0, 4).map((brand) => (
+                  <div
+                    key={brand.clientBrandId}
+                    className="px-3 py-2 text-xs space-y-1"
+                  >
+                    <div className="flex items-center justify-between gap-3">
+                      <span className="text-foreground truncate">
+                        {brand.name}
+                      </span>
+                      <span className="text-muted-foreground whitespace-nowrap">
+                        {formatNumber(brand.deliverablesTotal)}
+                      </span>
+                    </div>
+                    {brand.subBrands.length > 0 && (
+                      <div className="text-muted-foreground truncate">
+                        {brand.subBrands
+                          .slice(0, 3)
+                          .map(
+                            (subBrand) =>
+                              `${subBrand.name}: ${formatNumber(subBrand.deliverablesTotal)}`,
+                          )
+                          .join(" · ")}
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         );
       })}
@@ -571,6 +676,10 @@ function EmptyState() {
 
 function sumCounts(items: Array<{ count: number }>) {
   return items.reduce((sum, item) => sum + item.count, 0);
+}
+
+function formatNumber(value: number) {
+  return new Intl.NumberFormat("es").format(value);
 }
 
 function formatDate(value: string) {

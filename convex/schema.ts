@@ -474,6 +474,31 @@ export default defineSchema({
     .index("by_trelloCardId", ["trelloCardId"])
     .index("by_trelloSyncStatus", ["trelloSyncStatus"]),
 
+  deliverableAnalyticsRollups: defineTable({
+    rollupKey: v.string(),
+    scope: v.union(
+      v.literal("global"),
+      v.literal("client"),
+      v.literal("brand"),
+      v.literal("subBrand"),
+    ),
+    shard: v.number(),
+    clientId: v.optional(v.id("corClients")),
+    corClientId: v.optional(v.number()),
+    clientBrandId: v.optional(v.id("clientBrands")),
+    brandId: v.optional(v.number()),
+    subBrandId: v.optional(v.id("subBrands")),
+    productId: v.optional(v.number()),
+    deliverablesTotal: v.number(),
+    projectCount: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_key", ["rollupKey"])
+    .index("by_scope", ["scope"])
+    .index("by_client", ["clientId"])
+    .index("by_brand", ["clientBrandId"])
+    .index("by_subBrand", ["subBrandId"]),
+
   // =====================================================
   // Trello Board Lists — Mapeo estable status Convex/COR → List ID de Trello
   // =====================================================

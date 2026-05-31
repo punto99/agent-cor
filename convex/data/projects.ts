@@ -18,6 +18,7 @@ import { internal } from "../_generated/api";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { getProjectManagementProvider } from "../integrations/registry";
 import { shouldRetry, getRetryDelay, formatRetryError, isClientError, MAX_RETRY_ATTEMPTS } from "../lib/corRetry";
+import { applyProjectDeliverablesDelta } from "../lib/deliverableAnalytics";
 
 async function isExternalUser(ctx: any, userId: any) {
   const approvedExternalUser = await ctx.db
@@ -203,6 +204,8 @@ export const createProjectInternal = internalMutation({
       estimatedTime: args.estimatedTime,
       corSyncStatus: "pending",
     });
+    const createdProject = await ctx.db.get(projectId);
+    await applyProjectDeliverablesDelta(ctx, null, createdProject);
 
     console.log(`[projects] ✅ Proyecto creado: "${args.name}" (ID: ${projectId})`);
     return projectId;
@@ -237,6 +240,8 @@ export const softDeleteProject = mutation({
     await ctx.db.patch(args.projectId, {
       convexStatus: "deleted",
     });
+    const deletedProject = await ctx.db.get(args.projectId);
+    await applyProjectDeliverablesDelta(ctx, project, deletedProject);
 
     // Al eliminar proyecto localmente, eliminar también sus tasks locales para evitar huérfanos.
     const projectTasks = await ctx.db
@@ -312,6 +317,8 @@ export const updateProjectFields = mutation({
     if (Object.keys(updates).length === 0) return;
 
     await ctx.db.patch(args.projectId, updates);
+    const updatedProject = await ctx.db.get(args.projectId);
+    await applyProjectDeliverablesDelta(ctx, project, updatedProject);
     console.log(`[projects] ✅ Proyecto "${project.name}" actualizado (${Object.keys(updates).join(", ")})`);
 
     // Programar sync a COR si corresponde
@@ -340,6 +347,8 @@ export const updateProjectInternal = internalMutation({
   },
   handler: async (ctx, args) => {
     console.log(`[projects.updateProjectInternal] Actualizando proyecto ${args.projectId}...`);
+    const project = await ctx.db.get(args.projectId);
+    if (!project) throw new Error("Proyecto no encontrado");
 
     const updateData: Record<string, unknown> = {};
     for (const [key, value] of Object.entries(args.updates)) {
@@ -351,6 +360,8 @@ export const updateProjectInternal = internalMutation({
     if (Object.keys(updateData).length === 0) return args.projectId;
 
     await ctx.db.patch(args.projectId, updateData);
+    const updatedProject = await ctx.db.get(args.projectId);
+    await applyProjectDeliverablesDelta(ctx, project, updatedProject);
     console.log(`[projects.updateProjectInternal] ✅ Proyecto actualizado`);
     return args.projectId;
   },

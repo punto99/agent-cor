@@ -28,6 +28,7 @@ import { storeFile } from "@convex-dev/agent";
 import { getProjectManagementProvider } from "../integrations/registry";
 import { CORNotFoundError } from "../integrations/corProvider";
 import { hashText } from "../lib/briefFormat";
+import { applyProjectDeliverablesDelta } from "../lib/deliverableAnalytics";
 
 const SCHEDULED_SYNC_BATCH_SIZE = 100;
 const TASK_LOCAL_EDIT_GRACE_MS = 60_000;
@@ -1031,6 +1032,8 @@ export const applyInboundProjectUpdate = internalMutation({
     updates.corSyncedAt = Date.now();
 
     await ctx.db.patch(args.projectId, updates as any);
+    const updatedProject = await ctx.db.get(args.projectId);
+    await applyProjectDeliverablesDelta(ctx, project, updatedProject);
     console.log(
       `[InboundSync] ✅ Proyecto ${args.projectId} actualizado: ${Object.keys(
         updates,
