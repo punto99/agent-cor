@@ -28,6 +28,7 @@ export const ACTIVE_TENANT = CLIENT_ID;
  * IMPORTANTE: Al forkear, mantener sincronizado con enabledAgents
  * en config/tenant.config.ts (configuración del frontend).
  */
+
 export const enabledAgents = {
   orchestrator: false,
   brief: true,
