@@ -35,7 +35,7 @@ const SCHEDULED_SYNC_LEASE_MS = 8 * 60 * 1000;
 const SCHEDULED_TASKS_PER_RUN = 20;
 const SCHEDULED_PROJECTS_PER_RUN = 10;
 const SCHEDULED_WORKER_STAGGER_MS = 750;
-const SCHEDULED_ATTACHMENT_DELAY_MS = 60_000;
+const SCHEDULED_ATTACHMENT_DELAY_MS = 30_000;
 const MAX_COR_ATTACHMENT_BYTES = 25 * 1024 * 1024;
 const TASK_LOCAL_EDIT_GRACE_MS = 60_000;
 
@@ -804,9 +804,12 @@ export const pullTaskFromCORWorker = internalAction({
     taskId: v.id("tasks"),
   },
   handler: async (ctx, args) => {
-    const task = await ctx.runQuery(internal.data.tasks.getTaskByIdInternal, {
-      taskId: args.taskId as unknown as string,
-    });
+    const task = await ctx.runQuery(
+      internal.data.tasks.getTaskCORSyncSnapshotInternal,
+      {
+        taskId: args.taskId as unknown as string,
+      },
+    );
 
     if (!task) return;
 
@@ -922,9 +925,12 @@ export const pullTaskAttachmentsFromCORWorker = internalAction({
     corTaskId: v.number(),
   },
   handler: async (ctx, args) => {
-    const task = await ctx.runQuery(internal.data.tasks.getTaskByIdInternal, {
-      taskId: args.taskId as unknown as string,
-    });
+    const task = await ctx.runQuery(
+      internal.data.tasks.getTaskCORSyncSnapshotInternal,
+      {
+        taskId: args.taskId as unknown as string,
+      },
+    );
 
     if (!task) return;
     if (task.status === "finalizada") {
