@@ -41,7 +41,7 @@ export interface LLMHealthCheckResult {
  */
 export const LLM_CALL_TIMEOUT_MS = 180_000;
 
-// Modelo principal: Gemini 3 Pro Preview
+// Modelo principal: Gemini 3.5 Flash
 export const geminiConfig: LLMConfig = {
   provider: "gemini",
   model: google("gemini-3.5-flash"),
@@ -55,7 +55,7 @@ export const geminiConfig: LLMConfig = {
   },
 };
 
-// Modelo fallback: OpenAI GPT-5
+// Modelo fallback: OpenAI GPT-5.5
 export const openaiConfig: LLMConfig = {
   provider: "openai",
   model: openai("gpt-5.5"),

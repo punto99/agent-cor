@@ -1,7 +1,5 @@
 "use client";
 
-import { useMutation } from "convex/react";
-import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import {
   formatDate,
@@ -37,6 +35,7 @@ interface TaskCardProps {
  */
 export function TaskCard({ task, onClick }: TaskCardProps) {
   const priorityConfig = getPriorityConfig(task.priority);
+  const formattedDeadline = formatDeadline(task.deadline);
   const descriptionPreview = task.description
     ?.replace(/<br\s*\/?>/gi, "\n")
     .replace(/<[^>]*>/g, " ")
@@ -124,9 +123,9 @@ export function TaskCard({ task, onClick }: TaskCardProps) {
             {descriptionPreview}
           </p>
         )}
-        {task.deadline && (
+        {formattedDeadline && (
           <p className="text-xs text-muted-foreground">
-            <span className="font-medium">📅</span> {task.deadline}
+            <span className="font-medium">Fecha:</span> {formattedDeadline}
           </p>
         )}
       </div>
@@ -152,4 +151,12 @@ export function TaskCard({ task, onClick }: TaskCardProps) {
       </p>
     </button>
   );
+}
+
+function formatDeadline(deadline?: string) {
+  if (!deadline) return null;
+  const normalized = deadline.slice(0, 10);
+  const [year, month, day] = normalized.split("-");
+  if (!year || !month || !day) return deadline;
+  return `${day}/${month}/${year}`;
 }

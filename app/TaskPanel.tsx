@@ -80,6 +80,10 @@ export default function TaskPanel({ threadId, onClose }: TaskPanelProps) {
         }
       : "skip",
   );
+  const latestTaskEvaluation = useQuery(
+    api.data.evaluation.getLatestTaskEvaluationByTask,
+    task ? { taskId: task._id } : "skip",
+  );
 
   // Handler para iniciar evaluación
   const handleStartEvaluation = async () => {
@@ -164,8 +168,12 @@ export default function TaskPanel({ threadId, onClose }: TaskPanelProps) {
 
   // Verificar si el evaluador está pensando
   const isEvaluatorThinking =
-    evaluationMessageList.length > 0 &&
-    evaluationMessageList[evaluationMessageList.length - 1]?.role === "user";
+    latestTaskEvaluation?.status === "processing" || isSubmitting;
+  const evaluationErrorMessage =
+    latestTaskEvaluation?.status === "failed" && !isEvaluatorThinking
+      ? latestTaskEvaluation.error ||
+        "El evaluador no pudo generar una respuesta."
+      : null;
 
   const statusColor = getStatusColor(task.status);
   const priorityConfig = getPriorityConfig(task.priority);
@@ -237,6 +245,7 @@ export default function TaskPanel({ threadId, onClose }: TaskPanelProps) {
           <EvaluationMessageList
             messages={evaluationMessageList}
             isThinking={isEvaluatorThinking}
+            errorMessage={evaluationErrorMessage}
           />
           <EvaluationInput
             selectedFiles={selectedFiles}

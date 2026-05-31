@@ -22,14 +22,20 @@ export const editTaskTool = createTool({
   - O si acaba de crear una task en esta conversacion, se encuentra automaticamente por el threadId
   
   Solo actualiza los campos que el usuario quiere cambiar.
+  Debes declarar en fieldsToEdit EXACTAMENTE los campos que el usuario pidio cambiar.
+  Si el usuario solo pidio cambiar el titulo, fieldsToEdit debe ser ["title"] y NO debes enviar description.
+  IMPORTANTE: El backend solo aplicara los campos declarados en fieldsToEdit. Cualquier otro campo enviado por error sera ignorado.
   La descripcion contiene toda la info del brief (tipo, marca, objetivo, kpis, etc.).
   Si el usuario quiere cambiar algo de la descripcion, primero usa getTask para ver el contenido actual,
-  luego envia SOLO la parte modificada quirurgicamente — nunca reescribas toda la descripcion.
+  luego envia la descripcion completa preservando todo lo que no se pidio cambiar.
   
   Si la task está publicada en COR, los cambios se sincronizarán automáticamente.`,
   args: z.object({
     corTaskId: z.string().optional().describe("ID de la task en COR (ej: 11301144) - PREFERIDO"),
     taskId: z.string().optional().describe("ID local de la task (opcional si se usa corTaskId o thread)"),
+    fieldsToEdit: z.array(z.enum(["title", "description", "deadline", "priority"]))
+      .min(1)
+      .describe("Campos que el usuario pidio editar explicitamente. Debe coincidir EXACTAMENTE con los campos enviados."),
     title: z.string().optional().describe("Nuevo titulo del requerimiento"),
     description: z.string().optional().describe("Nueva descripcion completa (contiene toda la info del brief)"),
     deadline: z.string().optional().describe("Nueva fecha limite"),
@@ -118,13 +124,61 @@ export const editTaskTool = createTool({
       // ====================================================
       // CONSTRUIR CAMPOS A ACTUALIZAR
       // ====================================================
+      const requestedFields = Array.from(new Set(args.fieldsToEdit));
+
       const updates: Record<string, string | number | undefined> = {};
-      if (args.title !== undefined) updates.title = args.title;
-      if (args.description !== undefined) updates.description = args.description;
-      if (args.deadline !== undefined) updates.deadline = args.deadline;
-      if (args.priority !== undefined) updates.priority = args.priority;
-      
-      if (Object.keys(updates).length === 0) {
+      const missingFields: string[] = [];
+
+      for (const field of requestedFields) {
+        if (field === "title") {
+          if (typeof args.title === "string" && args.title.trim()) {
+            updates.title = args.title.trim();
+          } else {
+            missingFields.push("title");
+          }
+        }
+
+        if (field === "description") {
+          if (typeof args.description === "string" && args.description.trim()) {
+            updates.description = args.description;
+          } else {
+            missingFields.push("description");
+          }
+        }
+
+        if (field === "deadline") {
+          if (typeof args.deadline === "string" && args.deadline.trim()) {
+            updates.deadline = args.deadline.trim();
+          } else {
+            missingFields.push("deadline");
+          }
+        }
+
+        if (field === "priority") {
+          if (typeof args.priority === "number") {
+            updates.priority = args.priority;
+          } else {
+            missingFields.push("priority");
+          }
+        }
+      }
+
+      const updateKeys = Object.keys(updates);
+
+      const ignoredFields = ["title", "description", "deadline", "priority"]
+        .filter((field) => !requestedFields.includes(field as any))
+        .filter((field) => (args as any)[field] !== undefined);
+      if (ignoredFields.length > 0) {
+        console.log(
+          `[EditTask] Campos ignorados por no estar en fieldsToEdit: ${ignoredFields.join(", ")}`
+        );
+      }
+
+      if (missingFields.length > 0) {
+        return `No se aplicó ningún cambio porque faltan valores válidos para: ${missingFields.join(", ")}.`;
+      }
+
+      if (updateKeys.length === 0) {
         // Si no hay campos para actualizar, mostrar la task actual
         const taskPriority = PRIORITY_LABELS[task.priority ?? 1] || "Media";
         const corId = task.corTaskId || "No sincronizada";
@@ -150,6 +204,7 @@ ${task.description || "Sin descripción"}
       await ctx.runMutation(internal.data.tasks.updateTaskInternal, {
         taskId: taskIdToEdit,
         updates,
+        allowedFields: requestedFields,
       });
       console.log(`[EditTask] ✅ Task ${taskIdToEdit} actualizada en Convex`);
       

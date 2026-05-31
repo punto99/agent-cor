@@ -36,6 +36,10 @@ interface TaskDetailDialogProps {
     projectId?: Id<"projects">;
     corTaskMissingInCOR?: boolean;
     corProjectMissingInCOR?: boolean;
+    trelloCardId?: string;
+    trelloCardUrl?: string;
+    trelloSyncStatus?: string;
+    trelloSyncError?: string;
   };
   onClose: () => void;
   /** Callback cuando la publicación se completa (éxito o error) */
@@ -59,6 +63,9 @@ export function TaskDetailDialog({
   const retryProject = useMutation(api.data.projects.retryProjectSync);
   const softDeleteProject = useMutation(api.data.projects.softDeleteProject);
   const pullFromCOR = useMutation(api.data.corInboundSync.startPullFromCOR);
+  const startPublishToTrello = useMutation(
+    api.data.trello.startPublishTaskToTrello,
+  );
   const createEvaluationThread = useMutation(
     api.data.evaluation.createEvaluationThread,
   );
@@ -69,6 +76,7 @@ export function TaskDetailDialog({
   const registerUploadedFile = useAction(api.data.files.registerUploadedFile);
   const [publishError, setPublishError] = useState<string | null>(null);
   const [isPublishing, setIsPublishing] = useState(false);
+  const [isPublishingToTrello, setIsPublishingToTrello] = useState(false);
   const [isRetrying, setIsRetrying] = useState(false);
   const [isPulling, setIsPulling] = useState(false);
   const [isDeletingLocal, setIsDeletingLocal] = useState(false);
@@ -121,6 +129,10 @@ export function TaskDetailDialog({
         }
       : "skip",
   );
+  const latestTaskEvaluation = useQuery(
+    api.data.evaluation.getLatestTaskEvaluationByTask,
+    { taskId: task._id },
+  );
 
   // Sincronizar evaluationThreadId cuando el query resuelve
   useEffect(() => {
@@ -131,9 +143,24 @@ export function TaskDetailDialog({
 
   const showPublishButton = clientConfig.ui.showPublishToExternalTool;
   const toolName = clientConfig.ui.externalToolName;
+  const liveTaskCorClientId = (liveTask as any)?.corClientId ?? task.corClientId;
+  const liveTaskTrelloCardId =
+    (liveTask as any)?.trelloCardId ?? task.trelloCardId;
+  const trelloSyncStatus =
+    (liveTask as any)?.trelloSyncStatus ?? task.trelloSyncStatus ?? "pending";
+  const showPublishToTrelloButton =
+    typeof liveTaskCorClientId === "number" &&
+    clientConfig.ui.trelloPublishCorClientIds.includes(liveTaskCorClientId) &&
+    !liveTaskTrelloCardId &&
+    trelloSyncStatus !== "synced";
 
   // Obtener syncStatus en vivo (preferir liveTask, fallback a task prop)
   const syncStatus = liveTask?.corSyncStatus || task.corSyncStatus || "pending";
+  const isPublishedInCOR =
+    syncStatus === "synced" ||
+    Boolean((liveTask as any)?.corTaskId ?? task.corTaskId);
+  const canEditFromDialog =
+    !isPublishedInCOR && syncStatus !== "syncing" && syncStatus !== "retrying";
   const taskMissingInCOR = Boolean(
     (liveTask as any)?.corTaskMissingInCOR ?? task.corTaskMissingInCOR,
   );
@@ -170,6 +197,21 @@ export function TaskDetailDialog({
     }
   }, [syncStatus, isPublishing, liveTask, onClose, onPublishResult, toolName]);
 
+  useEffect(() => {
+    if (!isPublishingToTrello) return;
+    if (trelloSyncStatus === "synced") {
+      setIsPublishingToTrello(false);
+      setPublishError(null);
+    } else if (trelloSyncStatus === "error") {
+      setIsPublishingToTrello(false);
+      setPublishError(
+        (liveTask as any)?.trelloSyncError ||
+          task.trelloSyncError ||
+          "No se pudo publicar en Trello.",
+      );
+    }
+  }, [isPublishingToTrello, liveTask, task.trelloSyncError, trelloSyncStatus]);
+
   const handlePublish = async () => {
     try {
       setPublishError(null);
@@ -181,6 +223,17 @@ export function TaskDetailDialog({
       setIsPublishing(false);
       publishInitiatedRef.current = false;
       setPublishError(err.message || "Error al iniciar la publicación");
+    }
+  };
+
+  const handlePublishToTrello = async () => {
+    try {
+      setPublishError(null);
+      setIsPublishingToTrello(true);
+      await startPublishToTrello({ taskId: task._id });
+    } catch (err: any) {
+      setPublishError(err.message || "Error al publicar en Trello");
+      setIsPublishingToTrello(false);
     }
   };
 
@@ -267,8 +320,12 @@ export function TaskDetailDialog({
     });
 
   const isEvaluatorThinking =
-    evalMessageList.length > 0 &&
-    evalMessageList[evalMessageList.length - 1]?.role === "user";
+    latestTaskEvaluation?.status === "processing" || isSubmittingEval;
+  const evaluationErrorMessage =
+    latestTaskEvaluation?.status === "failed" && !isEvaluatorThinking
+      ? latestTaskEvaluation.error ||
+        "El evaluador no pudo generar una respuesta."
+      : null;
   const shouldDeleteBoth = taskMissingInCOR && projectMissingInCOR && !!project;
 
   const handleConfirmDeleteTask = async () => {
@@ -463,7 +520,7 @@ export function TaskDetailDialog({
                   </div>
                   <TaskBriefContent
                     task={liveTask ?? task}
-                    editable={syncStatus !== "syncing"}
+                    editable={canEditFromDialog}
                     syncStatus={syncStatus}
                   />
                 </>
@@ -553,7 +610,7 @@ export function TaskDetailDialog({
               )}
               <ProjectBriefContent
                 project={project}
-                editable={syncStatus !== "syncing"}
+                editable={canEditFromDialog}
                 syncStatus={project.corSyncStatus || "pending"}
               />
             </div>
@@ -564,6 +621,7 @@ export function TaskDetailDialog({
               <EvaluationMessageList
                 messages={evalMessageList}
                 isThinking={isEvaluatorThinking}
+                errorMessage={evaluationErrorMessage}
               />
               <EvaluationInput
                 selectedFiles={selectedFiles}
@@ -697,6 +755,31 @@ export function TaskDetailDialog({
                     )}
                   </button>
                 )}
+
+              {showPublishToTrelloButton && (
+                <button
+                  type="button"
+                  onClick={handlePublishToTrello}
+                  disabled={
+                    isPublishingToTrello || trelloSyncStatus === "syncing"
+                  }
+                  className="flex items-center gap-2 px-4 py-2 border border-border rounded-lg text-sm font-medium text-muted-foreground hover:bg-muted hover:text-foreground transition-colors disabled:cursor-not-allowed disabled:opacity-70 cursor-pointer"
+                >
+                  {isPublishingToTrello || trelloSyncStatus === "syncing" ? (
+                    <>
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                      Publicando en Trello...
+                    </>
+                  ) : (
+                    <>
+                      <ExternalLink className="h-4 w-4" />
+                      {trelloSyncStatus === "error"
+                        ? "Reintentar publicación en Trello"
+                        : "Publicar en Trello"}
+                    </>
+                  )}
+                </button>
+              )}
 
               <button
                 onClick={onClose}

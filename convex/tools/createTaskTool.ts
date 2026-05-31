@@ -56,34 +56,116 @@ export const createTaskTool = createTool({
   - title, deadline, priority → fields dedicados de la task
   - deliverables (texto) → description de la task
   - deliverables (cantidad) → field numérico del proyecto asociado
-  - El resto (requestType, brand, objective, keyMessage, kpis, budget, approvers) → se combinan en el campo description
+  - El resto (requestType, brand, objective, keyMessage, kpis, budget, approvers, additionalBriefDetails) → se combinan en el campo description
+  - Todo dato relevante que no tenga campo dedicado en COR debe ir en additionalBriefDetails para quedar guardado dentro de description.
   No necesitas preocuparte por la distribucion, el sistema lo maneja automaticamente.`,
   args: z.object({
-    title: z.string().describe("Titulo breve y descriptivo del proyecto (ej: Campaña de verano Coca-Cola)"),
+    title: z
+      .string()
+      .describe(
+        "Titulo breve y descriptivo del proyecto (ej: Campaña de verano Coca-Cola)",
+      ),
     requestType: z.string().describe("Tipo de requerimiento - OBLIGATORIO"),
-    brand: z.string().describe("Marca o empresa - OBLIGATORIO"),
-    deadline: z.string().describe("Fecha limite del proyecto - OBLIGATORIO (formato YYYY-MM-DD)"),
-    deliverables: z.string().describe("Entregables concretos del proyecto - OBLIGATORIO"),
-    objective: z.string().optional().describe("Objetivo principal del proyecto"),
+    brand: z
+      .string()
+      .describe(
+        "Cliente, categoría o marca indicada por el usuario - OBLIGATORIO",
+      ),
+    clientBrandId: z
+      .string()
+      .optional()
+      .describe(
+        "ID local de clientBrands si validateUserForClient devolvio categorías para el cliente.",
+      ),
+    subBrand: z
+      .string()
+      .optional()
+      .describe(
+        "Marca indicada por el usuario cuando la categoría tiene subBrands.",
+      ),
+    subBrandId: z
+      .string()
+      .optional()
+      .describe(
+        "ID local de subBrands si validateUserForClient devolvio marcas para la categoría.",
+      ),
+    deadline: z
+      .string()
+      .describe("Fecha limite del proyecto - OBLIGATORIO (formato YYYY-MM-DD)"),
+    deliverables: z
+      .string()
+      .describe("Entregables concretos del proyecto - OBLIGATORIO"),
+    deliverablesCount: z
+      .number()
+      .int()
+      .positive()
+      .optional()
+      .describe(
+        "Cantidad total de entregables confirmada por el usuario. Debe ser el mismo número mostrado en el resumen final.",
+      ),
+    objective: z
+      .string()
+      .optional()
+      .describe("Objetivo principal del proyecto"),
     keyMessage: z.string().optional().describe("Mensaje clave a comunicar"),
     kpis: z.string().optional().describe("KPIs o metricas de exito"),
     budget: z.string().optional().describe("Presupuesto disponible"),
-    approvers: z.string().optional().describe("Personas que deben aprobar el proyecto"),
-    priority: z.number().optional().describe("Prioridad numerica: 0=Baja, 1=Media, 2=Alta, 3=Urgente. Si no se especifica, usar 1 (Media)."),
-    corUserId: z.number().optional().describe("COR ID del usuario (obtenido con validateUserForClient)"),
-    corClientId: z.number().optional().describe("ID del cliente en COR (obtenido con validateUserForClient)"),
-    corClientName: z.string().optional().describe("Nombre del cliente en COR (obtenido con validateUserForClient)"),
-    localClientId: z.string().optional().describe("ID local del cliente en Convex (obtenido con validateUserForClient)"),
-    nomenclature: z.string().optional().describe("Abreviatura del cliente (obtenido con validateUserForClient). NO la inventes, solo pasala si validateUserForClient la devolvio."),
-    estimatedTime: z.number().optional().describe("Horas totales estimadas para completar el proyecto. Estima basándote en el tipo de requerimiento, los entregables y la complejidad. Ejemplos: diseño de un flyer = 4h, campaña multi-pieza = 40h, video corporativo = 80h."),
+    approvers: z
+      .string()
+      .optional()
+      .describe("Personas que deben aprobar el proyecto"),
+    additionalBriefDetails: z
+      .string()
+      .optional()
+      .describe(
+        "Detalles relevantes del brief que no tienen campo propio: contexto, restricciones, mandatorios, referencias, tono, especificaciones, observaciones legales, links importantes y datos extraidos de documentos. Se guarda dentro de description, no como campo separado.",
+      ),
+    priority: z
+      .number()
+      .optional()
+      .describe(
+        "Prioridad numerica: 0=Baja, 1=Media, 2=Alta, 3=Urgente. Si no estas seguro, pon 1 (Media).",
+      ),
+    corUserId: z
+      .number()
+      .optional()
+      .describe("COR ID del usuario (obtenido con validateUserForClient)"),
+    corClientId: z
+      .number()
+      .optional()
+      .describe("ID del cliente en COR (obtenido con validateUserForClient)"),
+    corClientName: z
+      .string()
+      .optional()
+      .describe(
+        "Nombre del cliente en COR (obtenido con validateUserForClient)",
+      ),
+    localClientId: z
+      .string()
+      .optional()
+      .describe(
+        "ID local del cliente en Convex (obtenido con validateUserForClient)",
+      ),
+    nomenclature: z
+      .string()
+      .optional()
+      .describe(
+        "Abreviatura del cliente (obtenido con validateUserForClient). NO la inventes, solo pasala si validateUserForClient la devolvio.",
+      ),
+    estimatedTime: z
+      .number()
+      .optional()
+      .describe(
+        "Horas totales estimadas para completar el proyecto. Estima basándote en el tipo de requerimiento, los entregables y la complejidad. Si no estás seguro, haz una suposición educada. Este campo ayuda a priorizar y asignar recursos, así que es importante dar tu mejor estimación.",
+      ),
   }),
   handler: async (ctx, args): Promise<string> => {
     console.log("\n========================================");
     console.log("[CreateTask] 🚀 CREANDO TASK (SOLO CONVEX)");
     console.log("========================================");
-    
+
     const threadId = ctx.threadId;
-    
+
     if (!threadId) {
       console.error("[CreateTask] ERROR: No se encontro threadId");
       return "Error: No se pudo identificar el thread de la conversacion.";
@@ -115,19 +197,63 @@ export const createTaskTool = createTool({
     // VALIDACIÓN CONSOLIDADA (1 query en vez de ~6)
     // ====================================================
     console.log("[CreateTask] 🔍 Validando y preparando...");
-    const preparation = await ctx.runQuery(internal.data.tasks.validateAndPrepareTask, {
-      threadId,
-      corClientId: args.corClientId,
-      corUserId: args.corUserId,
-      requireIntegration: integrationEnabled,
-    });
+    const preparation = await ctx.runQuery(
+      internal.data.tasks.validateAndPrepareTask,
+      {
+        threadId,
+        corClientId: args.corClientId,
+        corUserId: args.corUserId,
+        clientBrandId: args.clientBrandId as any,
+        requireIntegration: integrationEnabled,
+      },
+    );
 
     if (!preparation.ok) {
       return preparation.error;
     }
 
     const { userId, localClientId, pmId, existingProjectId } = preparation;
-    console.log(`[CreateTask] ✅ Validación OK — UserId: ${userId || "no encontrado"}`);
+    console.log(
+      `[CreateTask] ✅ Validación OK — UserId: ${userId || "no encontrado"}`,
+    );
+
+    const taxonomy = localClientId
+      ? await ctx.runQuery(
+          internal.data.subBrands.resolveBrandAndSubBrandForClient,
+          {
+            clientId: localClientId as any,
+            brandName: args.brand,
+            clientBrandId: args.clientBrandId as any,
+            subBrandName: args.subBrand,
+            subBrandId: args.subBrandId as any,
+          },
+        )
+      : { ok: true as const, requiresBrand: false };
+
+    if (!taxonomy.ok) {
+      const taxonomyAny = taxonomy as any;
+      const availableBrands = taxonomyAny.availableBrands
+        ? `\n\nCategorías disponibles:\n${taxonomyAny.availableBrands
+            .map(
+              (brand: any) =>
+                `- ${brand.name} (clientBrandId: ${brand.clientBrandId})`,
+            )
+            .join("\n")}`
+        : "";
+      const availableSubBrands = taxonomyAny.availableSubBrands
+        ? `\n\nMarcas disponibles:\n${taxonomyAny.availableSubBrands
+            .map(
+              (subBrand: any) =>
+                `- ${subBrand.name} (subBrandId: ${subBrand.subBrandId})`,
+            )
+            .join("\n")}`
+        : "";
+      return `❌ ${taxonomyAny.error}${availableBrands}${availableSubBrands}`;
+    }
+
+    const taxonomyAny = taxonomy as any;
+    const resolvedBrand = taxonomyAny.brand;
+    const resolvedSubBrand = taxonomyAny.subBrand;
 
     // ====================================================
     // Prefijo del título: nomenclature > corClientName
@@ -135,7 +261,9 @@ export const createTaskTool = createTool({
     // El sistema lo antepone automáticamente.
     // ====================================================
     const clientPrefix = args.nomenclature || args.corClientName;
-    const fullTitle = clientPrefix ? `${clientPrefix} - ${args.title}` : args.title;
+    const fullTitle = clientPrefix
+      ? `${clientPrefix} - ${args.title}`
+      : args.title;
 
     // ====================================================
     // Construir description con toda la info del brief
@@ -143,7 +271,7 @@ export const createTaskTool = createTool({
     // ====================================================
     const description = buildBriefDescription({
       requestType: args.requestType,
-      brand: args.brand,
+      brand: resolvedBrand?.name ?? args.brand,
       deadline: args.deadline,
       deliverables: args.deliverables,
       objective: args.objective,
@@ -151,9 +279,11 @@ export const createTaskTool = createTool({
       kpis: args.kpis,
       budget: args.budget,
       approvers: args.approvers,
+      additionalNotes: args.additionalBriefDetails,
     });
 
-    const deliverablesCount = inferDeliverablesCount(args.deliverables);
+    const deliverablesCount =
+      args.deliverablesCount ?? inferDeliverablesCount(args.deliverables);
 
     // ====================================================
     // Obtener URLs de archivos del thread para el campo brief del proyecto
@@ -170,7 +300,10 @@ export const createTaskTool = createTool({
         if (msgAny.fileIds && Array.isArray(msgAny.fileIds)) {
           for (const fileId of msgAny.fileIds) {
             try {
-              const fileInfo = await ctx.runQuery(internal.data.tasks.getFileInfoInternal, { fileId });
+              const fileInfo = await ctx.runQuery(
+                internal.data.tasks.getFileInfoInternal,
+                { fileId },
+              );
               if (fileInfo?.url) {
                 fileUrls.push(fileInfo.url);
               }
@@ -180,9 +313,14 @@ export const createTaskTool = createTool({
           }
         }
       }
-      console.log(`[CreateTask] 📎 URLs de archivos encontradas: ${fileUrls.length}`);
+      console.log(
+        `[CreateTask] 📎 URLs de archivos encontradas: ${fileUrls.length}`,
+      );
     } catch (error) {
-      console.log("[CreateTask] ⚠️ No se pudieron obtener URLs de archivos (continuando):", error);
+      console.log(
+        "[CreateTask] ⚠️ No se pudieron obtener URLs de archivos (continuando):",
+        error,
+      );
     }
 
     // ====================================================
@@ -202,6 +340,12 @@ export const createTaskTool = createTool({
         projectCorClientId: args.corClientId,
         projectClientId: localClientId as any,
         projectCreatedBy: userId,
+        projectClientBrandId: resolvedBrand?._id as any,
+        projectBrandId: resolvedBrand?.corBrandId,
+        projectBrandName: resolvedBrand?.name,
+        projectSubBrandId: resolvedSubBrand?._id as any,
+        projectProductId: resolvedSubBrand?.corProductId,
+        projectSubBrandName: resolvedSubBrand?.name,
         // Task
         taskTitle: fullTitle,
         taskDescription: description,
@@ -209,14 +353,24 @@ export const createTaskTool = createTool({
         taskPriority: args.priority ?? 1,
         taskStatus: "nueva",
         taskCreatedBy: userId,
+        taskClientId: localClientId as any,
         taskCorClientId: args.corClientId,
         taskCorClientName: args.corClientName,
+        taskClientBrandId: resolvedBrand?._id as any,
+        taskBrandId: resolvedBrand?.corBrandId,
+        taskBrandName: resolvedBrand?.name,
+        taskSubBrandId: resolvedSubBrand?._id as any,
+        taskProductId: resolvedSubBrand?.corProductId,
+        taskSubBrandName: resolvedSubBrand?.name,
         // Shared
         threadId,
         existingProjectId: existingProjectId as any,
       });
     } catch (error) {
       console.error("[CreateTask] ❌ Error creando proyecto/task:", error);
+      if (error instanceof Error && error.message.startsWith("❌")) {
+        return error.message;
+      }
       return "❌ Error: No se pudo crear el proyecto y task asociados.";
     }
 
@@ -228,20 +382,26 @@ export const createTaskTool = createTool({
     // Se ejecuta via scheduler — no bloquea la respuesta al usuario
     // ====================================================
     try {
-      await ctx.runMutation(internal.data.tasks.schedulePriorityClassification, {
-        taskId: taskId as any,
-        title: args.title,
-        requestType: args.requestType,
-        brand: args.brand,
-        objective: args.objective,
-        keyMessage: args.keyMessage,
-        kpis: args.kpis,
-        deadline: args.deadline,
-        budget: args.budget,
-        approvers: args.approvers,
-      });
+      await ctx.runMutation(
+        internal.data.tasks.schedulePriorityClassification,
+        {
+          taskId: taskId as any,
+          title: args.title,
+          requestType: args.requestType,
+          brand: args.brand,
+          objective: args.objective,
+          keyMessage: args.keyMessage,
+          kpis: args.kpis,
+          deadline: args.deadline,
+          budget: args.budget,
+          approvers: args.approvers,
+        },
+      );
     } catch (error) {
-      console.log("[CreateTask] ⚠️ No se pudo programar clasificación de prioridad (continuando):", error);
+      console.log(
+        "[CreateTask] ⚠️ No se pudo programar clasificación de prioridad (continuando):",
+        error,
+      );
     }
 
     // ====================================================
@@ -251,7 +411,10 @@ export const createTaskTool = createTool({
       await associateFilesHelper(ctx, taskId, threadId);
       console.log("[CreateTask] ✅ Archivos asociados");
     } catch (error) {
-      console.log("[CreateTask] ⚠️ No se pudieron asociar archivos (continuando):", error);
+      console.log(
+        "[CreateTask] ⚠️ No se pudieron asociar archivos (continuando):",
+        error,
+      );
     }
 
     console.log("\n========================================");

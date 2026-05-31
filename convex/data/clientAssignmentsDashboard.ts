@@ -77,12 +77,15 @@ export const assignUserToClientsBulkDashboard = mutation({
     let alreadyExisted = 0;
 
     for (const client of targetClients) {
-      const existingAssignment = await ctx.db
+      const existingAssignments = await ctx.db
         .query("clientUserAssignments")
         .withIndex("by_client_and_user", (q) =>
           q.eq("clientId", client._id).eq("userId", user._id)
         )
-        .unique();
+        .collect();
+      const existingAssignment = existingAssignments.find(
+        (assignment) => assignment.brandId === undefined
+      );
 
       if (existingAssignment) {
         alreadyExisted += 1;

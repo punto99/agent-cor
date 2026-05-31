@@ -12,6 +12,8 @@ import type {
   ProjectManagementProvider,
   ExternalUser,
   ExternalClient,
+  ExternalBrand,
+  ExternalProduct,
   ExternalProject,
   ExternalTask,
   ExternalTaskAttachment,
@@ -35,6 +37,14 @@ interface CORTokenResponse {
   token_type: string;
   expires_in: number;
   refresh_token?: string;
+}
+
+interface CORPaginatedResponse<T> {
+  total?: string | number;
+  perPage?: number;
+  page?: number;
+  lastPage?: number;
+  data?: T[];
 }
 
 export class CORNotFoundError extends Error {
@@ -61,7 +71,7 @@ async function getCORAccessToken(): Promise<string> {
 
   if (!apiKey || !clientSecret) {
     throw new Error(
-      "COR credentials not configured. Set COR_API_KEY and COR_CLIENT_SECRET in Convex dashboard."
+      "COR credentials not configured. Set COR_API_KEY and COR_CLIENT_SECRET in Convex dashboard.",
     );
   }
 
@@ -74,7 +84,7 @@ async function getCORAccessToken(): Promise<string> {
       headers: {
         Authorization: `Basic ${credentials}`,
       },
-    }
+    },
   );
 
   if (!response.ok) {
@@ -135,7 +145,8 @@ function mapPriorityToCOR(priority: string | number | undefined): number {
  * Si el valor no es entero válido, retorna undefined para omitir el campo.
  */
 function mapDeliverablesToCOR(value: unknown): number | undefined {
-  if (typeof value === "number" && Number.isInteger(value) && value >= 0) return value;
+  if (typeof value === "number" && Number.isInteger(value) && value >= 0)
+    return value;
   if (typeof value === "string") {
     const trimmed = value.trim();
     if (/^\d+$/.test(trimmed)) return parseInt(trimmed, 10);
@@ -156,7 +167,21 @@ function parseDeliverablesFromCOR(value: unknown): number | undefined {
 }
 
 function mapPmIdToCOR(value: unknown): number | undefined {
-  if (typeof value === "number" && Number.isInteger(value) && value > 0) return value;
+  if (typeof value === "number" && Number.isInteger(value) && value > 0)
+    return value;
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (/^\d+$/.test(trimmed)) {
+      const parsed = parseInt(trimmed, 10);
+      return parsed > 0 ? parsed : undefined;
+    }
+  }
+  return undefined;
+}
+
+function parsePositiveInteger(value: unknown): number | undefined {
+  if (typeof value === "number" && Number.isInteger(value) && value > 0)
+    return value;
   if (typeof value === "string") {
     const trimmed = value.trim();
     if (/^\d+$/.test(trimmed)) {
@@ -191,7 +216,7 @@ function normalizeDescriptionForCOR(text: string): string {
  */
 async function corApiFetch(
   path: string,
-  options: RequestInit = {}
+  options: RequestInit = {},
 ): Promise<Response> {
   const accessToken = await getCORAccessToken();
 
@@ -200,7 +225,7 @@ async function corApiFetch(
     headers: {
       Authorization: `Bearer ${accessToken}`,
       "Content-Type": "application/json",
-      ...(options.headers as Record<string, string> || {}),
+      ...((options.headers as Record<string, string>) || {}),
     },
   });
 }
@@ -212,33 +237,43 @@ async function corApiFetch(
  * COR requiere fee_id al crear un proyecto.
  * Endpoint: GET /clients/{client_id}/fees
  */
-async function getFirstActiveFeeForClient(clientId: number): Promise<number | null> {
+async function getFirstActiveFeeForClient(
+  clientId: number,
+): Promise<number | null> {
   try {
     const response = await corApiFetch(`/clients/${clientId}/fees`);
 
     if (!response.ok) {
       const errorText = await response.text();
-      console.error(`[COR Provider] ❌ Error obteniendo fees del cliente ${clientId}: ${response.status} - ${errorText}`);
+      console.error(
+        `[COR Provider] ❌ Error obteniendo fees del cliente ${clientId}: ${response.status} - ${errorText}`,
+      );
       return null;
     }
 
     const fees = await response.json();
-    
+
     // fees puede ser un array directo o un objeto con propiedad "data"
-    const feeList = Array.isArray(fees) ? fees : (fees.data || []);
-    
+    const feeList = Array.isArray(fees) ? fees : fees.data || [];
+
     if (feeList.length === 0) {
       console.log(`[COR Provider] ⚠️ El cliente ${clientId} no tiene fees`);
       return null;
     }
 
     // Preferir fee activo, si no tomar el primero
-    const activeFee = feeList.find((f: any) => f.status === "active") || feeList[0];
-    console.log(`[COR Provider] ✅ Fee encontrado: ${activeFee.id} (${activeFee.name || "sin nombre"}, status: ${activeFee.status || "unknown"})`);
-    
+    const activeFee =
+      feeList.find((f: any) => f.status === "active") || feeList[0];
+    console.log(
+      `[COR Provider] ✅ Fee encontrado: ${activeFee.id} (${activeFee.name || "sin nombre"}, status: ${activeFee.status || "unknown"})`,
+    );
+
     return activeFee.id;
   } catch (error) {
-    console.error(`[COR Provider] ❌ Error en getFirstActiveFeeForClient:`, error);
+    console.error(
+      `[COR Provider] ❌ Error en getFirstActiveFeeForClient:`,
+      error,
+    );
     return null;
   }
 }
@@ -247,7 +282,7 @@ async function getFirstActiveFeeForClient(clientId: number): Promise<number | nu
 
 /**
  * Crea una instancia del provider de COR.
- * 
+ *
  * Uso:
  * ```
  * const provider = createCORProvider();
@@ -267,18 +302,24 @@ export function createCORProvider(): ProjectManagementProvider {
 
       try {
         const encodedName = encodeURIComponent(name);
-        const response = await corApiFetch(`/users/search-by-name/${encodedName}`);
+        const response = await corApiFetch(
+          `/users/search-by-name/${encodedName}`,
+        );
 
         if (!response.ok) {
           const errorText = await response.text();
-          console.error(`[COR Provider] ❌ Error buscando usuarios: ${response.status} - ${errorText}`);
+          console.error(
+            `[COR Provider] ❌ Error buscando usuarios: ${response.status} - ${errorText}`,
+          );
           return [];
         }
 
         const result = await response.json();
-        const users = Array.isArray(result) ? result : (result.data || []);
+        const users = Array.isArray(result) ? result : result.data || [];
 
-        console.log(`[COR Provider] ✅ Encontrados ${users.length} usuarios para "${name}"`);
+        console.log(
+          `[COR Provider] ✅ Encontrados ${users.length} usuarios para "${name}"`,
+        );
 
         return users.map((u: Record<string, unknown>) => ({
           id: u.id as number,
@@ -301,27 +342,35 @@ export function createCORProvider(): ProjectManagementProvider {
 
       try {
         const encodedName = encodeURIComponent(name);
-        const response = await corApiFetch(`/clients/search-by-name/${encodedName}`);
+        const response = await corApiFetch(
+          `/clients/search-by-name/${encodedName}`,
+        );
 
         if (!response.ok) {
           const errorText = await response.text();
-          console.error(`[COR Provider] ❌ Error buscando cliente: ${response.status} - ${errorText}`);
+          console.error(
+            `[COR Provider] ❌ Error buscando cliente: ${response.status} - ${errorText}`,
+          );
           return null;
         }
 
         const result = await response.json();
-        
+
         // La API puede retornar un array directo o un objeto con propiedad "data"
-        const clients = Array.isArray(result) ? result : (result.data || []);
+        const clients = Array.isArray(result) ? result : result.data || [];
 
         if (clients.length === 0) {
-          console.log(`[COR Provider] ⚠️ No se encontró cliente con nombre "${name}"`);
+          console.log(
+            `[COR Provider] ⚠️ No se encontró cliente con nombre "${name}"`,
+          );
           return null;
         }
 
         // Tomar el primer resultado (más relevante)
         const client = clients[0];
-        console.log(`[COR Provider] ✅ Cliente encontrado: ${client.name} (ID: ${client.id})`);
+        console.log(
+          `[COR Provider] ✅ Cliente encontrado: ${client.name} (ID: ${client.id})`,
+        );
 
         return {
           id: client.id,
@@ -338,17 +387,21 @@ export function createCORProvider(): ProjectManagementProvider {
     // ==================== CREATE PROJECT ====================
 
     async createProject(data: CreateProjectInput): Promise<ExternalProject> {
-      console.log(`[COR Provider] 🚀 Creando proyecto: "${data.name}" (client_id: ${data.clientId})`);
+      console.log(
+        `[COR Provider] 🚀 Creando proyecto: "${data.name}" (client_id: ${data.clientId})`,
+      );
 
       // 1. Resolver fee_id — COR lo requiere para crear un proyecto
       let feeId = data.feeId;
       if (!feeId) {
-        console.log(`[COR Provider] 🔍 Buscando fees para cliente ${data.clientId}...`);
+        console.log(
+          `[COR Provider] 🔍 Buscando fees para cliente ${data.clientId}...`,
+        );
         const resolvedFeeId = await getFirstActiveFeeForClient(data.clientId);
         if (!resolvedFeeId) {
           throw new Error(
             `No se encontró un fee activo para el cliente ${data.clientId}. ` +
-            `Asegúrate de que el cliente tenga al menos un fee/tarifa activa en COR.`
+              `Asegúrate de que el cliente tenga al menos un fee/tarifa activa en COR.`,
           );
         }
         feeId = resolvedFeeId;
@@ -370,14 +423,25 @@ export function createCORProvider(): ProjectManagementProvider {
         body.estimated_time = data.estimatedTime;
       }
 
+      if (data.brandId) {
+        body.brand_id = data.brandId;
+        if (data.productId) {
+          body.product_id = data.productId;
+        }
+      }
+
       if (data.deadline) {
         const deadlineDate = parseDateFlexible(data.deadline);
         if (deadlineDate) {
           // COR espera formato YYYY-MM-DD para start/end
           body.end = deadlineDate.toISOString().split("T")[0];
-          console.log(`[COR Provider] 📅 Deadline proyecto: "${data.deadline}" → ${body.end}`);
+          console.log(
+            `[COR Provider] 📅 Deadline proyecto: "${data.deadline}" → ${body.end}`,
+          );
         } else {
-          console.warn(`[COR Provider] ⚠️ No se pudo parsear deadline proyecto: "${data.deadline}"`);
+          console.warn(
+            `[COR Provider] ⚠️ No se pudo parsear deadline proyecto: "${data.deadline}"`,
+          );
         }
       }
 
@@ -389,24 +453,36 @@ export function createCORProvider(): ProjectManagementProvider {
 
       if (!response.ok) {
         const errorText = await response.text();
-        console.error(`[COR Provider] ❌ Error creando proyecto: ${response.status} - ${errorText}`);
-        throw new Error(`Error creando proyecto en COR: ${response.status} - ${errorText}`);
+        console.error(
+          `[COR Provider] ❌ Error creando proyecto: ${response.status} - ${errorText}`,
+        );
+        throw new Error(
+          `Error creando proyecto en COR: ${response.status} - ${errorText}`,
+        );
       }
 
       const project = await response.json();
-      console.log(`[COR Provider] ✅ Proyecto creado: ID ${project.id}, nombre: "${project.name}"`);
+      console.log(
+        `[COR Provider] ✅ Proyecto creado: ID ${project.id}, nombre: "${project.name}"`,
+      );
 
       return {
         id: project.id,
         name: project.name,
         clientId: data.clientId,
+        brandId: parsePositiveInteger(project.brand_id) ?? data.brandId,
+        productId: data.brandId
+          ? (parsePositiveInteger(project.product_id) ?? data.productId)
+          : undefined,
       };
     },
 
     // ==================== CREATE TASK ====================
 
     async createTask(data: CreateTaskInput): Promise<ExternalTask> {
-      console.log(`[COR Provider] 🚀 Creando task: "${data.title}" (project_id: ${data.projectId})`);
+      console.log(
+        `[COR Provider] 🚀 Creando task: "${data.title}" (project_id: ${data.projectId})`,
+      );
 
       const body: Record<string, unknown> = {
         title: data.title,
@@ -426,9 +502,13 @@ export function createCORProvider(): ProjectManagementProvider {
         const deadlineDate = parseDateFlexible(data.deadline);
         if (deadlineDate) {
           body.deadline = deadlineDate.toISOString();
-          console.log(`[COR Provider] 📅 Deadline parseado: "${data.deadline}" → ${deadlineDate.toISOString()}`);
+          console.log(
+            `[COR Provider] 📅 Deadline parseado: "${data.deadline}" → ${deadlineDate.toISOString()}`,
+          );
         } else {
-          console.warn(`[COR Provider] ⚠️ No se pudo parsear deadline: "${data.deadline}"`);
+          console.warn(
+            `[COR Provider] ⚠️ No se pudo parsear deadline: "${data.deadline}"`,
+          );
         }
       }
 
@@ -439,8 +519,12 @@ export function createCORProvider(): ProjectManagementProvider {
 
       if (!response.ok) {
         const errorText = await response.text();
-        console.error(`[COR Provider] ❌ Error creando task: ${response.status} - ${errorText}`);
-        throw new Error(`Error creando task en COR: ${response.status} - ${errorText}`);
+        console.error(
+          `[COR Provider] ❌ Error creando task: ${response.status} - ${errorText}`,
+        );
+        throw new Error(
+          `Error creando task en COR: ${response.status} - ${errorText}`,
+        );
       }
 
       const task = await response.json();
@@ -469,7 +553,9 @@ export function createCORProvider(): ProjectManagementProvider {
           if (response.status === 404) {
             throw new CORNotFoundError("task", taskId);
           }
-          console.error(`[COR Provider] ❌ Error obteniendo task: ${response.status}`);
+          console.error(
+            `[COR Provider] ❌ Error obteniendo task: ${response.status}`,
+          );
           return null;
         }
 
@@ -498,14 +584,20 @@ export function createCORProvider(): ProjectManagementProvider {
 
     // ==================== GET TASK ATTACHMENTS ====================
 
-    async getTaskAttachments(taskId: number): Promise<ExternalTaskAttachment[]> {
-      console.log(`[COR Provider] 📎 Obteniendo attachments de task: ${taskId}`);
+    async getTaskAttachments(
+      taskId: number,
+    ): Promise<ExternalTaskAttachment[]> {
+      console.log(
+        `[COR Provider] 📎 Obteniendo attachments de task: ${taskId}`,
+      );
 
       try {
         const response = await corApiFetch(`/tasks/${taskId}/attachments`);
 
         if (!response.ok) {
-          console.error(`[COR Provider] ❌ Error obteniendo attachments: ${response.status}`);
+          console.error(
+            `[COR Provider] ❌ Error obteniendo attachments: ${response.status}`,
+          );
           return [];
         }
 
@@ -530,11 +622,9 @@ export function createCORProvider(): ProjectManagementProvider {
               (f.filename as string) ||
               `attachment_${String(f.id || "unknown")}`,
             url: (f.url as string) || undefined,
-            mimeType: (f.mimetype as string) || (f.mimeType as string) || undefined,
-            size:
-              typeof f.size === "number"
-                ? (f.size as number)
-                : undefined,
+            mimeType:
+              (f.mimetype as string) || (f.mimeType as string) || undefined,
+            size: typeof f.size === "number" ? (f.size as number) : undefined,
           }))
           .filter((f: ExternalTaskAttachment) => Number.isFinite(f.id));
 
@@ -557,7 +647,9 @@ export function createCORProvider(): ProjectManagementProvider {
           if (response.status === 404) {
             throw new CORNotFoundError("project", projectId);
           }
-          console.error(`[COR Provider] ❌ Error obteniendo proyecto: ${response.status}`);
+          console.error(
+            `[COR Provider] ❌ Error obteniendo proyecto: ${response.status}`,
+          );
           return null;
         }
 
@@ -572,6 +664,10 @@ export function createCORProvider(): ProjectManagementProvider {
           id: project.id,
           name: project.name,
           clientId: project.client_id,
+          brandId: parsePositiveInteger(project.brand_id ?? project.brand?.id),
+          productId: parsePositiveInteger(
+            project.product_id ?? project.product?.id,
+          ),
           brief: project.brief,
           startDate: project.start,
           endDate: project.end,
@@ -590,7 +686,7 @@ export function createCORProvider(): ProjectManagementProvider {
 
     async updateTask(
       taskId: number,
-      data: UpdateTaskInput
+      data: UpdateTaskInput,
     ): Promise<{ success: boolean; error?: string }> {
       console.log(`[COR Provider] 🔄 Actualizando task: ${taskId}`);
 
@@ -612,12 +708,14 @@ export function createCORProvider(): ProjectManagementProvider {
         // para evitar que valores legítimos como 0, "" sean ignorados
         const updateBody: Record<string, unknown> = {
           title: data.title ?? currentTask.title,
-          description: data.description != null
-            ? normalizeDescriptionForCOR(data.description)
-            : currentTask.description,
-          priority: data.priority != null
-            ? mapPriorityToCOR(data.priority)
-            : currentTask.priority,
+          description:
+            data.description != null
+              ? normalizeDescriptionForCOR(data.description)
+              : currentTask.description,
+          priority:
+            data.priority != null
+              ? mapPriorityToCOR(data.priority)
+              : currentTask.priority,
           status: data.status ?? currentTask.status,
           deadline: currentTask.deadline,
         };
@@ -626,9 +724,13 @@ export function createCORProvider(): ProjectManagementProvider {
           const d = parseDateFlexible(data.deadline);
           if (d) {
             updateBody.deadline = d.toISOString();
-            console.log(`[COR Provider] 📅 Deadline update: "${data.deadline}" → ${d.toISOString()}`);
+            console.log(
+              `[COR Provider] 📅 Deadline update: "${data.deadline}" → ${d.toISOString()}`,
+            );
           } else {
-            console.warn(`[COR Provider] ⚠️ No se pudo parsear deadline update: "${data.deadline}"`);
+            console.warn(
+              `[COR Provider] ⚠️ No se pudo parsear deadline update: "${data.deadline}"`,
+            );
           }
         }
 
@@ -646,7 +748,9 @@ export function createCORProvider(): ProjectManagementProvider {
           };
         }
 
-        console.log(`[COR Provider] ✅ Task ${taskId} actualizada correctamente`);
+        console.log(
+          `[COR Provider] ✅ Task ${taskId} actualizada correctamente`,
+        );
         return { success: true };
       } catch (error) {
         return {
@@ -659,10 +763,10 @@ export function createCORProvider(): ProjectManagementProvider {
     // ==================== SET TASK LABEL ====================
 
     async setTaskLabel(
-      data: SetTaskLabelInput
+      data: SetTaskLabelInput,
     ): Promise<{ success: boolean; error?: string }> {
       console.log(
-        `[COR Provider] 🏷️ ${data.unassign ? "Desasignando" : "Asignando"} etiqueta ${data.labelId} en task ${data.taskId}`
+        `[COR Provider] 🏷️ ${data.unassign ? "Desasignando" : "Asignando"} etiqueta ${data.labelId} en task ${data.taskId}`,
       );
 
       try {
@@ -688,7 +792,7 @@ export function createCORProvider(): ProjectManagementProvider {
         }
 
         console.log(
-          `[COR Provider] ✅ Etiqueta ${data.labelId} ${data.unassign ? "desasignada" : "asignada"} en task ${data.taskId}`
+          `[COR Provider] ✅ Etiqueta ${data.labelId} ${data.unassign ? "desasignada" : "asignada"} en task ${data.taskId}`,
         );
         return { success: true };
       } catch (error) {
@@ -703,7 +807,7 @@ export function createCORProvider(): ProjectManagementProvider {
 
     async updateProject(
       projectId: number,
-      data: UpdateProjectInput
+      data: UpdateProjectInput,
     ): Promise<{ success: boolean; error?: string }> {
       console.log(`[COR Provider] 🔄 Actualizando proyecto: ${projectId}`);
 
@@ -730,7 +834,8 @@ export function createCORProvider(): ProjectManagementProvider {
           end: currentProject.end,
         };
 
-        const deliverablesCandidate = data.deliverables ?? currentProject.deliverables;
+        const deliverablesCandidate =
+          data.deliverables ?? currentProject.deliverables;
         const deliverables = mapDeliverablesToCOR(deliverablesCandidate);
         if (deliverables !== undefined) {
           updateBody.deliverables = deliverables;
@@ -740,6 +845,19 @@ export function createCORProvider(): ProjectManagementProvider {
         const pmId = mapPmIdToCOR(pmIdCandidate);
         if (pmId !== undefined) {
           updateBody.pm_id = pmId;
+        }
+
+        const brandId = parsePositiveInteger(
+          data.brandId ?? currentProject.brand_id,
+        );
+        if (brandId !== undefined) {
+          updateBody.brand_id = brandId;
+          const productId = parsePositiveInteger(
+            data.productId ?? currentProject.product_id,
+          );
+          if (productId !== undefined) {
+            updateBody.product_id = productId;
+          }
         }
 
         if (data.startDate) {
@@ -766,7 +884,9 @@ export function createCORProvider(): ProjectManagementProvider {
           };
         }
 
-        console.log(`[COR Provider] ✅ Proyecto ${projectId} actualizado correctamente`);
+        console.log(
+          `[COR Provider] ✅ Proyecto ${projectId} actualizado correctamente`,
+        );
         return { success: true };
       } catch (error) {
         return {
@@ -779,10 +899,18 @@ export function createCORProvider(): ProjectManagementProvider {
     // ==================== UPLOAD TASK ATTACHMENT ====================
 
     async uploadTaskAttachment(
-      data: UploadTaskAttachmentInput
-    ): Promise<{ success: boolean; attachment?: ExternalAttachmentResult; error?: string }> {
-      console.log(`[COR Provider] 📎 Subiendo attachment a task: ${data.taskId}`);
-      console.log(`[COR Provider]   Archivo: ${data.filename} (${data.mimeType}, ${(data.fileBuffer.byteLength / 1024).toFixed(1)}KB)`);
+      data: UploadTaskAttachmentInput,
+    ): Promise<{
+      success: boolean;
+      attachment?: ExternalAttachmentResult;
+      error?: string;
+    }> {
+      console.log(
+        `[COR Provider] 📎 Subiendo attachment a task: ${data.taskId}`,
+      );
+      console.log(
+        `[COR Provider]   Archivo: ${data.filename} (${data.mimeType}, ${(data.fileBuffer.byteLength / 1024).toFixed(1)}KB)`,
+      );
 
       try {
         const accessToken = await getCORAccessToken();
@@ -800,12 +928,14 @@ export function createCORProvider(): ProjectManagementProvider {
               // No Content-Type — FormData lo establece automáticamente con boundary
             },
             body: formData,
-          }
+          },
         );
 
         if (!response.ok) {
           const errorText = await response.text();
-          console.error(`[COR Provider] ❌ Error subiendo attachment: ${response.status} - ${errorText}`);
+          console.error(
+            `[COR Provider] ❌ Error subiendo attachment: ${response.status} - ${errorText}`,
+          );
           return {
             success: false,
             error: `COR API error: ${response.status} - ${errorText}`,
@@ -822,7 +952,9 @@ export function createCORProvider(): ProjectManagementProvider {
           };
         }
 
-        console.log(`[COR Provider] ✅ Attachment subido: ID ${uploadedFile.id}, nombre: ${uploadedFile.originalname || data.filename}`);
+        console.log(
+          `[COR Provider] ✅ Attachment subido: ID ${uploadedFile.id}, nombre: ${uploadedFile.originalname || data.filename}`,
+        );
 
         return {
           success: true,
@@ -844,22 +976,28 @@ export function createCORProvider(): ProjectManagementProvider {
     // ==================== LIST ALL USERS ====================
 
     async listAllUsers(): Promise<ExternalUser[]> {
-      console.log(`[COR Provider] 📋 Obteniendo TODOS los usuarios de COR (page=false)...`);
+      console.log(
+        `[COR Provider] 📋 Obteniendo TODOS los usuarios de COR (page=false)...`,
+      );
 
       try {
         const response = await corApiFetch(`/users?page=false`);
 
         if (!response.ok) {
           const errorText = await response.text();
-          console.error(`[COR Provider] ❌ Error listando usuarios: ${response.status} - ${errorText}`);
+          console.error(
+            `[COR Provider] ❌ Error listando usuarios: ${response.status} - ${errorText}`,
+          );
           return [];
         }
 
         const result = await response.json();
         // Cuando page=false, COR puede retornar { data: [...] } o un array directo
-        const users = Array.isArray(result) ? result : (result.data || []);
+        const users = Array.isArray(result) ? result : result.data || [];
 
-        console.log(`[COR Provider] ✅ Obtenidos ${users.length} usuarios de COR`);
+        console.log(
+          `[COR Provider] ✅ Obtenidos ${users.length} usuarios de COR`,
+        );
 
         return users.map((u: Record<string, unknown>) => ({
           id: u.id as number,
@@ -878,22 +1016,28 @@ export function createCORProvider(): ProjectManagementProvider {
     // ==================== LIST ALL CLIENTS ====================
 
     async listAllClients(): Promise<ExternalClient[]> {
-      console.log(`[COR Provider] 📋 Obteniendo TODOS los clientes de COR (page=false)...`);
+      console.log(
+        `[COR Provider] 📋 Obteniendo TODOS los clientes de COR (page=false)...`,
+      );
 
       try {
         const response = await corApiFetch(`/clients?page=false`);
 
         if (!response.ok) {
           const errorText = await response.text();
-          console.error(`[COR Provider] ❌ Error listando clientes: ${response.status} - ${errorText}`);
+          console.error(
+            `[COR Provider] ❌ Error listando clientes: ${response.status} - ${errorText}`,
+          );
           return [];
         }
 
         const result = await response.json();
         // Cuando page=false, COR puede retornar { data: [...] } o un array directo
-        const clients = Array.isArray(result) ? result : (result.data || []);
+        const clients = Array.isArray(result) ? result : result.data || [];
 
-        console.log(`[COR Provider] ✅ Obtenidos ${clients.length} clientes de COR`);
+        console.log(
+          `[COR Provider] ✅ Obtenidos ${clients.length} clientes de COR`,
+        );
 
         return clients.map((c: Record<string, unknown>) => ({
           id: c.id as number,
@@ -909,6 +1053,150 @@ export function createCORProvider(): ProjectManagementProvider {
         }));
       } catch (error) {
         console.error(`[COR Provider] ❌ Error en listAllClients:`, error);
+        return [];
+      }
+    },
+
+    // ==================== LIST ALL BRANDS ====================
+
+    async listAllBrands(): Promise<ExternalBrand[]> {
+      console.log(
+        "[COR Provider] 📋 Obteniendo TODAS las marcas de COR con paginado...",
+      );
+
+      const perPage = 100;
+      const maxPages = 500;
+      const allBrands: ExternalBrand[] = [];
+
+      try {
+        for (let page = 1; page <= maxPages; page++) {
+          const response = await corApiFetch(
+            `/brands?page=${page}&perPage=${perPage}`,
+          );
+
+          if (!response.ok) {
+            const errorText = await response.text();
+            console.error(
+              `[COR Provider] ❌ Error listando marcas página ${page}: ${response.status} - ${errorText}`,
+            );
+            break;
+          }
+
+          const result = (await response.json()) as
+            | CORPaginatedResponse<Record<string, unknown>>
+            | Record<string, unknown>[];
+          const rawBrands = Array.isArray(result) ? result : result.data || [];
+
+          const brands = rawBrands
+            .map((brand) => {
+              const id = Number(brand.id);
+              const clientId = Number(brand.client_id);
+              const name = String(brand.name || "").trim();
+
+              if (!Number.isFinite(id) || !Number.isFinite(clientId) || !name) {
+                return null;
+              }
+
+              return { id, name, clientId };
+            })
+            .filter((brand): brand is ExternalBrand => brand !== null);
+
+          allBrands.push(...brands);
+
+          const pagination = Array.isArray(result) ? null : result;
+          const lastPage = Number(pagination?.lastPage);
+          const currentPage = Number(pagination?.page || page);
+
+          console.log(
+            `[COR Provider] Página marcas ${currentPage}: ${brands.length} válidas (${allBrands.length} acumuladas)`,
+          );
+
+          if (Number.isFinite(lastPage) && currentPage >= lastPage) break;
+          if (rawBrands.length < perPage) break;
+        }
+
+        console.log(
+          `[COR Provider] ✅ Obtenidas ${allBrands.length} marcas de COR`,
+        );
+        return allBrands;
+      } catch (error) {
+        console.error("[COR Provider] ❌ Error en listAllBrands:", error);
+        return [];
+      }
+    },
+
+    // ==================== LIST ALL PRODUCTS ====================
+
+    async listAllProducts(): Promise<ExternalProduct[]> {
+      console.log(
+        "[COR Provider] 📋 Obteniendo TODOS los productos de COR con paginado...",
+      );
+
+      const perPage = 100;
+      const maxPages = 500;
+      const allProducts: ExternalProduct[] = [];
+
+      try {
+        for (let page = 1; page <= maxPages; page++) {
+          const response = await corApiFetch(
+            `/products?page=${page}&perPage=${perPage}`,
+          );
+
+          if (!response.ok) {
+            const errorText = await response.text();
+            console.error(
+              `[COR Provider] ❌ Error listando productos página ${page}: ${response.status} - ${errorText}`,
+            );
+            break;
+          }
+
+          const result = (await response.json()) as
+            | CORPaginatedResponse<Record<string, unknown>>
+            | Record<string, unknown>[];
+          const rawProducts = Array.isArray(result)
+            ? result
+            : result.data || [];
+
+          const products = rawProducts
+            .map((product) => {
+              const id = Number(product.id);
+              const clientId = Number(product.client_id);
+              const brandId = Number(product.brand_id);
+              const name = String(product.name || "").trim();
+
+              if (
+                !Number.isFinite(id) ||
+                !Number.isFinite(clientId) ||
+                !Number.isFinite(brandId) ||
+                !name
+              ) {
+                return null;
+              }
+
+              return { id, name, clientId, brandId };
+            })
+            .filter((product): product is ExternalProduct => product !== null);
+
+          allProducts.push(...products);
+
+          const pagination = Array.isArray(result) ? null : result;
+          const lastPage = Number(pagination?.lastPage);
+          const currentPage = Number(pagination?.page || page);
+
+          console.log(
+            `[COR Provider] Página productos ${currentPage}: ${products.length} válidos (${allProducts.length} acumulados)`,
+          );
+
+          if (Number.isFinite(lastPage) && currentPage >= lastPage) break;
+          if (rawProducts.length < perPage) break;
+        }
+
+        console.log(
+          `[COR Provider] ✅ Obtenidos ${allProducts.length} productos de COR`,
+        );
+        return allProducts;
+      } catch (error) {
+        console.error("[COR Provider] ❌ Error en listAllProducts:", error);
         return [];
       }
     },

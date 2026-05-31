@@ -18,6 +18,56 @@ import { internal } from "../_generated/api";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { getProjectManagementProvider } from "../integrations/registry";
 import { shouldRetry, getRetryDelay, formatRetryError, isClientError, MAX_RETRY_ATTEMPTS } from "../lib/corRetry";
+import { applyProjectDeliverablesDelta } from "../lib/deliverableAnalytics";
+
+async function isExternalUser(ctx: any, userId: any) {
+  const approvedExternalUser = await ctx.db
+    .query("approvedExternalUsers")
+    .withIndex("by_user", (q: any) => q.eq("userId", userId))
+    .unique();
+  return Boolean(approvedExternalUser);
+}
+
+async function hasFullClientAccess(ctx: any, clientId: any, userId: any) {
+  const assignments = await ctx.db
+    .query("clientUserAssignments")
+    .withIndex("by_client_and_user", (q: any) =>
+      q.eq("clientId", clientId).eq("userId", userId)
+    )
+    .collect();
+
+  return assignments.some((assignment: any) => assignment.brandId === undefined);
+}
+
+async function hasProjectAccess(ctx: any, project: any, userId: any) {
+  if (project.clientBrandId) {
+    const brand = await ctx.db.get(project.clientBrandId);
+    if (!brand?.clientId) return false;
+
+    const assignments = await ctx.db
+      .query("clientUserAssignments")
+      .withIndex("by_client_and_user", (q: any) =>
+        q.eq("clientId", brand.clientId).eq("userId", userId)
+      )
+      .collect();
+
+    return assignments.some(
+      (assignment: any) =>
+        assignment.brandId === undefined || assignment.brandId === project.clientBrandId
+    );
+  }
+
+  if (project.corClientId) {
+    const client = await ctx.db
+      .query("corClients")
+      .withIndex("by_corClientId", (q: any) => q.eq("corClientId", project.corClientId))
+      .unique();
+    if (!client) return false;
+    return await hasFullClientAccess(ctx, client._id, userId);
+  }
+
+  return project.createdBy === String(userId);
+}
 
 // ==================== QUERIES ====================
 
@@ -29,9 +79,11 @@ export const getProject = query({
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
     if (!userId) throw new Error("No autenticado");
+    if (await isExternalUser(ctx, userId)) return null;
 
     const project = await ctx.db.get(args.projectId);
     if (project?.convexStatus === "deleted") return null;
+    if (project && !(await hasProjectAccess(ctx, project, userId))) return null;
     return project;
   },
 });
@@ -44,12 +96,44 @@ export const listMyProjects = query({
   handler: async (ctx) => {
     const userId = await getAuthUserId(ctx);
     if (!userId) throw new Error("No autenticado");
+    if (await isExternalUser(ctx, userId)) return [];
 
-    const projects = await ctx.db
+    const projectsById = new Map<string, any>();
+
+    const ownProjects = await ctx.db
       .query("projects")
       .withIndex("by_createdBy", (q) => q.eq("createdBy", userId))
       .collect();
-    return projects.filter((p) => p.convexStatus !== "deleted");
+    for (const project of ownProjects) projectsById.set(project._id, project);
+
+    const assignments = await ctx.db
+      .query("clientUserAssignments")
+      .withIndex("by_user", (q) => q.eq("userId", userId))
+      .collect();
+
+    for (const assignment of assignments) {
+      if (assignment.brandId) {
+        const brandProjects = await ctx.db
+          .query("projects")
+          .withIndex("by_clientBrandId", (q) => q.eq("clientBrandId", assignment.brandId))
+          .collect();
+        for (const project of brandProjects) projectsById.set(project._id, project);
+        continue;
+      }
+
+      const client = await ctx.db.get(assignment.clientId);
+      if (!client) continue;
+
+      const clientProjects = await ctx.db
+        .query("projects")
+        .withIndex("by_corClientId", (q) => q.eq("corClientId", client.corClientId))
+        .collect();
+      for (const project of clientProjects) projectsById.set(project._id, project);
+    }
+
+    return Array.from(projectsById.values())
+      .filter((p) => p.convexStatus !== "deleted")
+      .sort((a, b) => b._creationTime - a._creationTime);
   },
 });
 
@@ -120,6 +204,8 @@ export const createProjectInternal = internalMutation({
       estimatedTime: args.estimatedTime,
       corSyncStatus: "pending",
     });
+    const createdProject = await ctx.db.get(projectId);
+    await applyProjectDeliverablesDelta(ctx, null, createdProject);
 
     console.log(`[projects] ✅ Proyecto creado: "${args.name}" (ID: ${projectId})`);
     return projectId;
@@ -137,9 +223,15 @@ export const softDeleteProject = mutation({
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
     if (!userId) throw new Error("No autenticado");
+    if (await isExternalUser(ctx, userId)) {
+      throw new Error("Los usuarios externos no pueden eliminar proyectos desde el panel.");
+    }
 
     const project = await ctx.db.get(args.projectId);
     if (!project) throw new Error("Proyecto no encontrado");
+    if (!(await hasProjectAccess(ctx, project, userId))) {
+      throw new Error("No tienes permisos para eliminar este proyecto.");
+    }
 
     if (project.convexStatus === "deleted") {
       return { success: true, message: "El proyecto ya estaba eliminado." };
@@ -148,6 +240,8 @@ export const softDeleteProject = mutation({
     await ctx.db.patch(args.projectId, {
       convexStatus: "deleted",
     });
+    const deletedProject = await ctx.db.get(args.projectId);
+    await applyProjectDeliverablesDelta(ctx, project, deletedProject);
 
     // Al eliminar proyecto localmente, eliminar también sus tasks locales para evitar huérfanos.
     const projectTasks = await ctx.db
@@ -189,6 +283,9 @@ export const updateProjectFields = mutation({
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
     if (!userId) throw new Error("No autenticado");
+    if (await isExternalUser(ctx, userId)) {
+      throw new Error("Los usuarios externos no pueden editar proyectos desde el panel.");
+    }
 
     const project = await ctx.db.get(args.projectId);
     if (!project) throw new Error("Proyecto no encontrado");
@@ -201,33 +298,8 @@ export const updateProjectFields = mutation({
     }
 
     // ─── Validación de permisos (clientUserAssignments) ───
-    if (project.corClientId) {
-      const client = await ctx.db
-        .query("corClients")
-        .filter((q) => q.eq(q.field("corClientId"), project.corClientId))
-        .first();
-
-      if (client) {
-        const user = await ctx.db
-          .query("users")
-          .filter((q) => q.eq(q.field("_id"), userId))
-          .first();
-
-        if (user) {
-          const assignment = await ctx.db
-            .query("clientUserAssignments")
-            .withIndex("by_client_and_user", (q) =>
-              q.eq("clientId", client._id).eq("userId", user._id)
-            )
-            .first();
-
-          if (!assignment) {
-            throw new Error(
-              `No tienes permisos para editar proyectos del cliente "${client.name}".`
-            );
-          }
-        }
-      }
+    if (!(await hasProjectAccess(ctx, project, userId))) {
+      throw new Error("No tienes permisos para editar este proyecto.");
     }
 
     // Construir objeto de actualización solo con los campos proporcionados
@@ -245,6 +317,8 @@ export const updateProjectFields = mutation({
     if (Object.keys(updates).length === 0) return;
 
     await ctx.db.patch(args.projectId, updates);
+    const updatedProject = await ctx.db.get(args.projectId);
+    await applyProjectDeliverablesDelta(ctx, project, updatedProject);
     console.log(`[projects] ✅ Proyecto "${project.name}" actualizado (${Object.keys(updates).join(", ")})`);
 
     // Programar sync a COR si corresponde
@@ -273,6 +347,8 @@ export const updateProjectInternal = internalMutation({
   },
   handler: async (ctx, args) => {
     console.log(`[projects.updateProjectInternal] Actualizando proyecto ${args.projectId}...`);
+    const project = await ctx.db.get(args.projectId);
+    if (!project) throw new Error("Proyecto no encontrado");
 
     const updateData: Record<string, unknown> = {};
     for (const [key, value] of Object.entries(args.updates)) {
@@ -284,6 +360,8 @@ export const updateProjectInternal = internalMutation({
     if (Object.keys(updateData).length === 0) return args.projectId;
 
     await ctx.db.patch(args.projectId, updateData);
+    const updatedProject = await ctx.db.get(args.projectId);
+    await applyProjectDeliverablesDelta(ctx, project, updatedProject);
     console.log(`[projects.updateProjectInternal] ✅ Proyecto actualizado`);
     return args.projectId;
   },
@@ -531,31 +609,18 @@ export const retryProjectSync = mutation({
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
     if (!userId) throw new Error("No autenticado");
+    if (await isExternalUser(ctx, userId)) {
+      throw new Error("Los usuarios externos no pueden sincronizar proyectos con COR.");
+    }
 
     const project = await ctx.db.get(args.projectId);
     if (!project) throw new Error("Proyecto no encontrado");
 
     // Verificar permisos (clientUserAssignments)
-    if (project.corClientId) {
-      const client = await ctx.db
-        .query("corClients")
-        .filter((q) => q.eq(q.field("corClientId"), project.corClientId))
-        .first();
-
-      if (client) {
-        const assignment = await ctx.db
-          .query("clientUserAssignments")
-          .withIndex("by_client_and_user", (q) =>
-            q.eq("clientId", client._id).eq("userId", userId)
-          )
-          .first();
-
-        if (!assignment) {
-          throw new Error(
-            `No tienes permisos para reintentar la sincronización de proyectos de este cliente.`
-          );
-        }
-      }
+    if (!(await hasProjectAccess(ctx, project, userId))) {
+      throw new Error(
+        "No tienes permisos para reintentar la sincronización de este proyecto."
+      );
     }
 
     if (!["error", "retrying"].includes(project.corSyncStatus || "")) {

@@ -1,7 +1,10 @@
 "use client";
 
 import { useState } from "react";
-import { LogOut } from "lucide-react";
+import Link from "next/link";
+import { useQuery } from "convex/react";
+import { BarChart3, LogOut, UserCog, UserPlus } from "lucide-react";
+import { api } from "@/convex/_generated/api";
 import { Button } from "./ui/Button";
 import {
   DropdownMenu,
@@ -15,6 +18,13 @@ import { useUser } from "../UserContextProvider";
 
 export function UserMenu() {
   const { user, signOut } = useUser();
+  const analyticsAccess = useQuery(api.data.analytics.viewerCanAccessAnalytics);
+  const internalUserAdminAccess = useQuery(
+    api.data.internalUserAdmin.viewerCanAccessInternalUserAdmin,
+  );
+  const externalUserAdminAccess = useQuery(
+    api.data.externalUserAdmin.viewerCanAccessExternalUserAdmin,
+  );
   const [imageError, setImageError] = useState(false);
 
   if (!user) return null;
@@ -67,6 +77,39 @@ export function UserMenu() {
           </div>
         </DropdownMenuLabel>
         <DropdownMenuSeparator />
+        {analyticsAccess?.canAccess && (
+          <>
+            <DropdownMenuItem asChild className="cursor-pointer">
+              <Link href="/workspace/analytics">
+                <BarChart3 className="mr-2 h-4 w-4" />
+                <span>Analytics</span>
+              </Link>
+            </DropdownMenuItem>
+            <DropdownMenuSeparator />
+          </>
+        )}
+        {internalUserAdminAccess?.canAccess && (
+          <>
+            <DropdownMenuItem asChild className="cursor-pointer">
+              <Link href="/workspace/users">
+                <UserCog className="mr-2 h-4 w-4" />
+                <span>Usuarios internos</span>
+              </Link>
+            </DropdownMenuItem>
+            <DropdownMenuSeparator />
+          </>
+        )}
+        {externalUserAdminAccess?.canAccess && (
+          <>
+            <DropdownMenuItem asChild className="cursor-pointer">
+              <Link href="/workspace/external-users">
+                <UserPlus className="mr-2 h-4 w-4" />
+                <span>Usuarios externos</span>
+              </Link>
+            </DropdownMenuItem>
+            <DropdownMenuSeparator />
+          </>
+        )}
         <DropdownMenuItem onClick={signOut} className="cursor-pointer">
           <LogOut className="mr-2 h-4 w-4" />
           <span>Cerrar sesión</span>
