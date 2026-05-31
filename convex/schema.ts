@@ -180,6 +180,21 @@ export default defineSchema({
     .index("by_task_and_trello", ["taskId", "trelloAttachmentId"])
     .index("by_trelloSyncStatus", ["trelloSyncStatus"]),
 
+  corInboundSyncState: defineTable({
+    key: v.string(),
+    taskStatusIndex: v.number(),
+    taskCursor: v.optional(v.string()),
+    projectStatusIndex: v.number(),
+    projectCursor: v.optional(v.string()),
+    leaseUntil: v.optional(v.number()),
+    lastRunAt: v.optional(v.number()),
+    lastCompletedAt: v.optional(v.number()),
+    lastError: v.optional(v.string()),
+    lastTaskCount: v.optional(v.number()),
+    lastProjectCount: v.optional(v.number()),
+    updatedAt: v.number(),
+  }).index("by_key", ["key"]),
+
   evaluationThreads: defineTable({
     taskId: v.id("tasks"),
     originalThreadId: v.string(),

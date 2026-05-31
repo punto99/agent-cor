@@ -30,8 +30,28 @@ import { CORNotFoundError } from "../integrations/corProvider";
 import { hashText } from "../lib/briefFormat";
 import { applyProjectDeliverablesDelta } from "../lib/deliverableAnalytics";
 
-const SCHEDULED_SYNC_BATCH_SIZE = 100;
+const SCHEDULED_SYNC_STATE_KEY = "scheduled-cor-inbound-sync";
+const SCHEDULED_SYNC_LEASE_MS = 8 * 60 * 1000;
+const SCHEDULED_TASKS_PER_RUN = 20;
+const SCHEDULED_PROJECTS_PER_RUN = 10;
+const SCHEDULED_WORKER_STAGGER_MS = 750;
+const SCHEDULED_ATTACHMENT_DELAY_MS = 60_000;
+const MAX_COR_ATTACHMENT_BYTES = 25 * 1024 * 1024;
 const TASK_LOCAL_EDIT_GRACE_MS = 60_000;
+
+const SCHEDULED_TASK_STATUSES = [
+  "nueva",
+  "en_proceso",
+  "en_revision",
+  "en_diseno",
+  "estancada",
+] as const;
+
+const SCHEDULED_PROJECT_STATUSES = [
+  "active",
+  "in_process",
+  "suspended",
+] as const;
 
 function parseCORTaskId(raw: unknown): number | null {
   if (raw === null || raw === undefined) return null;
@@ -183,6 +203,15 @@ async function syncTaskAttachmentsFromCOR(
       );
       continue;
     }
+    if (
+      remoteAttachment.size !== undefined &&
+      remoteAttachment.size > MAX_COR_ATTACHMENT_BYTES
+    ) {
+      console.warn(
+        `[InboundSync][Attachments] ⚠️ Attachment ${corAttachmentId} pesa ${remoteAttachment.size} bytes y supera el límite seguro de sync, se omite`,
+      );
+      continue;
+    }
 
     try {
       const response = await fetch(remoteAttachment.url);
@@ -192,8 +221,26 @@ async function syncTaskAttachmentsFromCOR(
         );
         continue;
       }
+      const contentLength = response.headers.get("content-length");
+      const contentBytes = contentLength ? Number(contentLength) : null;
+      if (
+        contentBytes !== null &&
+        Number.isFinite(contentBytes) &&
+        contentBytes > MAX_COR_ATTACHMENT_BYTES
+      ) {
+        console.warn(
+          `[InboundSync][Attachments] ⚠️ Attachment ${corAttachmentId} pesa ${contentBytes} bytes y supera el límite seguro de sync, se omite`,
+        );
+        continue;
+      }
 
       const buffer = await response.arrayBuffer();
+      if (buffer.byteLength > MAX_COR_ATTACHMENT_BYTES) {
+        console.warn(
+          `[InboundSync][Attachments] ⚠️ Attachment ${corAttachmentId} pesa ${buffer.byteLength} bytes y supera el límite seguro de sync, se omite`,
+        );
+        continue;
+      }
       const mimeType =
         remoteAttachment.mimeType ||
         response.headers.get("content-type") ||
@@ -466,43 +513,204 @@ export const pullFromCORAction = internalAction({
 
 // ==================== SCHEDULED INBOUND SYNC (cron) ====================
 
+function normalizeScheduledIndex(index: number, length: number) {
+  return ((index % length) + length) % length;
+}
+
+async function getNextScheduledPage(
+  ctx: any,
+  args: {
+    kind: "tasks" | "projects";
+    statuses: readonly string[];
+    statusIndex: number;
+    cursor: string;
+    numItems: number;
+  },
+) {
+  let statusIndex = normalizeScheduledIndex(
+    args.statusIndex,
+    args.statuses.length,
+  );
+  let cursor: string | null = args.cursor || null;
+
+  for (let attempt = 0; attempt < args.statuses.length; attempt += 1) {
+    const status = args.statuses[statusIndex];
+    const page = await ctx.runQuery(
+      args.kind === "tasks"
+        ? internal.data.corInboundSync.listTasksForScheduledPull
+        : internal.data.corInboundSync.listProjectsForScheduledPull,
+      {
+        status,
+        paginationOpts: {
+          cursor,
+          numItems: args.numItems,
+        },
+      },
+    );
+
+    const nextStatusIndex = page.isDone
+      ? normalizeScheduledIndex(statusIndex + 1, args.statuses.length)
+      : statusIndex;
+    const nextCursor = page.isDone ? "" : page.continueCursor;
+
+    if (page.page.length > 0 || !page.isDone) {
+      return {
+        status,
+        page: page.page,
+        nextStatusIndex,
+        nextCursor,
+      };
+    }
+
+    statusIndex = nextStatusIndex;
+    cursor = null;
+  }
+
+  return {
+    status: args.statuses[statusIndex],
+    page: [],
+    nextStatusIndex: statusIndex,
+    nextCursor: "",
+  };
+}
+
 /**
- * Lista paginada de tasks locales para sync programado.
- * Incluye todas las tasks de la tabla; las no publicadas se omiten en worker.
+ * Lista paginada de tasks locales activas para sync programado.
+ * Las finalizadas quedan fuera del cron normal.
  */
 export const listTasksForScheduledPull = internalQuery({
   args: {
+    status: v.string(),
     paginationOpts: paginationOptsValidator,
   },
   handler: async (ctx, args) => {
     return await ctx.db
       .query("tasks")
+      .withIndex("by_status", (q) => q.eq("status", args.status))
       .filter((q) => q.neq(q.field("convexStatus"), "deleted"))
-      .order("asc")
       .paginate(args.paginationOpts);
   },
 });
 
 /**
- * Lista paginada de proyectos locales para sync programado.
- * Incluye todos los proyectos de la tabla; los no publicados se omiten en worker.
+ * Lista paginada de proyectos locales activos para sync programado.
+ * Los finalizados quedan fuera del cron normal.
  */
 export const listProjectsForScheduledPull = internalQuery({
   args: {
+    status: v.string(),
     paginationOpts: paginationOptsValidator,
   },
   handler: async (ctx, args) => {
     return await ctx.db
       .query("projects")
+      .withIndex("by_status", (q) => q.eq("status", args.status))
       .filter((q) => q.neq(q.field("convexStatus"), "deleted"))
-      .order("asc")
       .paginate(args.paginationOpts);
+  },
+});
+
+export const claimScheduledInboundSyncRun = internalMutation({
+  args: {},
+  handler: async (ctx) => {
+    const now = Date.now();
+    const existing = await ctx.db
+      .query("corInboundSyncState")
+      .withIndex("by_key", (q) => q.eq("key", SCHEDULED_SYNC_STATE_KEY))
+      .unique();
+
+    if (existing?.leaseUntil && existing.leaseUntil > now) {
+      return {
+        claimed: false as const,
+        leaseUntil: existing.leaseUntil,
+      };
+    }
+
+    const baseState = {
+      taskStatusIndex: existing?.taskStatusIndex ?? 0,
+      taskCursor: existing?.taskCursor ?? "",
+      projectStatusIndex: existing?.projectStatusIndex ?? 0,
+      projectCursor: existing?.projectCursor ?? "",
+    };
+
+    const patch = {
+      ...baseState,
+      leaseUntil: now + SCHEDULED_SYNC_LEASE_MS,
+      lastRunAt: now,
+      lastError: "",
+      updatedAt: now,
+    };
+
+    if (existing) {
+      await ctx.db.patch(existing._id, patch);
+    } else {
+      await ctx.db.insert("corInboundSyncState", {
+        key: SCHEDULED_SYNC_STATE_KEY,
+        ...patch,
+      });
+    }
+
+    return {
+      claimed: true as const,
+      ...baseState,
+    };
+  },
+});
+
+export const completeScheduledInboundSyncRun = internalMutation({
+  args: {
+    taskStatusIndex: v.number(),
+    taskCursor: v.string(),
+    projectStatusIndex: v.number(),
+    projectCursor: v.string(),
+    taskCount: v.number(),
+    projectCount: v.number(),
+  },
+  handler: async (ctx, args) => {
+    const state = await ctx.db
+      .query("corInboundSyncState")
+      .withIndex("by_key", (q) => q.eq("key", SCHEDULED_SYNC_STATE_KEY))
+      .unique();
+    if (!state) return;
+
+    const now = Date.now();
+    await ctx.db.patch(state._id, {
+      taskStatusIndex: args.taskStatusIndex,
+      taskCursor: args.taskCursor,
+      projectStatusIndex: args.projectStatusIndex,
+      projectCursor: args.projectCursor,
+      leaseUntil: 0,
+      lastCompletedAt: now,
+      lastError: "",
+      lastTaskCount: args.taskCount,
+      lastProjectCount: args.projectCount,
+      updatedAt: now,
+    });
+  },
+});
+
+export const failScheduledInboundSyncRun = internalMutation({
+  args: {
+    error: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const state = await ctx.db
+      .query("corInboundSyncState")
+      .withIndex("by_key", (q) => q.eq("key", SCHEDULED_SYNC_STATE_KEY))
+      .unique();
+    if (!state) return;
+
+    await ctx.db.patch(state._id, {
+      leaseUntil: 0,
+      lastError: args.error,
+      updatedAt: Date.now(),
+    });
   },
 });
 
 /**
  * Orquestador programado por cron (cada 10 min).
- * Recorre completamente tasks y proyectos en lotes y schedula workers para cada entidad.
+ * Avanza por lotes pequeños sobre tasks/proyectos activos y continúa en la próxima corrida.
  */
 export const runScheduledInboundSyncAction = internalAction({
   args: {},
@@ -513,70 +721,77 @@ export const runScheduledInboundSyncAction = internalAction({
     );
     console.log("========================================\n");
 
-    let taskCount = 0;
-    let projectCount = 0;
+    const state = await ctx.runMutation(
+      internal.data.corInboundSync.claimScheduledInboundSyncRun,
+      {},
+    );
 
-    let taskCursor: string | null = null;
-    while (true) {
-      const tasksPage: {
-        page: Array<{ _id: Id<"tasks"> }>;
-        isDone: boolean;
-        continueCursor: string;
-      } = await ctx.runQuery(
-        internal.data.corInboundSync.listTasksForScheduledPull,
-        {
-          paginationOpts: {
-            cursor: taskCursor,
-            numItems: SCHEDULED_SYNC_BATCH_SIZE,
-          },
-        },
+    if (!state.claimed) {
+      console.log(
+        `[InboundSync][Cron] ⏭️ Hay otra corrida activa hasta ${state.leaseUntil}, se omite`,
       );
+      return;
+    }
 
-      for (const task of tasksPage.page) {
+    try {
+      const tasksPage = await getNextScheduledPage(ctx, {
+        kind: "tasks",
+        statuses: SCHEDULED_TASK_STATUSES,
+        statusIndex: state.taskStatusIndex,
+        cursor: state.taskCursor,
+        numItems: SCHEDULED_TASKS_PER_RUN,
+      });
+
+      const projectsPage = await getNextScheduledPage(ctx, {
+        kind: "projects",
+        statuses: SCHEDULED_PROJECT_STATUSES,
+        statusIndex: state.projectStatusIndex,
+        cursor: state.projectCursor,
+        numItems: SCHEDULED_PROJECTS_PER_RUN,
+      });
+
+      let delay = 0;
+      for (const task of tasksPage.page as Array<{ _id: Id<"tasks"> }>) {
         await ctx.scheduler.runAfter(
-          0,
+          delay,
           internal.data.corInboundSync.pullTaskFromCORWorker,
           { taskId: task._id },
         );
-        taskCount += 1;
+        delay += SCHEDULED_WORKER_STAGGER_MS;
       }
 
-      if (tasksPage.isDone) break;
-      taskCursor = tasksPage.continueCursor;
-    }
-
-    let projectCursor: string | null = null;
-    while (true) {
-      const projectsPage: {
-        page: Array<{ _id: Id<"projects"> }>;
-        isDone: boolean;
-        continueCursor: string;
-      } = await ctx.runQuery(
-        internal.data.corInboundSync.listProjectsForScheduledPull,
-        {
-          paginationOpts: {
-            cursor: projectCursor,
-            numItems: SCHEDULED_SYNC_BATCH_SIZE,
-          },
-        },
-      );
-
-      for (const project of projectsPage.page) {
+      for (const project of projectsPage.page as Array<{ _id: Id<"projects"> }>) {
         await ctx.scheduler.runAfter(
-          0,
+          delay,
           internal.data.corInboundSync.pullProjectFromCORWorker,
           { projectId: project._id },
         );
-        projectCount += 1;
+        delay += SCHEDULED_WORKER_STAGGER_MS;
       }
 
-      if (projectsPage.isDone) break;
-      projectCursor = projectsPage.continueCursor;
-    }
+      await ctx.runMutation(
+        internal.data.corInboundSync.completeScheduledInboundSyncRun,
+        {
+          taskStatusIndex: tasksPage.nextStatusIndex,
+          taskCursor: tasksPage.nextCursor,
+          projectStatusIndex: projectsPage.nextStatusIndex,
+          projectCursor: projectsPage.nextCursor,
+          taskCount: tasksPage.page.length,
+          projectCount: projectsPage.page.length,
+        },
+      );
 
-    console.log(
-      `[InboundSync][Cron] ✅ Corrida programada despachada. Tasks: ${taskCount}, Proyectos: ${projectCount}`,
-    );
+      console.log(
+        `[InboundSync][Cron] ✅ Corrida despachada. Tasks: ${tasksPage.page.length} (${tasksPage.status}), Proyectos: ${projectsPage.page.length} (${projectsPage.status})`,
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      await ctx.runMutation(
+        internal.data.corInboundSync.failScheduledInboundSyncRun,
+        { error: message },
+      );
+      throw error;
+    }
   },
 });
 
@@ -594,6 +809,13 @@ export const pullTaskFromCORWorker = internalAction({
     });
 
     if (!task) return;
+
+    if (task.status === "finalizada") {
+      console.log(
+        `[InboundSync][Cron] ⏭️ Task ${args.taskId} finalizada, se omite`,
+      );
+      return;
+    }
 
     if (!task.corTaskId) {
       console.log(
@@ -679,7 +901,54 @@ export const pullTaskFromCORWorker = internalAction({
       );
     }
 
-    await syncTaskAttachmentsFromCOR(ctx, args.taskId, corTaskId);
+    await ctx.scheduler.runAfter(
+      SCHEDULED_ATTACHMENT_DELAY_MS,
+      internal.data.corInboundSync.pullTaskAttachmentsFromCORWorker,
+      {
+        taskId: args.taskId,
+        corTaskId,
+      },
+    );
+  },
+});
+
+/**
+ * Worker separado para attachments del cron.
+ * Mantiene los archivos sincronizados sin cargar attachments dentro del worker principal.
+ */
+export const pullTaskAttachmentsFromCORWorker = internalAction({
+  args: {
+    taskId: v.id("tasks"),
+    corTaskId: v.number(),
+  },
+  handler: async (ctx, args) => {
+    const task = await ctx.runQuery(internal.data.tasks.getTaskByIdInternal, {
+      taskId: args.taskId as unknown as string,
+    });
+
+    if (!task) return;
+    if (task.status === "finalizada") {
+      console.log(
+        `[InboundSync][Attachments] ⏭️ Task ${args.taskId} finalizada, se omite`,
+      );
+      return;
+    }
+    if (task.corSyncStatus === "syncing" || task.corSyncStatus === "retrying") {
+      console.log(
+        `[InboundSync][Attachments] ⏭️ Task ${args.taskId} en ${task.corSyncStatus}, se omite`,
+      );
+      return;
+    }
+
+    const currentCorTaskId = parseCORTaskId(task.corTaskId);
+    if (currentCorTaskId !== args.corTaskId) {
+      console.warn(
+        `[InboundSync][Attachments] ⚠️ Task ${args.taskId} cambió de corTaskId, se omite`,
+      );
+      return;
+    }
+
+    await syncTaskAttachmentsFromCOR(ctx, args.taskId, args.corTaskId);
   },
 });
 
@@ -700,6 +969,13 @@ export const pullProjectFromCORWorker = internalAction({
     );
 
     if (!project) return;
+
+    if (project.status === "finished") {
+      console.log(
+        `[InboundSync][Cron] ⏭️ Proyecto ${args.projectId} finalizado, se omite`,
+      );
+      return;
+    }
 
     if (!project.corProjectId) {
       console.log(
