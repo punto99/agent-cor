@@ -113,6 +113,8 @@ export interface TenantConfig {
     showPublishToExternalTool: boolean;
     /** Nombre visible de la herramienta externa (ej: "COR", "Trello") */
     externalToolName: string;
+    /** COR client IDs donde se muestra la publicación manual a Trello */
+    trelloPublishCorClientIds: number[];
     sidebarWidth: string;
   };
 }
@@ -205,6 +207,7 @@ const activeTenantConfig: TenantConfig = {
     inputPlaceholder: "Escribe tu mensaje aquí...",
     showPublishToExternalTool: true,
     externalToolName: "COR",
+    trelloPublishCorClientIds: [178768],
     sidebarWidth: "280px",
   },
 };

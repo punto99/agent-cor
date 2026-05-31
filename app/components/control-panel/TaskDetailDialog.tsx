@@ -36,6 +36,10 @@ interface TaskDetailDialogProps {
     projectId?: Id<"projects">;
     corTaskMissingInCOR?: boolean;
     corProjectMissingInCOR?: boolean;
+    trelloCardId?: string;
+    trelloCardUrl?: string;
+    trelloSyncStatus?: string;
+    trelloSyncError?: string;
   };
   onClose: () => void;
   /** Callback cuando la publicación se completa (éxito o error) */
@@ -135,6 +139,13 @@ export function TaskDetailDialog({
 
   const showPublishButton = clientConfig.ui.showPublishToExternalTool;
   const toolName = clientConfig.ui.externalToolName;
+  const liveTaskCorClientId = (liveTask as any)?.corClientId ?? task.corClientId;
+  const liveTaskTrelloCardId =
+    (liveTask as any)?.trelloCardId ?? task.trelloCardId;
+  const showPublishToTrelloButton =
+    typeof liveTaskCorClientId === "number" &&
+    clientConfig.ui.trelloPublishCorClientIds.includes(liveTaskCorClientId) &&
+    !liveTaskTrelloCardId;
 
   // Obtener syncStatus en vivo (preferir liveTask, fallback a task prop)
   const syncStatus = liveTask?.corSyncStatus || task.corSyncStatus || "pending";
@@ -711,6 +722,18 @@ export function TaskDetailDialog({
                     )}
                   </button>
                 )}
+
+              {showPublishToTrelloButton && (
+                <button
+                  type="button"
+                  disabled
+                  title="La publicación en Trello se conectará en el siguiente paso."
+                  className="flex items-center gap-2 px-4 py-2 border border-border rounded-lg text-sm font-medium text-muted-foreground bg-muted/40 disabled:cursor-not-allowed disabled:opacity-70"
+                >
+                  <ExternalLink className="h-4 w-4" />
+                  Publicar en Trello
+                </button>
+              )}
 
               <button
                 onClick={onClose}
