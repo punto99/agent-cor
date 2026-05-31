@@ -31,7 +31,8 @@ export const createExternalTaskTool = createTool({
   description: `Crear un requerimiento externo en Convex para revisión del equipo interno.
   SOLO usar esta herramienta cuando el cliente haya confirmado explícitamente que el resumen está correcto.
   No publica en COR. Para usuarios externos, el sistema también agenda la creación de una card en Trello.
-  Vocabulario para hablar con el usuario: clientBrandId = categoría; subBrandId = marca.`,
+  Vocabulario para hablar con el usuario: clientBrandId = categoría; subBrandId = marca.
+  Todo dato relevante que no tenga campo propio debe ir en additionalBriefDetails para quedar guardado dentro de description.`,
   args: z.object({
     title: z
       .string()
@@ -66,6 +67,12 @@ export const createExternalTaskTool = createTool({
       .string()
       .optional()
       .describe("Personas que deben aprobar este requerimiento"),
+    additionalBriefDetails: z
+      .string()
+      .optional()
+      .describe(
+        "Detalles relevantes del brief que no tienen campo propio: contexto, restricciones, mandatorios, referencias, tono, especificaciones, observaciones legales, links importantes y datos extraídos de documentos. Se guarda dentro de description, no como campo separado.",
+      ),
     priority: z
       .number()
       .optional()
@@ -133,6 +140,7 @@ export const createExternalTaskTool = createTool({
       kpis: args.kpis,
       budget: args.budget,
       approvers: args.approvers,
+      additionalNotes: args.additionalBriefDetails,
     });
     const deliverablesCount = inferDeliverablesCount(args.deliverables);
 
