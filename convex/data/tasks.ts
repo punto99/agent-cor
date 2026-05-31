@@ -428,6 +428,30 @@ export const getTaskByIdInternal = internalQuery({
   },
 });
 
+// Query interna liviana para workers de sync COR.
+// Evita leer campos pesados como description cuando solo se necesitan guardas.
+export const getTaskCORSyncSnapshotInternal = internalQuery({
+  args: {
+    taskId: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const taskId = ctx.db.normalizeId("tasks", args.taskId);
+    if (!taskId) return null;
+
+    const task = await ctx.db.get(taskId);
+    if (task?.convexStatus === "deleted") return null;
+    if (!task) return null;
+
+    return {
+      _id: task._id,
+      status: task.status,
+      corTaskId: task.corTaskId,
+      corSyncStatus: task.corSyncStatus,
+      lastLocalEditAt: task.lastLocalEditAt,
+    };
+  },
+});
+
 // Query interna para obtener task por COR ID
 export const getTaskByCORIdInternal = internalQuery({
   args: {
