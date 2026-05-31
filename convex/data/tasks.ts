@@ -2619,6 +2619,8 @@ export const publishTaskToExternalAction = internalAction({
       let corProjectId: number | undefined;
       let localProjectDeliverables: number | undefined;
       let localProjectPmId: number | undefined;
+      let localProjectBrandId: number | undefined;
+      let localProjectProductId: number | undefined;
       const projectId = (task as any).projectId as string | undefined;
 
       if (projectId) {
@@ -2631,6 +2633,8 @@ export const publishTaskToExternalAction = internalAction({
         );
         localProjectDeliverables = localProject?.deliverables;
         localProjectPmId = localProject?.pmId;
+        localProjectBrandId = localProject?.brandId ?? task.brandId;
+        localProjectProductId = localProject?.productId ?? task.productId;
 
         if (localProject?.corProjectId) {
           // El proyecto ya fue publicado en COR — reutilizar
@@ -2656,6 +2660,8 @@ export const publishTaskToExternalAction = internalAction({
             description: corProjectBrief,
             deadline: localProject?.endDate || task.deadline,
             estimatedTime: localProject?.estimatedTime,
+            brandId: localProjectBrandId,
+            productId: localProjectBrandId ? localProjectProductId : undefined,
           });
 
           corProjectId = project.id;
@@ -2684,6 +2690,8 @@ export const publishTaskToExternalAction = internalAction({
           name: projectName,
           clientId,
           deadline: task.deadline,
+          brandId: task.brandId,
+          productId: task.brandId ? task.productId : undefined,
         });
 
         corProjectId = project.id;

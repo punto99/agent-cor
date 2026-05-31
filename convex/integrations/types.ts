@@ -52,6 +52,8 @@ export interface ExternalProject {
   id: number;
   name: string;
   clientId: number;
+  brandId?: number;
+  productId?: number;
   // Campos de lectura (opcionales — presentes al hacer GET, no necesarios al crear)
   brief?: string;
   startDate?: string;
@@ -96,6 +98,10 @@ export interface CreateProjectInput {
   feeId?: number;
   /** Horas estimadas del proyecto */
   estimatedTime?: number;
+  /** Brand ID en COR (solo si el cliente/proyecto corresponde a una marca) */
+  brandId?: number;
+  /** Product ID en COR (solo si corresponde a una marca y producto) */
+  productId?: number;
 }
 
 export interface CreateTaskInput {
@@ -136,6 +142,8 @@ export interface UpdateProjectInput {
   pmId?: number;
   estimatedTime?: number;
   status?: string;
+  brandId?: number;
+  productId?: number;
 }
 
 export interface UploadTaskAttachmentInput {
@@ -161,12 +169,12 @@ export interface ExternalAttachmentResult {
 
 /**
  * Interface que todo provider de gestión de proyectos debe implementar.
- * 
+ *
  * Providers disponibles:
  * - COR (ProjectCOR): Para clientes que usan COR como herramienta de gestión
  * - Noop: Provider vacío para clientes sin integración externa
  * - Trello: (futuro) Para clientes que usan Trello
- * 
+ *
  * Los providers son funciones puras (no Convex primitives) que se invocan
  * desde dentro de Convex actions.
  */
@@ -218,7 +226,7 @@ export interface ProjectManagementProvider {
    */
   updateTask(
     taskId: number,
-    data: UpdateTaskInput
+    data: UpdateTaskInput,
   ): Promise<{ success: boolean; error?: string }>;
 
   /**
@@ -226,7 +234,7 @@ export interface ProjectManagementProvider {
    * En COR: PUT /tasks/{task_id}/labels
    */
   setTaskLabel(
-    data: SetTaskLabelInput
+    data: SetTaskLabelInput,
   ): Promise<{ success: boolean; error?: string }>;
 
   /**
@@ -236,7 +244,7 @@ export interface ProjectManagementProvider {
    */
   updateProject(
     projectId: number,
-    data: UpdateProjectInput
+    data: UpdateProjectInput,
   ): Promise<{ success: boolean; error?: string }>;
 
   /**
@@ -244,8 +252,12 @@ export interface ProjectManagementProvider {
    * En COR: POST /tasks/{task_id}/attachments (multipart/form-data)
    */
   uploadTaskAttachment(
-    data: UploadTaskAttachmentInput
-  ): Promise<{ success: boolean; attachment?: ExternalAttachmentResult; error?: string }>;
+    data: UploadTaskAttachmentInput,
+  ): Promise<{
+    success: boolean;
+    attachment?: ExternalAttachmentResult;
+    error?: string;
+  }>;
 
   /**
    * Listar TODOS los usuarios del sistema externo.
