@@ -207,7 +207,7 @@ const activeTenantConfig: TenantConfig = {
     inputPlaceholder: "Escribe tu mensaje aquí...",
     showPublishToExternalTool: true,
     externalToolName: "COR",
-    trelloPublishCorClientIds: [178768],
+    trelloPublishCorClientIds: [197246, 178768],
     sidebarWidth: "280px",
   },
 };
