@@ -21,6 +21,10 @@ export interface TenantConfig {
   // ID único del tenant (usado internamente)
   id: string;
 
+  // Usuarios excluidos de administración interna y analíticas.
+  // Usar exclusivamente Id<"users"> de Convex.
+  excludedUserIds: string[];
+
   // Información básica de la marca
   brand: {
     name: string;
@@ -124,6 +128,7 @@ export interface TenantConfig {
 // =====================================================
 const activeTenantConfig: TenantConfig = {
   id: CLIENT_ID,
+  excludedUserIds: ["m17a6x8382hmpt3rxaczgc5p8n81tanb", "m171pkdqs8pjaa0qw0bkqqzh2s81vv8r", "m1784sptbnnaps03h6c81vf8n181t577"],
 
   brand: {
     name: `${CLIENT} AI Assistant`,

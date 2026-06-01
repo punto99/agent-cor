@@ -3,6 +3,7 @@ import { v } from "convex/values";
 import { internal } from "../_generated/api";
 import { mutation, query } from "../_generated/server";
 import { canUserAccessInternalUserAdmin } from "../lib/internalUserAdminAccess";
+import { isExcludedUserId } from "../lib/excludedUsers";
 
 function normalizeEmail(email: unknown) {
   return typeof email === "string" ? email.trim().toLowerCase() : "";
@@ -95,6 +96,7 @@ export const getDashboard = query({
 
     const internalUsers = [];
     for (const user of users) {
+      if (isExcludedUserId(user._id)) continue;
       if (await isExternalUser(ctx, user._id)) continue;
 
       const [corUser, assignments] = await Promise.all([
