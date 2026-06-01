@@ -1165,6 +1165,7 @@ export const validateAndPrepareExternalTask = internalQuery({
       clientBrandId: brand._id,
       corBrandId: brand.corBrandId,
       brandName: brand.name,
+      trelloBoardUrl: brand.trelloBoardUrl,
       subBrandId: subBrand?._id,
       corProductId: subBrand?.corProductId,
       subBrandName: subBrand?.name,

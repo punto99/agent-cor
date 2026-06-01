@@ -277,11 +277,15 @@ export const createExternalTaskTool = createTool({
       );
     }
 
+    const trelloBoardLink = preparation.trelloBoardUrl
+      ? `\nPuedes seguir el avance en el [tablero de Trello](${preparation.trelloBoardUrl}).\n`
+      : "";
+
     return `Listo, el requerimiento quedó guardado para revisión del equipo.
 
 ID del requerimiento: ${result.taskId}
 Proyecto asociado: ${result.projectId}
-
+${trelloBoardLink}
 El equipo interno lo revisará y continuará el proceso.`;
   },
 });
