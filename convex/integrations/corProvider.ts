@@ -24,6 +24,8 @@ import type {
   UpdateProjectInput,
   UploadTaskAttachmentInput,
   ExternalAttachmentResult,
+  ListProjectsInput,
+  ListProjectsResult,
 } from "./types";
 
 // ==================== CONFIGURACIÓN ====================
@@ -190,6 +192,29 @@ function parsePositiveInteger(value: unknown): number | undefined {
     }
   }
   return undefined;
+}
+
+function parseOptionalNumber(value: unknown): number | undefined {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+function mapProjectFromCOR(project: Record<string, unknown>): ExternalProject {
+  return {
+    id: Number(project.id),
+    name: String(project.name || ""),
+    clientId: Number(project.client_id ?? (project.client as any)?.id),
+    brandId: parsePositiveInteger(project.brand_id ?? (project.brand as any)?.id),
+    productId: parsePositiveInteger(
+      project.product_id ?? (project.product as any)?.id,
+    ),
+    brief: project.brief as string | undefined,
+    startDate: project.start as string | undefined,
+    endDate: project.end as string | undefined,
+    deliverables: parseDeliverablesFromCOR(project.deliverables),
+    status: project.status as string | undefined,
+    estimatedTime: project.estimated_time as number | undefined,
+  };
 }
 
 /**
@@ -660,25 +685,79 @@ export function createCORProvider(): ProjectManagementProvider {
 
         const project = JSON.parse(rawProject);
 
-        return {
-          id: project.id,
-          name: project.name,
-          clientId: project.client_id,
-          brandId: parsePositiveInteger(project.brand_id ?? project.brand?.id),
-          productId: parsePositiveInteger(
-            project.product_id ?? project.product?.id,
-          ),
-          brief: project.brief,
-          startDate: project.start,
-          endDate: project.end,
-          deliverables: parseDeliverablesFromCOR(project.deliverables),
-          status: project.status,
-          estimatedTime: project.estimated_time,
-        };
+        return mapProjectFromCOR(project);
       } catch (error) {
         if (error instanceof CORNotFoundError) throw error;
         console.error(`[COR Provider] ❌ Error en getProject:`, error);
         return null;
+      }
+    },
+
+    // ==================== LIST PROJECTS ====================
+
+    async listProjects(data: ListProjectsInput): Promise<ListProjectsResult> {
+      const page = data.page ?? 1;
+      const perPage = data.perPage ?? 20;
+      const filters: Record<string, unknown> = {
+        client_id: data.clientId,
+        archived: data.archived ?? 2,
+      };
+
+      if (data.dateEnd) {
+        filters.dateEnd = data.dateEnd;
+      }
+
+      const params = new URLSearchParams({
+        page: String(page),
+        perPage: String(perPage),
+        filters: JSON.stringify(filters),
+      });
+
+      console.log(
+        `[COR Provider] 📋 Listando proyectos COR: ${params.toString()}`,
+      );
+
+      try {
+        const response = await corApiFetch(`/projects?${params.toString()}`);
+
+        if (!response.ok) {
+          const errorText = await response.text();
+          throw new Error(
+            `Error listando proyectos en COR: ${response.status} - ${errorText}`,
+          );
+        }
+
+        const result = (await response.json()) as
+          | CORPaginatedResponse<Record<string, unknown>>
+          | Record<string, unknown>[];
+        const rawProjects = Array.isArray(result) ? result : result.data || [];
+        const projects = rawProjects
+          .map(mapProjectFromCOR)
+          .filter(
+            (project) =>
+              Number.isFinite(project.id) &&
+              Number.isFinite(project.clientId) &&
+              project.name.trim().length > 0,
+          );
+
+        return {
+          projects,
+          page: Array.isArray(result)
+            ? page
+            : parseOptionalNumber(result.page) ?? page,
+          perPage: Array.isArray(result)
+            ? perPage
+            : parseOptionalNumber(result.perPage) ?? perPage,
+          total: Array.isArray(result)
+            ? undefined
+            : parseOptionalNumber(result.total),
+          lastPage: Array.isArray(result)
+            ? undefined
+            : parseOptionalNumber(result.lastPage),
+        };
+      } catch (error) {
+        console.error("[COR Provider] ❌ Error en listProjects:", error);
+        throw error;
       }
     },
 

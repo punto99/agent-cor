@@ -8,6 +8,7 @@
 
 import { v } from "convex/values";
 import {
+  action,
   query,
   mutation,
   internalMutation,
@@ -39,6 +40,17 @@ async function hasFullClientAccess(ctx: any, clientId: any, userId: any) {
   return assignments.some((assignment: any) => assignment.brandId === undefined);
 }
 
+async function hasAnyClientAccess(ctx: any, clientId: any, userId: any) {
+  const assignments = await ctx.db
+    .query("clientUserAssignments")
+    .withIndex("by_client_and_user", (q: any) =>
+      q.eq("clientId", clientId).eq("userId", userId)
+    )
+    .collect();
+
+  return assignments.length > 0;
+}
+
 async function hasProjectAccess(ctx: any, project: any, userId: any) {
   if (project.clientBrandId) {
     const brand = await ctx.db.get(project.clientBrandId);
@@ -67,6 +79,31 @@ async function hasProjectAccess(ctx: any, project: any, userId: any) {
   }
 
   return project.createdBy === String(userId);
+}
+
+function normalizePage(value: number | undefined, fallback: number) {
+  if (typeof value !== "number" || !Number.isFinite(value)) return fallback;
+  return Math.max(1, Math.trunc(value));
+}
+
+function normalizePerPage(value: number | undefined, fallback: number) {
+  if (typeof value !== "number" || !Number.isFinite(value)) return fallback;
+  return Math.min(50, Math.max(1, Math.trunc(value)));
+}
+
+function normalizeDateEnd(value: string | undefined) {
+  const dateEnd = value?.trim() || new Date().toISOString().slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(dateEnd)) {
+    throw new Error("La fecha de búsqueda de proyectos no es válida.");
+  }
+  return dateEnd;
+}
+
+function projectEndsBefore(projectEndDate: string | undefined, dateEnd: string) {
+  if (!projectEndDate) return false;
+  const normalizedEndDate = projectEndDate.slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(normalizedEndDate)) return false;
+  return normalizedEndDate < dateEnd;
 }
 
 // ==================== QUERIES ====================
@@ -162,6 +199,97 @@ export const getProjectInternal = internalQuery({
     const project = await ctx.db.get(args.projectId);
     if (project?.convexStatus === "deleted") return null;
     return project;
+  },
+});
+
+export const getCORProjectSearchContext = internalQuery({
+  args: {
+    clientId: v.id("corClients"),
+    userId: v.id("users"),
+  },
+  handler: async (ctx, args) => {
+    if (await isExternalUser(ctx, args.userId)) {
+      return {
+        ok: false,
+        error: "Esta búsqueda está disponible solo para usuarios internos.",
+      };
+    }
+
+    const client = await ctx.db.get(args.clientId);
+    if (!client) {
+      return {
+        ok: false,
+        error: "Cliente no encontrado.",
+      };
+    }
+
+    const hasAccess = await hasAnyClientAccess(ctx, args.clientId, args.userId);
+    if (!hasAccess) {
+      return {
+        ok: false,
+        error: "No tienes permisos para consultar proyectos de este cliente.",
+      };
+    }
+
+    return {
+      ok: true,
+      clientId: client._id,
+      clientName: client.name,
+      corClientId: client.corClientId,
+    };
+  },
+});
+
+export const searchActiveCORProjectsForClient = action({
+  args: {
+    clientId: v.id("corClients"),
+    dateEnd: v.optional(v.string()),
+    page: v.optional(v.number()),
+    perPage: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) throw new Error("No autenticado");
+
+    const searchContext: any = await ctx.runQuery(
+      internal.data.projects.getCORProjectSearchContext,
+      { clientId: args.clientId, userId },
+    );
+    if (!searchContext?.ok) {
+      throw new Error(
+        searchContext?.error || "No se pudo consultar proyectos para este cliente.",
+      );
+    }
+
+    const dateEnd = normalizeDateEnd(args.dateEnd);
+    const page = normalizePage(args.page, 1);
+    const perPage = normalizePerPage(args.perPage, 20);
+    const provider = getProjectManagementProvider();
+    const result = await provider.listProjects({
+      clientId: searchContext.corClientId,
+      dateEnd,
+      page,
+      perPage,
+      archived: 2,
+    });
+
+    const projects = result.projects.filter(
+      (project) => !projectEndsBefore(project.endDate, dateEnd),
+    );
+
+    return {
+      client: {
+        clientId: searchContext.clientId,
+        name: searchContext.clientName,
+        corClientId: searchContext.corClientId,
+      },
+      dateEnd,
+      projects,
+      page: result.page,
+      perPage: result.perPage,
+      total: result.total,
+      lastPage: result.lastPage,
+    };
   },
 });
 

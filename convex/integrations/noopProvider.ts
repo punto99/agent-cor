@@ -24,6 +24,8 @@ import type {
   SetTaskLabelInput,
   UpdateProjectInput,
   UploadTaskAttachmentInput,
+  ListProjectsInput,
+  ListProjectsResult,
 } from "./types";
 // ExternalProject is used in getProject return type via the interface
 
@@ -74,6 +76,11 @@ export function createNoopProvider(): ProjectManagementProvider {
     async getProject(_projectId: number): Promise<ExternalProject | null> {
       console.log("[Noop Provider] getProject — no hay integración externa configurada");
       return null;
+    },
+
+    async listProjects(_data: ListProjectsInput): Promise<ListProjectsResult> {
+      console.log("[Noop Provider] listProjects — no hay integración externa configurada");
+      return { projects: [], page: 1, perPage: 20 };
     },
 
     async updateTask(

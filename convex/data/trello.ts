@@ -1385,15 +1385,23 @@ export const startPublishTaskToTrello = mutation({
       throw new Error("Proyecto no encontrado.");
     }
 
-    const deliverablesCount =
+    const taskDeliverablesCount =
+      typeof task.deliverablesCount === "number" &&
+      Number.isFinite(task.deliverablesCount) &&
+      task.deliverablesCount > 0
+        ? Math.trunc(task.deliverablesCount)
+        : undefined;
+    const projectDeliverablesCount =
       typeof project.deliverables === "number" &&
       Number.isFinite(project.deliverables) &&
       project.deliverables > 0
         ? Math.trunc(project.deliverables)
         : undefined;
+    const deliverablesCount = taskDeliverablesCount ?? projectDeliverablesCount;
+
     if (!deliverablesCount) {
       throw new Error(
-        "El proyecto no tiene una cantidad de entregables válida para publicar en Trello.",
+        "La task no tiene una cantidad de entregables válida para publicar en Trello.",
       );
     }
 

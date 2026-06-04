@@ -146,6 +146,22 @@ export interface UpdateProjectInput {
   productId?: number;
 }
 
+export interface ListProjectsInput {
+  clientId: number;
+  dateEnd?: string;
+  page?: number;
+  perPage?: number;
+  archived?: 1 | 2;
+}
+
+export interface ListProjectsResult {
+  projects: ExternalProject[];
+  page: number;
+  perPage: number;
+  total?: number;
+  lastPage?: number;
+}
+
 export interface UploadTaskAttachmentInput {
   /** ID de la task en el sistema externo */
   taskId: number;
@@ -218,6 +234,12 @@ export interface ProjectManagementProvider {
    * Retorna null si no se encuentra.
    */
   getProject(projectId: number): Promise<ExternalProject | null>;
+
+  /**
+   * Listar proyectos del sistema externo con filtros.
+   * En COR: GET /projects?filters={...}
+   */
+  listProjects(data: ListProjectsInput): Promise<ListProjectsResult>;
 
   /**
    * Actualizar una task existente en el sistema externo.
