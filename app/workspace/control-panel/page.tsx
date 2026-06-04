@@ -38,6 +38,7 @@ interface FullTask {
   title: string;
   description?: string;
   deadline?: string;
+  deliverablesCount?: number;
   priority?: number; // 0=Low, 1=Medium, 2=High, 3=Urgent
   strategicPriority?: "I_U" | "I_NU" | "NI_U" | "NI_NU";
   status: string;

@@ -501,6 +501,7 @@ export const updateTaskFields = mutation({
       title: v.optional(v.string()),
       description: v.optional(v.string()),
       deadline: v.optional(v.string()),
+      deliverablesCount: v.optional(v.number()),
       priority: v.optional(v.number()), // 0=Low, 1=Medium, 2=High, 3=Urgent
       status: v.optional(v.string()), // nueva, en_proceso, estancada, finalizada
       strategicPriority: v.optional(
@@ -555,6 +556,15 @@ export const updateTaskFields = mutation({
 
     if (Object.keys(updateData).length === 0) return args.taskId;
 
+    if (
+      updateData.deliverablesCount !== undefined &&
+      (task.corSyncStatus === "synced" || task.corTaskId)
+    ) {
+      throw new Error(
+        "La cantidad de entregables solo se puede editar antes de publicar la tarea en COR.",
+      );
+    }
+
     const updateKeys = Object.keys(updateData);
     if (updateKeys.includes("description")) {
       const descriptionError = validateDescriptionUpdate(
@@ -577,10 +587,19 @@ export const updateTaskFields = mutation({
     const changedFields = Object.keys(args.updates).filter(
       (k) => (args.updates as any)[k] !== undefined,
     );
-    await ctx.scheduler.runAfter(0, internal.data.tasks.scheduleTaskSyncToCOR, {
-      taskId: args.taskId,
-      changedFields,
-    });
+    const syncableChangedFields = changedFields.filter((field) =>
+      COR_SYNCABLE_FIELDS.has(field),
+    );
+    if (syncableChangedFields.length > 0) {
+      await ctx.scheduler.runAfter(
+        0,
+        internal.data.tasks.scheduleTaskSyncToCOR,
+        {
+          taskId: args.taskId,
+          changedFields: syncableChangedFields,
+        },
+      );
+    }
 
     return args.taskId;
   },

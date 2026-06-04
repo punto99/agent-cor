@@ -23,6 +23,7 @@ interface EditableInfoItemProps {
   value: string;
   fieldKey: string;
   multiline?: boolean;
+  inputType?: "text" | "number";
   editable?: boolean;
   onSave?: (fieldKey: string, newValue: string) => Promise<void>;
 }
@@ -37,6 +38,7 @@ function EditableInfoItem({
   value,
   fieldKey,
   multiline = false,
+  inputType = "text",
   editable = false,
   onSave,
 }: EditableInfoItemProps) {
@@ -125,7 +127,7 @@ function EditableInfoItem({
               ) : (
                 <input
                   ref={inputRef as React.RefObject<HTMLInputElement>}
-                  type="text"
+                  type={inputType}
                   value={editValue}
                   onChange={(e) => setEditValue(e.target.value)}
                   onKeyDown={handleKeyDown}
@@ -633,6 +635,18 @@ export function TaskBriefContent({
       showSyncFeedback();
       return;
     }
+    if (fieldKey === "deliverablesCount") {
+      const numValue = parseInt(newValue, 10);
+      await updateTask({
+        taskId: task._id,
+        updates: {
+          deliverablesCount:
+            Number.isFinite(numValue) && numValue > 0 ? numValue : undefined,
+        },
+      });
+      showSyncFeedback();
+      return;
+    }
     await updateTask({
       taskId: task._id,
       updates: { [fieldKey]: newValue },
@@ -739,6 +753,23 @@ export function TaskBriefContent({
             onSave={handleSaveField}
           />
         )}
+
+        {(task.deliverablesCount !== undefined || editable) && (
+          <EditableInfoItem
+            icon="📦"
+            label="Cantidad de Entregables"
+            value={
+              task.deliverablesCount !== undefined
+                ? String(task.deliverablesCount)
+                : ""
+            }
+            fieldKey="deliverablesCount"
+            inputType="number"
+            editable={editable}
+            onSave={handleSaveField}
+          />
+        )}
+
         {(task.priority !== undefined || editable) && (
           <EditableSelectItem
             icon="⚡"
