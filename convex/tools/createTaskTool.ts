@@ -54,6 +54,7 @@ export const createTaskTool = createTool({
   
   Los campos se guardan automaticamente en sus fields correspondientes:
   - title, deadline, priority → fields dedicados de la task
+  - El sistema antepone la nomenclatura del cliente al title y guarda project/task en mayúsculas.
   - deliverables (texto) → description de la task
   - deliverables (cantidad) → field numérico del proyecto asociado
   - El resto (requestType, brand, objective, keyMessage, kpis, budget, approvers, additionalBriefDetails) → se combinan en el campo description
@@ -63,7 +64,7 @@ export const createTaskTool = createTool({
     title: z
       .string()
       .describe(
-        "Titulo breve y descriptivo del proyecto (ej: Campaña de verano Coca-Cola)",
+        'Nombre general de la task y mes/año de entrega, sin nomenclatura ni cliente. Formato: "{Nombre general} - {Mes Año}" (ej: "Campaña institucional - Junio 2026").',
       ),
     requestType: z.string().describe("Tipo de requerimiento - OBLIGATORIO"),
     brand: z
@@ -260,10 +261,12 @@ export const createTaskTool = createTool({
     // El agente envía el título SIN prefijo de cliente.
     // El sistema lo antepone automáticamente.
     // ====================================================
-    const clientPrefix = args.nomenclature || args.corClientName;
-    const fullTitle = clientPrefix
-      ? `${clientPrefix} - ${args.title}`
-      : args.title;
+    const clientPrefix = (args.nomenclature || args.corClientName || "").trim();
+    const titleBase = args.title.trim();
+    const fullTitle = (clientPrefix
+      ? `${clientPrefix} - ${titleBase}`
+      : titleBase
+    ).toLocaleUpperCase("es");
 
     // ====================================================
     // Construir description con toda la info del brief
