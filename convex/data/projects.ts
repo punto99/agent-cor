@@ -726,6 +726,47 @@ export const updateProjectPublishStatus = internalMutation({
   },
 });
 
+export const attachProjectToExistingCORProject = internalMutation({
+  args: {
+    projectId: v.id("projects"),
+    corProjectId: v.number(),
+    name: v.optional(v.string()),
+    brief: v.optional(v.string()),
+    startDate: v.optional(v.string()),
+    endDate: v.optional(v.string()),
+    status: v.optional(v.string()),
+    deliverables: v.optional(v.number()),
+    estimatedTime: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const previousProject = await ctx.db.get(args.projectId);
+    if (!previousProject) throw new Error("Proyecto no encontrado");
+
+    const updates: Record<string, unknown> = {
+      corProjectId: args.corProjectId,
+      corSyncStatus: "synced",
+      corSyncError: undefined,
+      corSyncedAt: Date.now(),
+      corSyncAttempt: 0,
+      corMissingInCOR: undefined,
+    };
+
+    if (args.name !== undefined) updates.name = args.name;
+    if (args.brief !== undefined) updates.brief = args.brief;
+    if (args.startDate !== undefined) updates.startDate = args.startDate;
+    if (args.endDate !== undefined) updates.endDate = args.endDate;
+    if (args.status !== undefined) updates.status = args.status;
+    if (args.deliverables !== undefined) updates.deliverables = args.deliverables;
+    if (args.estimatedTime !== undefined) {
+      updates.estimatedTime = args.estimatedTime;
+    }
+
+    await ctx.db.patch(args.projectId, updates);
+    const updatedProject = await ctx.db.get(args.projectId);
+    await applyProjectDeliverablesDelta(ctx, previousProject, updatedProject);
+  },
+});
+
 /**
  * Mutation pública: reintento manual de sincronización de proyecto con COR.
  * Llamada desde la UI cuando el usuario hace clic en "Reintentar" después de un error.

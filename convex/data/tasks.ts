@@ -210,6 +210,13 @@ function validatePublishableDescription(description: unknown): string | null {
   return null;
 }
 
+function isDateBeforeToday(value: string | undefined): boolean {
+  if (!value) return false;
+  const date = value.slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return false;
+  return date < new Date().toISOString().slice(0, 10);
+}
+
 async function syncStrategicPriorityLabelInCOR(
   taskId: number,
   strategicPriority: StrategicPriority,
@@ -2561,6 +2568,7 @@ async function uploadPendingAttachmentsToCOR(
 export const startPublishTaskToExternal = mutation({
   args: {
     taskId: v.id("tasks"),
+    existingCorProjectId: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     // Verificar autenticación usando getAuthUserId (consistente con el resto del codebase)
@@ -2600,6 +2608,14 @@ export const startPublishTaskToExternal = mutation({
       throw new Error(
         "No se puede publicar: no hay un cliente asociado a esta tarea.",
       );
+    }
+
+    if (
+      args.existingCorProjectId !== undefined &&
+      (!Number.isInteger(args.existingCorProjectId) ||
+        args.existingCorProjectId <= 0)
+    ) {
+      throw new Error("El proyecto seleccionado no es válido.");
     }
 
     const descriptionError = validatePublishableDescription(task.description);
@@ -2652,6 +2668,7 @@ export const startPublishTaskToExternal = mutation({
       internal.data.tasks.publishTaskToExternalAction,
       {
         taskId: args.taskId,
+        existingCorProjectId: args.existingCorProjectId,
       },
     );
 
@@ -2673,6 +2690,7 @@ export const startPublishTaskToExternal = mutation({
 export const publishTaskToExternalAction = internalAction({
   args: {
     taskId: v.id("tasks"),
+    existingCorProjectId: v.optional(v.number()),
     attempt: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
@@ -2735,9 +2753,65 @@ export const publishTaskToExternalAction = internalAction({
       let localProjectPmId: number | undefined;
       let localProjectBrandId: number | undefined;
       let localProjectProductId: number | undefined;
+      let shouldUpdateProjectFields = true;
       const projectId = (task as any).projectId as string | undefined;
 
-      if (projectId) {
+      if (args.existingCorProjectId !== undefined) {
+        console.log(
+          `[PublishTask] 📁 Usando proyecto COR existente: ${args.existingCorProjectId}`,
+        );
+
+        const existingProject = await provider.getProject(
+          args.existingCorProjectId,
+        );
+        if (!existingProject) {
+          throw new Error(
+            "No se pudo encontrar el proyecto seleccionado en COR.",
+          );
+        }
+        if (existingProject.clientId !== clientId) {
+          throw new Error(
+            "El proyecto seleccionado no pertenece al cliente de esta tarea.",
+          );
+        }
+        if (isDateBeforeToday(existingProject.endDate)) {
+          throw new Error(
+            "El proyecto seleccionado ya está vencido. Selecciona otro proyecto activo.",
+          );
+        }
+
+        corProjectId = existingProject.id;
+        const taskDeliverablesCount =
+          typeof task.deliverablesCount === "number" &&
+          Number.isFinite(task.deliverablesCount) &&
+          task.deliverablesCount > 0
+            ? Math.trunc(task.deliverablesCount)
+            : undefined;
+        localProjectDeliverables =
+          taskDeliverablesCount !== undefined
+            ? Math.max(0, Math.trunc(existingProject.deliverables ?? 0)) +
+              taskDeliverablesCount
+            : existingProject.deliverables;
+        localProjectPmId = undefined;
+        shouldUpdateProjectFields = taskDeliverablesCount !== undefined;
+
+        if (projectId) {
+          await ctx.runMutation(
+            internal.data.projects.attachProjectToExistingCORProject,
+            {
+              projectId: projectId as any,
+              corProjectId: existingProject.id,
+              name: existingProject.name,
+              brief: existingProject.brief,
+              startDate: existingProject.startDate,
+              endDate: existingProject.endDate,
+              status: existingProject.status,
+              deliverables: localProjectDeliverables,
+              estimatedTime: existingProject.estimatedTime,
+            },
+          );
+        }
+      } else if (projectId) {
         // Leer el proyecto local
         const localProject = await ctx.runQuery(
           internal.data.projects.getProjectInternal,
@@ -2817,6 +2891,7 @@ export const publishTaskToExternalAction = internalAction({
       // 3.5 Guardar campos soportados solo por update (deliverables, pm_id)
       if (
         corProjectId &&
+        shouldUpdateProjectFields &&
         (localProjectDeliverables !== undefined ||
           localProjectPmId !== undefined)
       ) {
@@ -2939,6 +3014,7 @@ export const publishTaskToExternalAction = internalAction({
           internal.data.tasks.publishTaskToExternalAction,
           {
             taskId: args.taskId,
+            existingCorProjectId: args.existingCorProjectId,
             attempt: attempt + 1,
           },
         );
