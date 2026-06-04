@@ -2753,6 +2753,7 @@ export const publishTaskToExternalAction = internalAction({
       let localProjectPmId: number | undefined;
       let localProjectBrandId: number | undefined;
       let localProjectProductId: number | undefined;
+      let localProjectEstimatedTime: number | undefined;
       let shouldUpdateProjectFields = true;
       const projectId = (task as any).projectId as string | undefined;
 
@@ -2781,6 +2782,11 @@ export const publishTaskToExternalAction = internalAction({
         }
 
         corProjectId = existingProject.id;
+        const localProject = projectId
+          ? await ctx.runQuery(internal.data.projects.getProjectInternal, {
+              projectId: projectId as any,
+            })
+          : null;
         const taskDeliverablesCount =
           typeof task.deliverablesCount === "number" &&
           Number.isFinite(task.deliverablesCount) &&
@@ -2792,8 +2798,21 @@ export const publishTaskToExternalAction = internalAction({
             ? Math.max(0, Math.trunc(existingProject.deliverables ?? 0)) +
               taskDeliverablesCount
             : existingProject.deliverables;
+        const proposedEstimatedTime =
+          typeof localProject?.estimatedTime === "number" &&
+          Number.isFinite(localProject.estimatedTime) &&
+          localProject.estimatedTime > 0
+            ? localProject.estimatedTime
+            : undefined;
+        localProjectEstimatedTime =
+          proposedEstimatedTime !== undefined
+            ? Math.max(0, existingProject.estimatedTime ?? 0) +
+              proposedEstimatedTime
+            : existingProject.estimatedTime;
         localProjectPmId = undefined;
-        shouldUpdateProjectFields = taskDeliverablesCount !== undefined;
+        shouldUpdateProjectFields =
+          taskDeliverablesCount !== undefined ||
+          proposedEstimatedTime !== undefined;
 
         if (projectId) {
           await ctx.runMutation(
@@ -2807,7 +2826,7 @@ export const publishTaskToExternalAction = internalAction({
               endDate: existingProject.endDate,
               status: existingProject.status,
               deliverables: localProjectDeliverables,
-              estimatedTime: existingProject.estimatedTime,
+              estimatedTime: localProjectEstimatedTime,
             },
           );
         }
@@ -2893,15 +2912,17 @@ export const publishTaskToExternalAction = internalAction({
         corProjectId &&
         shouldUpdateProjectFields &&
         (localProjectDeliverables !== undefined ||
-          localProjectPmId !== undefined)
+          localProjectPmId !== undefined ||
+          localProjectEstimatedTime !== undefined)
       ) {
         console.log(
-          `[PublishTask] 📝 Guardando deliverables/pm_id en proyecto COR ${corProjectId}...`,
+          `[PublishTask] 📝 Guardando deliverables/pm_id/estimated_time en proyecto COR ${corProjectId}...`,
         );
 
         const projectUpdate = await provider.updateProject(corProjectId, {
           deliverables: localProjectDeliverables,
           pmId: localProjectPmId,
+          estimatedTime: localProjectEstimatedTime,
         });
 
         if (!projectUpdate.success) {
@@ -2912,7 +2933,7 @@ export const publishTaskToExternalAction = internalAction({
         }
 
         console.log(
-          `[PublishTask] ✅ Deliverables/pm_id guardados en proyecto COR ${corProjectId}`,
+          `[PublishTask] ✅ Deliverables/pm_id/estimated_time guardados en proyecto COR ${corProjectId}`,
         );
       }
 
