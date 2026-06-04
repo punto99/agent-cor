@@ -70,6 +70,7 @@ export default defineSchema({
     title: v.string(),
     description: v.optional(v.string()), // Contiene todos los datos del brief formateados
     deadline: v.optional(v.string()),
+    deliverablesCount: v.optional(v.number()), // Entregables propios de la task (local; no existe en COR)
     priority: v.optional(v.number()), // 0=Low, 1=Medium, 2=High, 3=Urgent
     strategicPriority: v.optional(
       v.union(

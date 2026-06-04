@@ -29,6 +29,7 @@ import {
 } from "../lib/corRetry";
 import { applyProjectDeliverablesDelta } from "../lib/deliverableAnalytics";
 import type { ActionCtx } from "../_generated/server";
+import type { Id } from "../_generated/dataModel";
 
 const STRATEGIC_PRIORITY_LABEL_IDS: Record<StrategicPriority, number> = {
   I_NU: 370185,
@@ -251,6 +252,7 @@ export const createTaskInternal = internalMutation({
     title: v.string(),
     description: v.optional(v.string()),
     deadline: v.optional(v.string()),
+    deliverablesCount: v.optional(v.number()),
     priority: v.optional(v.number()), // 0=Low, 1=Medium, 2=High, 3=Urgent
     threadId: v.string(),
     status: v.string(),
@@ -291,6 +293,7 @@ export const createTaskInternal = internalMutation({
       title: args.title,
       description: args.description,
       deadline: args.deadline,
+      deliverablesCount: args.deliverablesCount,
       priority: args.priority ?? 1,
       threadId: args.threadId,
       status: args.status,
@@ -1203,6 +1206,7 @@ export const createProjectAndTask = internalMutation({
     taskTitle: v.string(),
     taskDescription: v.optional(v.string()),
     taskDeadline: v.optional(v.string()),
+    taskDeliverablesCount: v.optional(v.number()),
     taskPriority: v.optional(v.number()),
     taskStatus: v.string(),
     taskCreatedBy: v.optional(v.string()),
@@ -1304,6 +1308,7 @@ export const createProjectAndTask = internalMutation({
       title: args.taskTitle,
       description: args.taskDescription,
       deadline: args.taskDeadline,
+      deliverablesCount: args.taskDeliverablesCount,
       priority: args.taskPriority ?? 1,
       threadId: args.threadId,
       status: args.taskStatus,
@@ -1449,6 +1454,87 @@ export const backfillTaskClientId = internalMutation({
       title: task.title,
       clientId,
       reason,
+    };
+  },
+});
+
+export const listTasksForDeliverablesCountBackfill = internalQuery({
+  args: {
+    limit: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const limit = args.limit ?? 500;
+    const tasks = await ctx.db.query("tasks").collect();
+
+    return tasks
+      .filter((task) => task.convexStatus !== "deleted")
+      .filter((task) => task.deliverablesCount === undefined)
+      .slice(0, limit)
+      .map((task) => ({
+        _id: task._id,
+        title: task.title,
+        projectId: task.projectId,
+      }));
+  },
+});
+
+export const backfillTaskDeliverablesCount = internalMutation({
+  args: {
+    taskId: v.id("tasks"),
+    dryRun: v.optional(v.boolean()),
+  },
+  handler: async (ctx, args) => {
+    const task = await ctx.db.get(args.taskId);
+    if (!task) return { status: "missing" as const };
+
+    if (typeof task.deliverablesCount === "number") {
+      return {
+        status: "already_set" as const,
+        taskId: task._id,
+        title: task.title,
+        deliverablesCount: task.deliverablesCount,
+      };
+    }
+
+    if (!task.projectId) {
+      return {
+        status: "unresolved" as const,
+        reason: "missing_project",
+        taskId: task._id,
+        title: task.title,
+      };
+    }
+
+    const project = await ctx.db.get(task.projectId as Id<"projects">);
+    const deliverablesCount =
+      project &&
+      project.convexStatus !== "deleted" &&
+      typeof project.deliverables === "number" &&
+      Number.isFinite(project.deliverables) &&
+      project.deliverables > 0
+        ? Math.trunc(project.deliverables)
+        : null;
+
+    if (!deliverablesCount) {
+      return {
+        status: "unresolved" as const,
+        reason: "missing_project_deliverables",
+        taskId: task._id,
+        title: task.title,
+        projectId: task.projectId,
+      };
+    }
+
+    if (!args.dryRun) {
+      await ctx.db.patch(task._id, { deliverablesCount });
+    }
+
+    return {
+      status: args.dryRun ? ("would_update" as const) : ("updated" as const),
+      taskId: task._id,
+      title: task.title,
+      projectId: task.projectId,
+      deliverablesCount,
     };
   },
 });

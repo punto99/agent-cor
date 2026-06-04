@@ -204,6 +204,7 @@ export const createExternalTaskTool = createTool({
         taskTitle: fullTitle,
         taskDescription: description,
         taskDeadline: args.deadline,
+        taskDeliverablesCount: deliverablesCount,
         taskPriority: args.priority ?? 1,
         taskStatus: "nueva",
         taskCreatedBy: preparation.userId,

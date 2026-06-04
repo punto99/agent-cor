@@ -733,7 +733,113 @@ export const backfillTaskClientIds = internalAction({
   },
 });
 
-// ==================== 6. BACKFILL TASK EVALUATIONS ====================
+// ==================== 6. BACKFILL TASK DELIVERABLES COUNT ====================
+
+/**
+ * Agrega tasks.deliverablesCount a tasks existentes usando el deliverables
+ * del proyecto asociado. Es seguro para el histórico actual porque cada task
+ * existente nació con su propio proyecto.
+ *
+ * Ejecutar primero en dry run:
+ * Dashboard de Convex → Functions → data/backfill:backfillTaskDeliverablesCount
+ * Args: { "dryRun": true, "limit": 100 }
+ */
+export const backfillTaskDeliverablesCount = internalAction({
+  args: {
+    dryRun: v.optional(v.boolean()),
+    limit: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const dryRun = args.dryRun !== false;
+    console.log("\n" + "=".repeat(60));
+    console.log("[BackfillTaskDeliverablesCount] 🚀 INICIO");
+    console.log(
+      `[BackfillTaskDeliverablesCount] dryRun=${dryRun}, limit=${args.limit ?? 500}`,
+    );
+    console.log("=".repeat(60));
+
+    const stats = {
+      reviewed: 0,
+      updated: 0,
+      wouldUpdate: 0,
+      alreadySet: 0,
+      unresolved: 0,
+      missing: 0,
+      errors: 0,
+      unresolvedTasks: [] as Array<{
+        taskId: string;
+        title: string;
+        reason?: string;
+      }>,
+      errorDetails: [] as string[],
+    };
+
+    const tasks = await ctx.runQuery(
+      internal.data.tasks.listTasksForDeliverablesCountBackfill,
+      { limit: args.limit },
+    );
+
+    stats.reviewed = tasks.length;
+
+    for (const task of tasks) {
+      try {
+        const result = await ctx.runMutation(
+          internal.data.tasks.backfillTaskDeliverablesCount,
+          {
+            taskId: task._id,
+            dryRun,
+          },
+        );
+
+        if (result.status === "updated") stats.updated++;
+        if (result.status === "would_update") stats.wouldUpdate++;
+        if (result.status === "already_set") stats.alreadySet++;
+        if (result.status === "missing") stats.missing++;
+        if (result.status === "unresolved") {
+          stats.unresolved++;
+          stats.unresolvedTasks.push({
+            taskId: String(result.taskId),
+            title: result.title,
+            reason: result.reason,
+          });
+        }
+      } catch (error) {
+        const errorMsg = `${task._id}: ${
+          error instanceof Error ? error.message : String(error)
+        }`;
+        stats.errors++;
+        stats.errorDetails.push(errorMsg);
+        console.error(`[BackfillTaskDeliverablesCount] ❌ ${errorMsg}`);
+      }
+    }
+
+    console.log("[BackfillTaskDeliverablesCount] 📊 RESUMEN:");
+    console.log(`  Revisadas:       ${stats.reviewed}`);
+    console.log(`  Actualizadas:    ${stats.updated}`);
+    console.log(`  Would update:    ${stats.wouldUpdate}`);
+    console.log(`  Ya tenían:       ${stats.alreadySet}`);
+    console.log(`  Sin resolver:    ${stats.unresolved}`);
+    console.log(`  Missing:         ${stats.missing}`);
+    console.log(`  Errores:         ${stats.errors}`);
+    if (stats.unresolvedTasks.length > 0) {
+      console.log("  Sin resolver:");
+      for (const unresolved of stats.unresolvedTasks) {
+        console.log(
+          `    - ${unresolved.taskId} | ${unresolved.title} | reason=${unresolved.reason}`,
+        );
+      }
+    }
+    console.log("=".repeat(60) + "\n");
+
+    return {
+      success: stats.errors === 0,
+      dryRun,
+      stats,
+    };
+  },
+});
+
+// ==================== 7. BACKFILL TASK EVALUATIONS ====================
 
 /**
  * Migra evaluaciones reales desde los mensajes existentes del agent component.
