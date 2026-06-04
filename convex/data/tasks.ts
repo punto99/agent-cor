@@ -2819,6 +2819,7 @@ export const publishTaskToExternalAction = internalAction({
             internal.data.projects.attachProjectToExistingCORProject,
             {
               projectId: projectId as any,
+              taskId: args.taskId,
               corProjectId: existingProject.id,
               name: existingProject.name,
               brief: existingProject.brief,

@@ -729,6 +729,7 @@ export const updateProjectPublishStatus = internalMutation({
 export const attachProjectToExistingCORProject = internalMutation({
   args: {
     projectId: v.id("projects"),
+    taskId: v.optional(v.id("tasks")),
     corProjectId: v.number(),
     name: v.optional(v.string()),
     brief: v.optional(v.string()),
@@ -741,6 +742,17 @@ export const attachProjectToExistingCORProject = internalMutation({
   handler: async (ctx, args) => {
     const previousProject = await ctx.db.get(args.projectId);
     if (!previousProject) throw new Error("Proyecto no encontrado");
+
+    const existingProjects = await ctx.db
+      .query("projects")
+      .withIndex("by_corProjectId", (q) => q.eq("corProjectId", args.corProjectId))
+      .collect();
+    const canonicalProject = existingProjects
+      .filter(
+        (project) =>
+          project._id !== args.projectId && project.convexStatus !== "deleted",
+      )
+      .sort((a, b) => a._creationTime - b._creationTime)[0];
 
     const updates: Record<string, unknown> = {
       corProjectId: args.corProjectId,
@@ -761,9 +773,57 @@ export const attachProjectToExistingCORProject = internalMutation({
       updates.estimatedTime = args.estimatedTime;
     }
 
+    if (canonicalProject) {
+      await ctx.db.patch(canonicalProject._id, updates);
+      const updatedCanonicalProject = await ctx.db.get(canonicalProject._id);
+      await applyProjectDeliverablesDelta(
+        ctx,
+        canonicalProject,
+        updatedCanonicalProject,
+      );
+
+      if (args.taskId) {
+        await ctx.db.patch(args.taskId, {
+          projectId: canonicalProject._id,
+        });
+      }
+
+      const remainingTasksForPreviousProject = await ctx.db
+        .query("tasks")
+        .withIndex("by_projectId", (q) => q.eq("projectId", args.projectId))
+        .collect();
+      const hasOtherActiveTasks = remainingTasksForPreviousProject.some(
+        (task) =>
+          task._id !== args.taskId && task.convexStatus !== "deleted",
+      );
+
+      if (!hasOtherActiveTasks) {
+        await applyProjectDeliverablesDelta(ctx, previousProject, null);
+        await ctx.db.delete(args.projectId);
+      }
+
+      return {
+        projectId: canonicalProject._id,
+        reusedExistingProject: true,
+        deletedUnusedProject: !hasOtherActiveTasks,
+      };
+    }
+
     await ctx.db.patch(args.projectId, updates);
     const updatedProject = await ctx.db.get(args.projectId);
     await applyProjectDeliverablesDelta(ctx, previousProject, updatedProject);
+
+    if (args.taskId) {
+      await ctx.db.patch(args.taskId, {
+        projectId: args.projectId,
+      });
+    }
+
+    return {
+      projectId: args.projectId,
+      reusedExistingProject: false,
+      deletedUnusedProject: false,
+    };
   },
 });
 
