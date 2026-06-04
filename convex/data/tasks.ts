@@ -701,6 +701,8 @@ export const createTaskAttachment = internalMutation({
     filename: v.string(),
     mimeType: v.string(),
     size: v.optional(v.number()),
+    trelloAttachmentId: v.optional(v.string()),
+    trelloAttachmentUrl: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     return await ctx.db.insert("taskAttachments", {
@@ -710,6 +712,10 @@ export const createTaskAttachment = internalMutation({
       filename: args.filename,
       mimeType: args.mimeType,
       size: args.size,
+      trelloAttachmentId: args.trelloAttachmentId,
+      trelloAttachmentUrl: args.trelloAttachmentUrl,
+      trelloSyncStatus: args.trelloAttachmentId ? "synced" : undefined,
+      trelloSyncedAt: args.trelloAttachmentId ? Date.now() : undefined,
       createdAt: Date.now(),
     });
   },
@@ -812,6 +818,21 @@ export const getTaskAttachments = internalQuery({
       .query("taskAttachments")
       .withIndex("by_task", (q) => q.eq("taskId", args.taskId))
       .collect();
+  },
+});
+
+export const getTaskAttachmentByTrelloId = internalQuery({
+  args: {
+    taskId: v.id("tasks"),
+    trelloAttachmentId: v.string(),
+  },
+  handler: async (ctx, args) => {
+    return await ctx.db
+      .query("taskAttachments")
+      .withIndex("by_task_and_trello", (q) =>
+        q.eq("taskId", args.taskId).eq("trelloAttachmentId", args.trelloAttachmentId),
+      )
+      .first();
   },
 });
 

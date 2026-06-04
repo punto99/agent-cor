@@ -7,8 +7,10 @@ import {
   internalQuery,
 } from "../_generated/server";
 import { getAuthUserId } from "@convex-dev/auth/server";
-import { internal } from "../_generated/api";
+import { storeFile } from "@convex-dev/agent";
+import { components, internal } from "../_generated/api";
 import { trelloProvider } from "../integrations/trelloProvider";
+import { getProjectManagementProvider } from "../integrations/registry";
 import { TASK_STATUS_OPTIONS, getTaskStatusName } from "../lib/taskStatuses";
 import { clientConfig } from "../../config/tenant.config";
 
@@ -832,6 +834,113 @@ export const applySafeInboundCardUpdate = internalMutation({
   },
 });
 
+export const syncInboundTrelloAttachmentToTask: any = internalAction({
+  args: {
+    taskId: v.id("tasks"),
+    trelloCardId: v.string(),
+    trelloAttachmentId: v.string(),
+    trelloAttachmentUrl: v.optional(v.string()),
+    filename: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const existingAttachment = await ctx.runQuery(
+      internal.data.tasks.getTaskAttachmentByTrelloId,
+      {
+        taskId: args.taskId,
+        trelloAttachmentId: args.trelloAttachmentId,
+      },
+    );
+
+    const task = await ctx.runQuery(internal.data.tasks.getTaskByIdInternal, {
+      taskId: args.taskId as string,
+    });
+    if (!task) {
+      throw new Error("Task no encontrada para attachment de Trello.");
+    }
+
+    let attachmentId = existingAttachment?._id;
+    let storageId = existingAttachment?.storageId;
+    let filename =
+      existingAttachment?.filename ||
+      args.filename ||
+      `trello-attachment-${args.trelloAttachmentId}`;
+    let mimeType = existingAttachment?.mimeType || "application/octet-stream";
+    let fileSize = existingAttachment?.size;
+    let blobForCOR: Blob | null = null;
+
+    if (!existingAttachment) {
+      const downloaded = await trelloProvider.downloadAttachment({
+        cardId: args.trelloCardId,
+        attachmentId: args.trelloAttachmentId,
+        name: filename,
+        url: args.trelloAttachmentUrl,
+      });
+      filename = downloaded.filename;
+      mimeType = downloaded.mimeType;
+      fileSize = downloaded.size;
+      blobForCOR = downloaded.blob;
+
+      const { file } = await storeFile(ctx, components.agent, downloaded.blob, {
+        filename,
+      });
+
+      attachmentId = await ctx.runMutation(internal.data.tasks.createTaskAttachment, {
+        taskId: args.taskId,
+        fileId: file.fileId,
+        storageId: file.storageId,
+        filename,
+        mimeType,
+        size: fileSize,
+        trelloAttachmentId: args.trelloAttachmentId,
+        trelloAttachmentUrl: args.trelloAttachmentUrl || downloaded.url,
+      });
+      storageId = file.storageId;
+    }
+
+    if (task.corTaskId && attachmentId && !existingAttachment?.corAttachmentId) {
+      const corTaskId = Number(task.corTaskId);
+      if (!Number.isFinite(corTaskId)) {
+        throw new Error(`corTaskId inválido para subir attachment: ${task.corTaskId}`);
+      }
+
+      const blob =
+        blobForCOR || (storageId ? await ctx.storage.get(storageId as any) : null);
+      if (!blob) {
+        throw new Error("No se encontró el archivo guardado para subirlo a COR.");
+      }
+
+      const provider = getProjectManagementProvider();
+      const result = await provider.uploadTaskAttachment({
+        taskId: corTaskId,
+        fileBuffer: await blob.arrayBuffer(),
+        filename,
+        mimeType,
+      });
+
+      if (!result.success || !result.attachment) {
+        throw new Error(
+          result.error || "No se pudo subir el attachment de Trello a COR.",
+        );
+      }
+
+      await ctx.runMutation(internal.data.tasks.updateAttachmentCORSync, {
+        attachmentId,
+        corAttachmentId: result.attachment.id,
+        corUrl: result.attachment.url || "",
+      });
+    }
+
+    return {
+      attachmentId,
+      filename,
+      mimeType,
+      size: fileSize,
+      alreadyExisted: Boolean(existingAttachment),
+      uploadedToCOR: Boolean(task.corTaskId && !existingAttachment?.corAttachmentId),
+    };
+  },
+});
+
 export const markTaskInboundReviewNeeded = internalMutation({
   args: {
     taskId: v.id("tasks"),
@@ -840,6 +949,20 @@ export const markTaskInboundReviewNeeded = internalMutation({
   handler: async (ctx, args) => {
     await ctx.db.patch(args.taskId, {
       trelloInboundSyncStatus: "pending_review",
+      trelloInboundSyncError: args.error,
+      trelloLastInboundAt: Date.now(),
+    });
+  },
+});
+
+export const markTaskInboundSyncError = internalMutation({
+  args: {
+    taskId: v.id("tasks"),
+    error: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    await ctx.db.patch(args.taskId, {
+      trelloInboundSyncStatus: "error",
       trelloInboundSyncError: args.error,
       trelloLastInboundAt: Date.now(),
     });
@@ -1873,14 +1996,50 @@ export const processWebhookEvent: any = internalAction({
             updates: safeUpdates,
           });
         }
+      } else if (event.actionType === "addAttachmentToCard") {
+        const attachment = data.attachment ?? {};
+        const trelloAttachmentId = attachment.id;
+        if (!trelloAttachmentId) {
+          throw new Error("Evento addAttachmentToCard sin attachment.id.");
+        }
+
+        const result = await ctx.runAction(
+          internalTrello.syncInboundTrelloAttachmentToTask,
+          {
+            taskId: context.task._id,
+            trelloCardId: cardId,
+            trelloAttachmentId,
+            trelloAttachmentUrl: attachment.url,
+            filename: attachment.name,
+          },
+        );
+
+        await ctx.runMutation(internalTrello.recordInboundChange, {
+          eventId: args.eventId,
+          taskId: context.task._id,
+          projectId: context.project._id,
+          trelloCardId: cardId,
+          actionType: event.actionType,
+          field: "attachment_added",
+          oldValueJson: undefined,
+          newValueJson: jsonValue({
+            attachment,
+            localAttachmentId: result?.attachmentId,
+            uploadedToCOR: result?.uploadedToCOR,
+          }),
+          applied: true,
+          requiresReview: false,
+          note: result?.uploadedToCOR
+            ? "Archivo importado desde Trello y subido a COR."
+            : "Archivo importado desde Trello y guardado en Convex.",
+        });
+        appliedCount += 1;
       } else if (
-        event.actionType === "addAttachmentToCard" ||
         event.actionType === "deleteAttachmentFromCard" ||
         event.actionType === "addLabelToCard" ||
         event.actionType === "removeLabelFromCard"
       ) {
         const fieldMap: Record<string, string> = {
-          addAttachmentToCard: "attachment_added",
           deleteAttachmentFromCard: "attachment_removed",
           addLabelToCard: "label_added",
           removeLabelFromCard: "label_removed",
@@ -1933,10 +2092,17 @@ export const processWebhookEvent: any = internalAction({
         taskId: context.task._id,
         error: message,
       });
-      await ctx.runMutation(internalTrello.markTaskInboundReviewNeeded, {
-        taskId: context.task._id,
-        error: message,
-      });
+      if (event.actionType === "addAttachmentToCard") {
+        await ctx.runMutation(internalTrello.markTaskInboundSyncError, {
+          taskId: context.task._id,
+          error: message,
+        });
+      } else {
+        await ctx.runMutation(internalTrello.markTaskInboundReviewNeeded, {
+          taskId: context.task._id,
+          error: message,
+        });
+      }
       return { success: false, error: message };
     }
   },
