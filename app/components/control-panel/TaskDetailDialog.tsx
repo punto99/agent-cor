@@ -26,6 +26,7 @@ import {
   Search,
   FolderOpen,
   CalendarDays,
+  Pencil,
 } from "lucide-react";
 
 interface TaskDetailDialogProps {
@@ -35,8 +36,13 @@ interface TaskDetailDialogProps {
     corProjectId?: number;
     corClientId?: number;
     corClientName?: string;
+    clientId?: Id<"corClients">;
+    clientBrandId?: Id<"clientBrands">;
     brandId?: number;
+    brandName?: string;
+    subBrandId?: Id<"subBrands">;
     productId?: number;
+    subBrandName?: string;
     corSyncError?: string;
     projectId?: Id<"projects">;
     corTaskMissingInCOR?: boolean;
@@ -61,6 +67,222 @@ type CORProjectOption = {
   deliverables?: number;
 };
 
+type TaxonomySubBrandOption = {
+  _id: Id<"subBrands">;
+  name: string;
+  corProductId: number;
+};
+
+type TaxonomyBrandOption = {
+  _id: Id<"clientBrands">;
+  name: string;
+  corBrandId: number;
+  subBrands: TaxonomySubBrandOption[];
+};
+
+type EditableTaxonomyItemProps = {
+  brands: TaxonomyBrandOption[];
+  brandId: string;
+  subBrandId: string;
+  editable: boolean;
+  onApply: (value: {
+    brandId: string;
+    subBrandId: string;
+  }) => void | Promise<void>;
+};
+
+function EditableTaxonomyItem({
+  brands,
+  brandId,
+  subBrandId,
+  editable,
+  onApply,
+}: EditableTaxonomyItemProps) {
+  const [isEditing, setIsEditing] = useState(false);
+  const [editBrandId, setEditBrandId] = useState(brandId);
+  const [editSubBrandId, setEditSubBrandId] = useState(subBrandId);
+  const [isApplying, setIsApplying] = useState(false);
+  const selectRef = useRef<HTMLSelectElement>(null);
+  const selectedBrand = brands.find((brand) => String(brand._id) === brandId);
+  const selectedSubBrand = selectedBrand?.subBrands.find(
+    (subBrand) => String(subBrand._id) === subBrandId,
+  );
+  const selectedEditBrand = brands.find(
+    (brand) => String(brand._id) === editBrandId,
+  );
+  const editBrandHasSubBrands =
+    (selectedEditBrand?.subBrands.length || 0) > 0;
+  const hasChanges =
+    editBrandId !== brandId || editSubBrandId !== subBrandId;
+  const canApply =
+    Boolean(editBrandId) &&
+    (!editBrandHasSubBrands || Boolean(editSubBrandId)) &&
+    hasChanges;
+
+  useEffect(() => {
+    if (isEditing && selectRef.current) {
+      selectRef.current.focus();
+    }
+  }, [isEditing]);
+
+  useEffect(() => {
+    if (!isEditing) {
+      setEditBrandId(brandId);
+      setEditSubBrandId(subBrandId);
+    }
+  }, [brandId, subBrandId, isEditing]);
+
+  const handleStartEdit = () => {
+    setEditBrandId(brandId);
+    setEditSubBrandId(subBrandId);
+    setIsEditing(true);
+  };
+
+  const handleCancel = () => {
+    setEditBrandId(brandId);
+    setEditSubBrandId(subBrandId);
+    setIsEditing(false);
+  };
+
+  const handleApply = async () => {
+    if (!canApply) {
+      setIsEditing(false);
+      return;
+    }
+
+    try {
+      setIsApplying(true);
+      await onApply({
+        brandId: editBrandId,
+        subBrandId: editBrandHasSubBrands ? editSubBrandId : "",
+      });
+      setIsEditing(false);
+    } catch {
+      // El error se muestra desde el contenedor para mantener un único mensaje.
+    } finally {
+      setIsApplying(false);
+    }
+  };
+
+  return (
+    <div className="bg-card rounded-lg p-3 border border-border shadow-sm group/item">
+      <div className="flex items-start gap-2">
+        <span className="text-lg">🏷️</span>
+        <div className="flex-1 min-w-0">
+          <p className="text-xs text-muted-foreground uppercase tracking-wider">
+            Categoría
+          </p>
+          {isEditing ? (
+            <div className="mt-1">
+              <select
+                ref={selectRef}
+                value={editBrandId}
+                onChange={(event) => {
+                  const nextBrandId = event.target.value;
+                  const nextBrand = brands.find(
+                    (brand) => String(brand._id) === nextBrandId,
+                  );
+                  setEditBrandId(nextBrandId);
+                  setEditSubBrandId(
+                    nextBrand?.subBrands.some(
+                      (subBrand) => String(subBrand._id) === editSubBrandId,
+                    )
+                      ? editSubBrandId
+                      : "",
+                  );
+                }}
+                onKeyDown={(event) => {
+                  if (event.key === "Escape") handleCancel();
+                }}
+                disabled={isApplying}
+                className="w-full text-sm text-foreground bg-background border border-primary/40 rounded-md px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-primary/50 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
+              >
+                <option value="">Seleccionar categoría</option>
+                {brands.map((brand) => (
+                  <option key={brand._id} value={brand._id}>
+                    {brand.name}
+                  </option>
+                ))}
+              </select>
+
+              {selectedEditBrand && editBrandHasSubBrands && (
+                <div className="mt-2">
+                  <p className="mb-1 text-xs text-muted-foreground uppercase tracking-wider">
+                    Marca
+                  </p>
+                  <select
+                    value={editSubBrandId}
+                    onChange={(event) => setEditSubBrandId(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Escape") handleCancel();
+                    }}
+                    disabled={isApplying}
+                    className="w-full text-sm text-foreground bg-background border border-primary/40 rounded-md px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-primary/50 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
+                  >
+                    <option value="">Seleccionar marca</option>
+                    {selectedEditBrand.subBrands.map((subBrand) => (
+                      <option key={subBrand._id} value={subBrand._id}>
+                        {subBrand.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
+
+              <div className="flex items-center gap-1.5 mt-1.5">
+                <button
+                  type="button"
+                  onClick={handleApply}
+                  disabled={isApplying || !canApply}
+                  className="flex items-center gap-1 text-xs px-2 py-1 rounded-md bg-primary text-primary-foreground hover:bg-primary/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
+                >
+                  <Check className="h-3 w-3" />
+                  {isApplying ? "Aplicando..." : "Aplicar"}
+                </button>
+                <button
+                  type="button"
+                  onClick={handleCancel}
+                  disabled={isApplying}
+                  className="flex items-center gap-1 text-xs px-2 py-1 rounded-md border border-border hover:bg-muted transition-colors text-muted-foreground disabled:opacity-50 cursor-pointer"
+                >
+                  <X className="h-3 w-3" />
+                  Cancelar
+                </button>
+              </div>
+            </div>
+          ) : (
+            <>
+              <p className="text-sm text-foreground mt-0.5 truncate">
+                {selectedBrand?.name || "Sin categoría"}
+              </p>
+              {selectedSubBrand && (
+                <div className="mt-2">
+                  <p className="text-xs text-muted-foreground uppercase tracking-wider">
+                    Marca
+                  </p>
+                  <p className="text-sm text-foreground mt-0.5 truncate">
+                    {selectedSubBrand.name}
+                  </p>
+                </div>
+              )}
+            </>
+          )}
+        </div>
+        {editable && !isEditing && (
+          <button
+            type="button"
+            onClick={handleStartEdit}
+            className="opacity-0 group-hover/item:opacity-100 p-1.5 rounded-md hover:bg-muted transition-all text-muted-foreground hover:text-foreground cursor-pointer flex-shrink-0"
+            title="Editar categoría y marca"
+          >
+            <Pencil className="h-3.5 w-3.5" />
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
 /**
  * Dialog modal que muestra el detalle de una task con opción de publicar
  * al sistema externo (COR).
@@ -75,6 +297,7 @@ export function TaskDetailDialog({
 }: TaskDetailDialogProps) {
   const startPublish = useMutation(api.data.tasks.startPublishTaskToExternal);
   const retryTask = useMutation(api.data.tasks.retryTaskSync);
+  const updateTaskTaxonomy = useMutation(api.data.tasks.updateTaskTaxonomy);
   const retryProject = useMutation(api.data.projects.retryProjectSync);
   const softDeleteProject = useMutation(api.data.projects.softDeleteProject);
   const pullFromCOR = useMutation(api.data.corInboundSync.startPullFromCOR);
@@ -115,6 +338,9 @@ export function TaskDetailDialog({
   const [existingProjectsError, setExistingProjectsError] = useState<
     string | null
   >(null);
+  const [draftBrandId, setDraftBrandId] = useState<string>("");
+  const [draftSubBrandId, setDraftSubBrandId] = useState<string>("");
+  const [taxonomyError, setTaxonomyError] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<"task" | "project" | "evaluation">(
     "task",
   );
@@ -145,6 +371,9 @@ export function TaskDetailDialog({
     api.data.projects.getProject,
     task.projectId ? { projectId: task.projectId } : "skip",
   );
+  const taxonomyOptions = useQuery(api.data.tasks.listTaskTaxonomyOptions, {
+    taskId: task._id,
+  });
 
   // === Evaluation: thread existente + mensajes ===
   const existingEvalThread = useQuery(
@@ -207,6 +436,12 @@ export function TaskDetailDialog({
     syncStatus !== "synced" &&
     !liveCorTaskId &&
     Boolean(localClientId);
+  const taxonomyBrands = (taxonomyOptions?.brands ||
+    []) as TaxonomyBrandOption[];
+  const liveClientBrandId =
+    ((liveTask as any)?.clientBrandId ?? task.clientBrandId) || "";
+  const liveSubBrandId =
+    ((liveTask as any)?.subBrandId ?? task.subBrandId) || "";
   const filteredExistingProjects = useMemo(() => {
     const term = existingProjectSearch.trim().toLowerCase();
     if (!term) return existingProjects;
@@ -276,7 +511,16 @@ export function TaskDetailDialog({
     setExistingProjectsError(null);
   }, [task._id]);
 
-  const loadExistingProjects = async () => {
+  useEffect(() => {
+    setDraftBrandId(String(liveClientBrandId || ""));
+    setDraftSubBrandId(String(liveSubBrandId || ""));
+    setTaxonomyError(null);
+  }, [liveClientBrandId, liveSubBrandId, task._id]);
+
+  const loadExistingProjects = async (filters?: {
+    brandId?: number;
+    productId?: number;
+  }) => {
     if (!localClientId) return;
 
     try {
@@ -284,8 +528,14 @@ export function TaskDetailDialog({
       setExistingProjectsError(null);
       const result = await searchActiveCORProjects({
         clientId: localClientId,
-        brandId: projectSearchBrandId,
-        productId: projectSearchProductId,
+        brandId:
+          filters && "brandId" in filters
+            ? filters.brandId
+            : projectSearchBrandId,
+        productId:
+          filters && "productId" in filters
+            ? filters.productId
+            : projectSearchProductId,
         perPage: 50,
       });
       setExistingProjects((result.projects || []) as CORProjectOption[]);
@@ -307,6 +557,57 @@ export function TaskDetailDialog({
       month: "short",
       year: "numeric",
     });
+  };
+
+  const handleApplyTaxonomy = async (nextValue: {
+    brandId: string;
+    subBrandId: string;
+  }) => {
+    if (!nextValue.brandId) {
+      setTaxonomyError("Selecciona una categoría.");
+      throw new Error("Missing category");
+    }
+
+    const nextBrand = taxonomyBrands.find(
+      (brand) => String(brand._id) === nextValue.brandId,
+    );
+    const normalizedSubBrandId =
+      (nextBrand?.subBrands.length || 0) > 0 ? nextValue.subBrandId : "";
+
+    if ((nextBrand?.subBrands.length || 0) > 0 && !normalizedSubBrandId) {
+      setTaxonomyError("Selecciona una marca para esta categoría.");
+      throw new Error("Missing brand");
+    }
+
+    try {
+      setTaxonomyError(null);
+      await updateTaskTaxonomy({
+        taskId: task._id,
+        clientBrandId: nextValue.brandId as Id<"clientBrands">,
+        subBrandId: normalizedSubBrandId
+          ? (normalizedSubBrandId as Id<"subBrands">)
+          : undefined,
+      });
+      setDraftBrandId(nextValue.brandId);
+      setDraftSubBrandId(normalizedSubBrandId);
+      setExistingProjects([]);
+      setSelectedExistingProjectId(null);
+      setExistingProjectsError(null);
+      if (publishProjectMode === "existing") {
+        const nextSubBrand = nextBrand?.subBrands.find(
+          (subBrand) => String(subBrand._id) === normalizedSubBrandId,
+        );
+        await loadExistingProjects({
+          brandId: nextBrand?.corBrandId,
+          productId: nextSubBrand?.corProductId,
+        });
+      }
+    } catch (err: any) {
+      setTaxonomyError(
+        err.message || "No se pudo actualizar la marca de la task.",
+      );
+      throw err;
+    }
   };
 
   const handlePublish = async () => {
@@ -332,6 +633,26 @@ export function TaskDetailDialog({
       setPublishError(err.message || "Error al iniciar la publicación");
     }
   };
+
+  const taxonomyItems =
+    taxonomyOptions && taxonomyBrands.length > 0 ? (
+      <>
+        <EditableTaxonomyItem
+          brands={taxonomyBrands}
+          brandId={draftBrandId}
+          subBrandId={draftSubBrandId}
+          editable={canEditFromDialog}
+          onApply={handleApplyTaxonomy}
+        />
+
+        {taxonomyError && (
+          <div className="flex items-center gap-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700 dark:border-red-900/50 dark:bg-red-900/20 dark:text-red-300">
+            <AlertCircle className="h-3.5 w-3.5 flex-shrink-0" />
+            <span>{taxonomyError}</span>
+          </div>
+        )}
+      </>
+    ) : null;
 
   const handlePublishToTrello = async () => {
     try {
@@ -629,6 +950,7 @@ export function TaskDetailDialog({
                     task={liveTask ?? task}
                     editable={canEditFromDialog}
                     syncStatus={syncStatus}
+                    afterTitleItems={taxonomyItems}
                   />
                 </>
               )}

@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useRef, useEffect } from "react";
+import type { ReactNode } from "react";
 import type { Task } from "./types";
 import { formatDate, getStatusColor } from "./types";
 import { useMutation, useQuery } from "convex/react";
@@ -372,6 +373,8 @@ interface TaskBriefContentProps {
   editable?: boolean;
   /** Estado de sincronización con COR */
   syncStatus?: string;
+  /** Campos adicionales que deben aparecer luego del nombre. */
+  afterTitleItems?: ReactNode;
 }
 
 // Opciones de prioridad para COR (0=Baja, 1=Media, 2=Alta, 3=Urgente)
@@ -589,6 +592,7 @@ export function TaskBriefContent({
   task,
   editable = false,
   syncStatus,
+  afterTitleItems,
 }: TaskBriefContentProps) {
   const updateTask = useMutation(api.data.tasks.updateTaskFields);
   const attachments = useQuery(api.data.tasks.getTaskAttachmentsPublic, {
@@ -722,6 +726,8 @@ export function TaskBriefContent({
           editable={editable}
           onSave={handleSaveField}
         />
+
+        {afterTitleItems}
 
         {(task.deadline || editable) && (
           <EditableInfoItem

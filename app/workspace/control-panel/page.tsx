@@ -59,7 +59,9 @@ interface FullTask {
   brandName?: string;
   clientBrandId?: Id<"clientBrands">;
   brandId?: number;
+  subBrandId?: Id<"subBrands">;
   productId?: number;
+  subBrandName?: string;
   trelloCardId?: string;
   trelloCardUrl?: string;
   trelloSyncStatus?: string;

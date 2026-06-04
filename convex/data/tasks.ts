@@ -2025,6 +2025,215 @@ async function hasTaskAccess(ctx: any, task: any, userId: any) {
   return task.createdBy === String(userId);
 }
 
+async function hasBrandAccess(ctx: any, clientBrandId: any, userId: any) {
+  const brand = await ctx.db.get(clientBrandId);
+  if (!brand?.clientId) return false;
+
+  const assignments = await ctx.db
+    .query("clientUserAssignments")
+    .withIndex("by_client_and_user", (q: any) =>
+      q.eq("clientId", brand.clientId).eq("userId", userId),
+    )
+    .collect();
+
+  return assignments.some(
+    (assignment: any) =>
+      assignment.brandId === undefined || assignment.brandId === clientBrandId,
+  );
+}
+
+export const listTaskTaxonomyOptions = query({
+  args: {
+    taskId: v.id("tasks"),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) throw new Error("No autenticado");
+    if (await isExternalUser(ctx, userId)) return null;
+
+    const task = await ctx.db.get(args.taskId);
+    if (!task || task.convexStatus === "deleted") return null;
+    if (!(await hasTaskAccess(ctx, task, userId))) return null;
+
+    let clientId = task.clientId;
+    if (!clientId && task.corClientId) {
+      const client = await ctx.db
+        .query("corClients")
+        .withIndex("by_corClientId", (q) =>
+          q.eq("corClientId", task.corClientId!),
+        )
+        .unique();
+      clientId = client?._id;
+    }
+
+    if (!clientId) return null;
+
+    const client = await ctx.db.get(clientId);
+    if (!client) return null;
+
+    const assignments = await ctx.db
+      .query("clientUserAssignments")
+      .withIndex("by_client_and_user", (q) =>
+        q.eq("clientId", clientId).eq("userId", userId),
+      )
+      .collect();
+    const hasFullAccess = assignments.some(
+      (assignment) => assignment.brandId === undefined,
+    );
+    const assignedBrandIds = new Set(
+      assignments
+        .map((assignment) => assignment.brandId)
+        .filter(Boolean)
+        .map(String),
+    );
+
+    const brands = await ctx.db
+      .query("clientBrands")
+      .withIndex("by_client", (q) => q.eq("clientId", clientId))
+      .collect();
+
+    const visibleBrands = brands.filter(
+      (brand) => hasFullAccess || assignedBrandIds.has(String(brand._id)),
+    );
+
+    const brandsWithSubBrands = [];
+    for (const brand of visibleBrands) {
+      const subBrands = await ctx.db
+        .query("subBrands")
+        .withIndex("by_brand", (q) => q.eq("clientBrandId", brand._id))
+        .collect();
+      brandsWithSubBrands.push({
+        _id: brand._id,
+        name: brand.name,
+        corBrandId: brand.corBrandId,
+        subBrands: subBrands
+          .sort((a, b) => a.name.localeCompare(b.name))
+          .map((subBrand) => ({
+            _id: subBrand._id,
+            name: subBrand.name,
+            corProductId: subBrand.corProductId,
+          })),
+      });
+    }
+
+    return {
+      client: {
+        _id: client._id,
+        name: client.name,
+        corClientId: client.corClientId,
+      },
+      brands: brandsWithSubBrands.sort((a, b) =>
+        a.name.localeCompare(b.name),
+      ),
+    };
+  },
+});
+
+export const updateTaskTaxonomy = mutation({
+  args: {
+    taskId: v.id("tasks"),
+    clientBrandId: v.id("clientBrands"),
+    subBrandId: v.optional(v.id("subBrands")),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) throw new Error("No autenticado");
+    if (await isExternalUser(ctx, userId)) {
+      throw new Error("Los usuarios externos no pueden cambiar esta asignación.");
+    }
+
+    const task = await ctx.db.get(args.taskId);
+    if (!task || task.convexStatus === "deleted") {
+      throw new Error("Task no encontrada.");
+    }
+    if (task.corTaskId || task.corSyncStatus === "synced") {
+      throw new Error("No se puede cambiar la marca de una task publicada en COR.");
+    }
+    if (task.corSyncStatus === "syncing" || task.corSyncStatus === "retrying") {
+      throw new Error(
+        "La task se está sincronizando. Espera a que termine antes de cambiar la marca.",
+      );
+    }
+    if (!(await hasTaskAccess(ctx, task, userId))) {
+      throw new Error("No tienes permisos para editar esta task.");
+    }
+
+    const brand = await ctx.db.get(args.clientBrandId);
+    if (!brand?.clientId) throw new Error("Marca no encontrada.");
+
+    let taskClientId = task.clientId;
+    if (!taskClientId && task.corClientId) {
+      const client = await ctx.db
+        .query("corClients")
+        .withIndex("by_corClientId", (q) =>
+          q.eq("corClientId", task.corClientId!),
+        )
+        .unique();
+      taskClientId = client?._id;
+    }
+
+    if (!taskClientId || brand.clientId !== taskClientId) {
+      throw new Error("La marca seleccionada no pertenece al cliente de la task.");
+    }
+
+    if (!(await hasBrandAccess(ctx, args.clientBrandId, userId))) {
+      throw new Error("No tienes permisos para usar esta marca.");
+    }
+
+    const subBrands = await ctx.db
+      .query("subBrands")
+      .withIndex("by_brand", (q) => q.eq("clientBrandId", brand._id))
+      .collect();
+
+    let subBrand = null as any;
+    if (subBrands.length > 0) {
+      if (!args.subBrandId) {
+        throw new Error("Esta marca requiere seleccionar un producto.");
+      }
+      subBrand = await ctx.db.get(args.subBrandId);
+      if (!subBrand || subBrand.clientBrandId !== brand._id) {
+        throw new Error("El producto seleccionado no pertenece a esta marca.");
+      }
+    } else if (args.subBrandId) {
+      throw new Error("Esta marca no tiene productos configurados.");
+    }
+
+    const taxonomyPatch = {
+      clientId: taskClientId,
+      clientBrandId: brand._id,
+      brandId: brand.corBrandId,
+      brandName: brand.name,
+      subBrandId: subBrand?._id,
+      productId: subBrand?.corProductId,
+      subBrandName: subBrand?.name,
+    };
+
+    await ctx.db.patch(args.taskId, taxonomyPatch);
+
+    if (task.projectId) {
+      const project = await ctx.db.get(task.projectId);
+      if (
+        project &&
+        project.convexStatus !== "deleted" &&
+        !project.corProjectId &&
+        project.corSyncStatus !== "synced" &&
+        project.corSyncStatus !== "syncing" &&
+        project.corSyncStatus !== "retrying"
+      ) {
+        await ctx.db.patch(task.projectId, taxonomyPatch);
+        const updatedProject = await ctx.db.get(task.projectId);
+        await applyProjectDeliverablesDelta(ctx, project, updatedProject);
+      }
+    }
+
+    return {
+      success: true,
+      brandName: brand.name,
+      subBrandName: subBrand?.name,
+    };
+  },
+});
+
 /**
  * Mutation interna: programa la sincronización de ediciones locales hacia COR.
  *
