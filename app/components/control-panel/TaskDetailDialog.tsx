@@ -35,6 +35,8 @@ interface TaskDetailDialogProps {
     corProjectId?: number;
     corClientId?: number;
     corClientName?: string;
+    brandId?: number;
+    productId?: number;
     corSyncError?: string;
     projectId?: Id<"projects">;
     corTaskMissingInCOR?: boolean;
@@ -195,6 +197,11 @@ export function TaskDetailDialog({
   const localClientId = ((liveTask as any)?.clientId ??
     (task as any).clientId ??
     (project as any)?.clientId) as Id<"corClients"> | undefined;
+  const projectSearchBrandId = ((liveTask as any)?.brandId ??
+    task.brandId) as number | undefined;
+  const projectSearchProductId = projectSearchBrandId
+    ? (((liveTask as any)?.productId ?? task.productId) as number | undefined)
+    : undefined;
   const canSelectPublishProject =
     canEditFromDialog &&
     syncStatus !== "synced" &&
@@ -277,6 +284,8 @@ export function TaskDetailDialog({
       setExistingProjectsError(null);
       const result = await searchActiveCORProjects({
         clientId: localClientId,
+        brandId: projectSearchBrandId,
+        productId: projectSearchProductId,
         perPage: 50,
       });
       setExistingProjects((result.projects || []) as CORProjectOption[]);

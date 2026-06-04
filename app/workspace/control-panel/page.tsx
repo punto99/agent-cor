@@ -58,6 +58,8 @@ interface FullTask {
   source?: "internal" | "external";
   brandName?: string;
   clientBrandId?: Id<"clientBrands">;
+  brandId?: number;
+  productId?: number;
   trelloCardId?: string;
   trelloCardUrl?: string;
   trelloSyncStatus?: string;

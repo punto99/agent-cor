@@ -91,6 +91,12 @@ function normalizePerPage(value: number | undefined, fallback: number) {
   return Math.min(50, Math.max(1, Math.trunc(value)));
 }
 
+function normalizeOptionalCorId(value: number | undefined) {
+  if (typeof value !== "number" || !Number.isFinite(value)) return undefined;
+  const normalized = Math.trunc(value);
+  return normalized > 0 ? normalized : undefined;
+}
+
 function normalizeDateEnd(value: string | undefined) {
   const dateEnd = value?.trim() || new Date().toISOString().slice(0, 10);
   if (!/^\d{4}-\d{2}-\d{2}$/.test(dateEnd)) {
@@ -244,6 +250,8 @@ export const searchActiveCORProjectsForClient = action({
   args: {
     clientId: v.id("corClients"),
     dateEnd: v.optional(v.string()),
+    brandId: v.optional(v.number()),
+    productId: v.optional(v.number()),
     page: v.optional(v.number()),
     perPage: v.optional(v.number()),
   },
@@ -264,10 +272,16 @@ export const searchActiveCORProjectsForClient = action({
     const dateEnd = normalizeDateEnd(args.dateEnd);
     const page = normalizePage(args.page, 1);
     const perPage = normalizePerPage(args.perPage, 20);
+    const brandId = normalizeOptionalCorId(args.brandId);
+    const productId = brandId
+      ? normalizeOptionalCorId(args.productId)
+      : undefined;
     const provider = getProjectManagementProvider();
     const result = await provider.listProjects({
       clientId: searchContext.corClientId,
       dateEnd,
+      brandId,
+      productId,
       page,
       perPage,
       archived: 2,

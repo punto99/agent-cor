@@ -706,6 +706,15 @@ export function createCORProvider(): ProjectManagementProvider {
       if (data.dateEnd) {
         filters.dateEnd = data.dateEnd;
       }
+      const brandId = parsePositiveInteger(data.brandId);
+      if (brandId !== undefined) {
+        filters.brand_id = brandId;
+
+        const productId = parsePositiveInteger(data.productId);
+        if (productId !== undefined) {
+          filters.product_id = productId;
+        }
+      }
 
       const params = new URLSearchParams({
         page: String(page),

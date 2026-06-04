@@ -149,6 +149,8 @@ export interface UpdateProjectInput {
 export interface ListProjectsInput {
   clientId: number;
   dateEnd?: string;
+  brandId?: number;
+  productId?: number;
   page?: number;
   perPage?: number;
   archived?: 1 | 2;
