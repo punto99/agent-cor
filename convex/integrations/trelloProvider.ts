@@ -15,6 +15,12 @@ type TrelloCard = {
   idList: string;
 };
 
+type TrelloComment = {
+  id: string;
+  type?: string;
+  date?: string;
+};
+
 type TrelloCustomField = {
   id: string;
   type: string;
@@ -264,6 +270,34 @@ export const trelloProvider = {
       { method: "PUT" },
       {
         idList: args.idList,
+      },
+    );
+  },
+
+  async updateCardFields(args: {
+    cardId: string;
+    desc?: string;
+    due?: string;
+  }): Promise<TrelloCard> {
+    return await trelloFetch<TrelloCard>(
+      `/cards/${args.cardId}`,
+      { method: "PUT" },
+      {
+        desc: args.desc,
+        due: args.due,
+      },
+    );
+  },
+
+  async addCommentToCard(args: {
+    cardId: string;
+    text: string;
+  }): Promise<TrelloComment> {
+    return await trelloFetch<TrelloComment>(
+      `/cards/${args.cardId}/actions/comments`,
+      { method: "POST" },
+      {
+        text: args.text,
       },
     );
   },

@@ -969,6 +969,177 @@ export const markTaskInboundSyncError = internalMutation({
   },
 });
 
+export const editExternalTaskFromAgent: any = internalAction({
+  args: {
+    threadId: v.string(),
+    taskId: v.optional(v.string()),
+    description: v.optional(v.string()),
+    deadline: v.optional(v.string()),
+    comment: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const description =
+      typeof args.description === "string" ? args.description.trim() : undefined;
+    const deadline =
+      typeof args.deadline === "string" ? args.deadline.trim() : undefined;
+    const comment =
+      typeof args.comment === "string" ? args.comment.trim() : undefined;
+
+    const changedFields: string[] = [];
+    if (description !== undefined) changedFields.push("description");
+    if (deadline !== undefined) changedFields.push("deadline");
+    const wantsComment = comment !== undefined;
+
+    if (changedFields.length === 0 && !wantsComment) {
+      return {
+        ok: false,
+        error:
+          "Indica qué quieres actualizar: descripción, fecha de entrega o comentario.",
+      };
+    }
+
+    if (description !== undefined && description.length === 0) {
+      return {
+        ok: false,
+        error: "La descripción no puede quedar vacía.",
+      };
+    }
+
+    if (deadline !== undefined && !/^\d{4}-\d{2}-\d{2}$/.test(deadline)) {
+      return {
+        ok: false,
+        error: "La fecha debe tener formato YYYY-MM-DD.",
+      };
+    }
+
+    if (comment !== undefined && comment.length === 0) {
+      return {
+        ok: false,
+        error: "El comentario no puede quedar vacío.",
+      };
+    }
+
+    const context = await ctx.runQuery(
+      (internal as any).data.tasks.getExternalEditableTaskContext,
+      {
+        threadId: args.threadId,
+        taskId: args.taskId,
+      },
+    );
+
+    if (!context?.ok) {
+      return {
+        ok: false,
+        error: context?.error || "No se pudo validar el requerimiento.",
+      };
+    }
+
+    const task = context.task;
+    const trelloCardId = task.trelloCardId;
+    if (!trelloCardId) {
+      return {
+        ok: false,
+        error:
+          "El requerimiento todavía no está listo para editarse. Intenta nuevamente en unos minutos.",
+      };
+    }
+
+    const applied: string[] = [];
+    const warnings: string[] = [];
+
+    if (changedFields.length > 0) {
+      await trelloProvider.updateCardFields({
+        cardId: trelloCardId,
+        desc:
+          description !== undefined
+            ? htmlToTrelloMarkdown(description)
+            : undefined,
+        due:
+          deadline !== undefined ? formatDeadlineForTrelloDue(deadline) : undefined,
+      });
+
+      await ctx.runMutation(
+        (internal as any).data.tasks.applyExternalTaskEditInternal,
+        {
+          taskId: task._id,
+          updates: {
+            description,
+            deadline,
+          },
+        },
+      );
+
+      await ctx.runMutation((internal as any).data.tasks.scheduleTaskSyncToCOR, {
+        taskId: task._id,
+        changedFields,
+      });
+
+      applied.push(...changedFields);
+    }
+
+    if (comment !== undefined) {
+      const trelloComment = await trelloProvider.addCommentToCard({
+        cardId: trelloCardId,
+        text: comment,
+      });
+
+      const corTaskId = task.corTaskId ? Number(task.corTaskId) : undefined;
+      const shouldSyncToCOR =
+        typeof corTaskId === "number" && Number.isFinite(corTaskId);
+
+      const taskMessageId = await ctx.runMutation(
+        (internal as any).data.tasks.createTaskMessageInternal,
+        {
+          taskId: task._id,
+          userId: context.userId,
+          source: "external_agent",
+          message: comment,
+          trelloCardId,
+          trelloCommentId: trelloComment.id,
+          trelloSyncStatus: "synced",
+          corTaskId: shouldSyncToCOR ? corTaskId : undefined,
+          corMessageSyncStatus: shouldSyncToCOR ? "pending" : "pending_cor_task",
+        },
+      );
+
+      if (shouldSyncToCOR) {
+        const provider = getProjectManagementProvider();
+        const result = await provider.postTaskMessage({
+          taskId: corTaskId!,
+          message: comment,
+        });
+
+        await ctx.runMutation(
+          (internal as any).data.tasks.updateTaskMessageSyncStatusInternal,
+          {
+            taskMessageId,
+            corMessageSyncStatus: result.success ? "synced" : "error",
+            corMessageSyncError: result.success
+              ? undefined
+              : result.error || "No se pudo publicar el comentario en COR.",
+          },
+        );
+
+        if (!result.success) {
+          warnings.push(
+            "El comentario se publicó en Trello, pero quedó pendiente de sincronizar con el equipo interno.",
+          );
+        }
+      }
+
+      applied.push("comment");
+    }
+
+    return {
+      ok: true,
+      applied,
+      warnings,
+      taskId: String(task._id),
+      corSyncScheduled: changedFields.length > 0 && Boolean(task.corTaskId),
+    };
+  },
+});
+
 export const getSubBrandLabelContext = internalQuery({
   args: {
     subBrandId: v.id("subBrands"),

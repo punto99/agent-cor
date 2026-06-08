@@ -492,6 +492,199 @@ export const getUserIdFromThread = internalQuery({
   },
 });
 
+export const getExternalEditableTaskContext = internalQuery({
+  args: {
+    threadId: v.string(),
+    taskId: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const chatThread = await ctx.db
+      .query("chatThreads")
+      .withIndex("by_thread", (q) => q.eq("threadId", args.threadId))
+      .first();
+
+    if (!chatThread) {
+      return { ok: false, error: "No se pudo identificar la conversación." };
+    }
+
+    const approvedExternalUser = await ctx.db
+      .query("approvedExternalUsers")
+      .withIndex("by_user", (q) => q.eq("userId", chatThread.userId))
+      .unique();
+
+    if (!approvedExternalUser) {
+      return {
+        ok: false,
+        error: "Esta acción solo está disponible para usuarios externos aprobados.",
+      };
+    }
+
+    let task = null;
+    if (args.taskId) {
+      const normalizedTaskId = ctx.db.normalizeId("tasks", args.taskId);
+      if (!normalizedTaskId) {
+        return { ok: false, error: "No se encontró ese requerimiento." };
+      }
+      task = await ctx.db.get(normalizedTaskId);
+    } else {
+      task = await ctx.db
+        .query("tasks")
+        .withIndex("by_thread", (q) => q.eq("threadId", args.threadId))
+        .first();
+    }
+
+    if (!task || task.convexStatus === "deleted") {
+      return { ok: false, error: "No se encontró ese requerimiento." };
+    }
+
+    if (task.source !== "external") {
+      return {
+        ok: false,
+        error: "Este requerimiento no pertenece al flujo de clientes externos.",
+      };
+    }
+
+    if (String(task.createdBy || "") !== String(chatThread.userId)) {
+      return {
+        ok: false,
+        error: "Solo puedes editar requerimientos creados por tu usuario.",
+      };
+    }
+
+    if (task.clientId && task.clientBrandId) {
+      const assignments = await ctx.db
+        .query("clientUserAssignments")
+        .withIndex("by_client_and_user", (q) =>
+          q.eq("clientId", task.clientId!).eq("userId", chatThread.userId),
+        )
+        .collect();
+
+      const hasAccess = assignments.some(
+        (assignment) =>
+          !assignment.brandId ||
+          String(assignment.brandId) === String(task.clientBrandId),
+      );
+
+      if (!hasAccess) {
+        return {
+          ok: false,
+          error:
+            "Ya no tienes autorización para editar requerimientos de esta categoría.",
+        };
+      }
+    }
+
+    return {
+      ok: true,
+      task,
+      userId: chatThread.userId,
+      approvedExternalUserId: approvedExternalUser._id,
+    };
+  },
+});
+
+export const applyExternalTaskEditInternal = internalMutation({
+  args: {
+    taskId: v.id("tasks"),
+    updates: v.object({
+      description: v.optional(v.string()),
+      deadline: v.optional(v.string()),
+    }),
+  },
+  handler: async (ctx, args) => {
+    const task = await ctx.db.get(args.taskId);
+    if (!task || task.convexStatus === "deleted") {
+      throw new Error("Task no encontrada.");
+    }
+
+    const updateData: Record<string, unknown> = {};
+    if (args.updates.description !== undefined) {
+      const descriptionError = validateDescriptionUpdate(
+        task.description,
+        args.updates.description,
+      );
+      if (descriptionError) throw new Error(descriptionError);
+      updateData.description = args.updates.description;
+    }
+    if (args.updates.deadline !== undefined) {
+      updateData.deadline = args.updates.deadline;
+    }
+
+    if (Object.keys(updateData).length === 0) return;
+    updateData.lastLocalEditAt = Date.now();
+
+    await ctx.db.patch(args.taskId, updateData);
+  },
+});
+
+export const createTaskMessageInternal = internalMutation({
+  args: {
+    taskId: v.id("tasks"),
+    userId: v.optional(v.id("users")),
+    source: v.union(
+      v.literal("external_agent"),
+      v.literal("trello"),
+      v.literal("cor"),
+      v.literal("internal"),
+    ),
+    message: v.string(),
+    trelloCardId: v.optional(v.string()),
+    trelloCommentId: v.optional(v.string()),
+    trelloSyncStatus: v.optional(v.string()),
+    corTaskId: v.optional(v.number()),
+    corMessageSyncStatus: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const now = Date.now();
+    return await ctx.db.insert("taskMessages", {
+      ...args,
+      trelloSyncedAt:
+        args.trelloSyncStatus === "synced" ? now : undefined,
+      corSyncedAt:
+        args.corMessageSyncStatus === "synced" ? now : undefined,
+      createdAt: now,
+      updatedAt: now,
+    });
+  },
+});
+
+export const updateTaskMessageSyncStatusInternal = internalMutation({
+  args: {
+    taskMessageId: v.id("taskMessages"),
+    trelloSyncStatus: v.optional(v.string()),
+    trelloSyncError: v.optional(v.string()),
+    trelloCommentId: v.optional(v.string()),
+    corMessageSyncStatus: v.optional(v.string()),
+    corMessageSyncError: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const patch: Record<string, unknown> = {
+      updatedAt: Date.now(),
+    };
+    if (args.trelloSyncStatus !== undefined) {
+      patch.trelloSyncStatus = args.trelloSyncStatus;
+      patch.trelloSyncedAt =
+        args.trelloSyncStatus === "synced" ? Date.now() : undefined;
+    }
+    if (args.trelloSyncError !== undefined) {
+      patch.trelloSyncError = args.trelloSyncError;
+    }
+    if (args.trelloCommentId !== undefined) {
+      patch.trelloCommentId = args.trelloCommentId;
+    }
+    if (args.corMessageSyncStatus !== undefined) {
+      patch.corMessageSyncStatus = args.corMessageSyncStatus;
+      patch.corSyncedAt =
+        args.corMessageSyncStatus === "synced" ? Date.now() : undefined;
+    }
+    if (args.corMessageSyncError !== undefined) {
+      patch.corMessageSyncError = args.corMessageSyncError;
+    }
+
+    await ctx.db.patch(args.taskMessageId, patch);
+  },
+});
+
 // Mutation pública para actualizar campos de una task desde el frontend (Panel de Control)
 // Si la task está publicada en COR (synced), dispara sincronización automática.
 export const updateTaskFields = mutation({

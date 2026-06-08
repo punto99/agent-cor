@@ -181,6 +181,22 @@ export interface ExternalAttachmentResult {
   url: string;
   name: string;
   size: number;
+  type?: string;
+  source?: string;
+}
+
+export interface TaskMessageAttachmentInput {
+  id: number;
+  name: string;
+  url: string;
+  type?: string;
+  source?: string;
+}
+
+export interface PostTaskMessageInput {
+  taskId: number;
+  message: string;
+  attachments?: TaskMessageAttachmentInput[];
 }
 
 // ==================== INTERFACE PRINCIPAL ====================
@@ -282,6 +298,14 @@ export interface ProjectManagementProvider {
     attachment?: ExternalAttachmentResult;
     error?: string;
   }>;
+
+  /**
+   * Publicar un mensaje/comentario en una task.
+   * En COR: POST /tasks/{task_id}/messages
+   */
+  postTaskMessage(
+    data: PostTaskMessageInput,
+  ): Promise<{ success: boolean; error?: string }>;
 
   /**
    * Listar TODOS los usuarios del sistema externo.

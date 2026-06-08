@@ -181,6 +181,33 @@ export default defineSchema({
     .index("by_task_and_trello", ["taskId", "trelloAttachmentId"])
     .index("by_trelloSyncStatus", ["trelloSyncStatus"]),
 
+  taskMessages: defineTable({
+    taskId: v.id("tasks"),
+    userId: v.optional(v.id("users")),
+    source: v.union(
+      v.literal("external_agent"),
+      v.literal("trello"),
+      v.literal("cor"),
+      v.literal("internal"),
+    ),
+    message: v.string(),
+    trelloCardId: v.optional(v.string()),
+    trelloCommentId: v.optional(v.string()),
+    trelloSyncStatus: v.optional(v.string()),
+    trelloSyncError: v.optional(v.string()),
+    trelloSyncedAt: v.optional(v.number()),
+    corTaskId: v.optional(v.number()),
+    corMessageSyncStatus: v.optional(v.string()),
+    corMessageSyncError: v.optional(v.string()),
+    corSyncedAt: v.optional(v.number()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_task", ["taskId"])
+    .index("by_user", ["userId"])
+    .index("by_trello_comment", ["trelloCommentId"])
+    .index("by_cor_status", ["corMessageSyncStatus"]),
+
   corInboundSyncState: defineTable({
     key: v.string(),
     taskStatusIndex: v.number(),

@@ -12,3 +12,4 @@ export { validateUserForClientTool } from "./validateUserForClientTool";
 export { listAccessibleBrandsTool } from "./listAccessibleBrandsTool";
 export { validateExternalUserForBrandTool } from "./validateExternalUserForBrandTool";
 export { createExternalTaskTool } from "./createExternalTaskTool";
+export { editExternalTaskTool } from "./editExternalTaskTool";

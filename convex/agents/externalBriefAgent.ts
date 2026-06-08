@@ -5,6 +5,7 @@ import { components } from "../_generated/api";
 import { google } from "@ai-sdk/google";
 import {
   createExternalTaskTool,
+  editExternalTaskTool,
   listAccessibleBrandsTool,
   reviewBriefTool,
   nowTool,
@@ -25,6 +26,7 @@ export const externalBriefAgent = new Agent(components.agent, {
     validateExternalUserForBrand: validateExternalUserForBrandTool,
     reviewBrief: reviewBriefTool,
     createExternalTask: createExternalTaskTool,
+    editExternalTask: editExternalTaskTool,
     now: nowTool,
   },
 

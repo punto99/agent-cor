@@ -23,6 +23,7 @@ import type {
   SetTaskLabelInput,
   UpdateProjectInput,
   UploadTaskAttachmentInput,
+  PostTaskMessageInput,
   ExternalAttachmentResult,
   ListProjectsInput,
   ListProjectsResult,
@@ -1053,6 +1054,49 @@ export function createCORProvider(): ProjectManagementProvider {
             size: uploadedFile.size || data.fileBuffer.byteLength,
           },
         };
+      } catch (error) {
+        return {
+          success: false,
+          error: error instanceof Error ? error.message : String(error),
+        };
+      }
+    },
+
+    // ==================== POST TASK MESSAGE ====================
+
+    async postTaskMessage(
+      data: PostTaskMessageInput,
+    ): Promise<{ success: boolean; error?: string }> {
+      console.log(`[COR Provider] 💬 Publicando mensaje en task: ${data.taskId}`);
+
+      try {
+        const response = await corApiFetch(`/tasks/${data.taskId}/messages`, {
+          method: "POST",
+          body: JSON.stringify({
+            message: data.message,
+            attachments: data.attachments?.map((attachment) => ({
+              id: attachment.id,
+              name: attachment.name,
+              url: attachment.url,
+              type: attachment.type,
+              source: attachment.source,
+            })),
+          }),
+        });
+
+        if (!response.ok) {
+          const errorText = await response.text();
+          console.error(
+            `[COR Provider] ❌ Error publicando mensaje: ${response.status} - ${errorText}`,
+          );
+          return {
+            success: false,
+            error: `COR API error: ${response.status} - ${errorText}`,
+          };
+        }
+
+        console.log(`[COR Provider] ✅ Mensaje publicado en task ${data.taskId}`);
+        return { success: true };
       } catch (error) {
         return {
           success: false,

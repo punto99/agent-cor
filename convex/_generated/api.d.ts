@@ -74,6 +74,7 @@ import type * as rag_ragTools from "../rag/ragTools.js";
 import type * as tools_attachFileToTaskTool from "../tools/attachFileToTaskTool.js";
 import type * as tools_createExternalTaskTool from "../tools/createExternalTaskTool.js";
 import type * as tools_createTaskTool from "../tools/createTaskTool.js";
+import type * as tools_editExternalTaskTool from "../tools/editExternalTaskTool.js";
 import type * as tools_editProjectTool from "../tools/editProjectTool.js";
 import type * as tools_editTaskTool from "../tools/editTaskTool.js";
 import type * as tools_getProjectTool from "../tools/getProjectTool.js";
@@ -161,6 +162,7 @@ declare const fullApi: ApiFromModules<{
   "tools/attachFileToTaskTool": typeof tools_attachFileToTaskTool;
   "tools/createExternalTaskTool": typeof tools_createExternalTaskTool;
   "tools/createTaskTool": typeof tools_createTaskTool;
+  "tools/editExternalTaskTool": typeof tools_editExternalTaskTool;
   "tools/editProjectTool": typeof tools_editProjectTool;
   "tools/editTaskTool": typeof tools_editTaskTool;
   "tools/getProjectTool": typeof tools_getProjectTool;
