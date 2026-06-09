@@ -27,6 +27,8 @@ import {
   FolderOpen,
   CalendarDays,
   Pencil,
+  ChevronDown,
+  ChevronRight,
 } from "lucide-react";
 
 interface TaskDetailDialogProps {
@@ -326,6 +328,8 @@ export function TaskDetailDialog({
     useState(false);
   const [publishProjectMode, setPublishProjectMode] =
     useState<PublishProjectMode>("new");
+  const [isPublishProjectSectionOpen, setIsPublishProjectSectionOpen] =
+    useState(true);
   const [existingProjectSearch, setExistingProjectSearch] = useState("");
   const [existingProjects, setExistingProjects] = useState<CORProjectOption[]>(
     [],
@@ -436,6 +440,9 @@ export function TaskDetailDialog({
     syncStatus !== "synced" &&
     !liveCorTaskId &&
     Boolean(localClientId);
+  const hasProposedProject = Boolean(project);
+  const canPublishWithNewProject =
+    canSelectPublishProject && hasProposedProject;
   const taxonomyBrands = (taxonomyOptions?.brands ||
     []) as TaxonomyBrandOption[];
   const liveClientBrandId =
@@ -510,6 +517,22 @@ export function TaskDetailDialog({
     setSelectedExistingProjectId(null);
     setExistingProjectsError(null);
   }, [task._id]);
+
+  useEffect(() => {
+    if (!canSelectPublishProject) return;
+    if (task.projectId && project === undefined) return;
+    if (task.projectId && project !== null) return;
+    setPublishProjectMode("existing");
+    if (existingProjects.length === 0 && !isLoadingExistingProjects) {
+      void loadExistingProjects();
+    }
+  }, [
+    canSelectPublishProject,
+    existingProjects.length,
+    isLoadingExistingProjects,
+    project,
+    task.projectId,
+  ]);
 
   useEffect(() => {
     setDraftBrandId(String(liveClientBrandId || ""));
@@ -615,6 +638,16 @@ export function TaskDetailDialog({
       setPublishError(null);
       if (publishProjectMode === "existing" && !selectedExistingProjectId) {
         setPublishError("Selecciona un proyecto existente para publicar.");
+        return;
+      }
+      if (publishProjectMode === "new" && !canPublishWithNewProject) {
+        setPublishError(
+          "No hay un proyecto nuevo propuesto para esta tarea. Selecciona un proyecto existente.",
+        );
+        setPublishProjectMode("existing");
+        if (existingProjects.length === 0) {
+          void loadExistingProjects();
+        }
         return;
       }
       setIsPublishing(true);
@@ -1160,142 +1193,175 @@ export function TaskDetailDialog({
 
             {canSelectPublishProject && (
               <div className="mb-4 rounded-lg border border-border bg-card/70 p-3">
-                <div className="mb-2 flex items-center gap-2 text-sm font-medium text-foreground">
-                  <FolderOpen className="h-4 w-4 text-primary" />
-                  Proyecto en {toolName}
-                </div>
+                <button
+                  type="button"
+                  onClick={() =>
+                    setIsPublishProjectSectionOpen((open) => !open)
+                  }
+                  className={`flex w-full cursor-pointer items-center justify-between gap-3 text-left text-sm font-medium text-foreground outline-none transition-colors hover:text-primary ${
+                    isPublishProjectSectionOpen ? "mb-2" : ""
+                  }`}
+                  aria-expanded={isPublishProjectSectionOpen}
+                >
+                  <span className="flex min-w-0 items-center gap-2">
+                    <FolderOpen className="h-4 w-4 flex-shrink-0 text-primary" />
+                    <span className="truncate">Proyecto en {toolName}</span>
+                  </span>
+                  {isPublishProjectSectionOpen ? (
+                    <ChevronDown className="h-4 w-4 flex-shrink-0 text-muted-foreground" />
+                  ) : (
+                    <ChevronRight className="h-4 w-4 flex-shrink-0 text-muted-foreground" />
+                  )}
+                </button>
 
-                <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setPublishProjectMode("new");
-                      setSelectedExistingProjectId(null);
-                      setPublishError(null);
-                    }}
-                    className={`rounded-lg border px-3 py-2 text-left text-sm transition-colors cursor-pointer ${
-                      publishProjectMode === "new"
-                        ? "border-primary bg-primary/10 text-foreground"
-                        : "border-border bg-background hover:bg-muted"
-                    }`}
-                  >
-                    <span className="block font-medium">
-                      Crear proyecto nuevo
-                    </span>
-                    <span className="block text-xs text-muted-foreground">
-                      Usa el proyecto propuesto por el agente.
-                    </span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setPublishProjectMode("existing");
-                      setPublishError(null);
-                      if (existingProjects.length === 0) {
-                        void loadExistingProjects();
-                      }
-                    }}
-                    className={`rounded-lg border px-3 py-2 text-left text-sm transition-colors cursor-pointer ${
-                      publishProjectMode === "existing"
-                        ? "border-primary bg-primary/10 text-foreground"
-                        : "border-border bg-background hover:bg-muted"
-                    }`}
-                  >
-                    <span className="block font-medium">
-                      Usar proyecto existente
-                    </span>
-                    <span className="block text-xs text-muted-foreground">
-                      Publica la tarea dentro de un proyecto activo.
-                    </span>
-                  </button>
-                </div>
-
-                {publishProjectMode === "existing" && (
-                  <div className="mt-3 space-y-2">
-                    <div className="flex items-center gap-2 rounded-lg border border-border bg-background px-3 py-2">
-                      <Search className="h-4 w-4 text-muted-foreground" />
-                      <input
-                        value={existingProjectSearch}
-                        onChange={(event) =>
-                          setExistingProjectSearch(event.target.value)
-                        }
-                        placeholder="Buscar proyecto existente"
-                        className="min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground"
-                      />
+                {isPublishProjectSectionOpen && (
+                  <>
+                    <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
                       <button
                         type="button"
-                        onClick={() => void loadExistingProjects()}
-                        disabled={isLoadingExistingProjects}
-                        className="rounded-md px-2 py-1 text-xs text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
+                        onClick={() => {
+                          if (!canPublishWithNewProject) return;
+                          setPublishProjectMode("new");
+                          setSelectedExistingProjectId(null);
+                          setPublishError(null);
+                        }}
+                        disabled={!canPublishWithNewProject}
+                        title={
+                          canPublishWithNewProject
+                            ? undefined
+                            : "No hay proyecto nuevo creado para esta tarea."
+                        }
+                        className={`rounded-lg border px-3 py-2 text-left text-sm transition-colors ${
+                          !canPublishWithNewProject
+                            ? "cursor-not-allowed border-border bg-muted/40 text-muted-foreground opacity-70"
+                            : publishProjectMode === "new"
+                              ? "border-primary bg-primary/10 text-foreground"
+                              : "border-border bg-background hover:bg-muted"
+                        }`}
                       >
-                        {isLoadingExistingProjects ? "Cargando..." : "Actualizar"}
+                        <span className="block font-medium">
+                          Crear proyecto nuevo
+                        </span>
+                        <span className="block text-xs text-muted-foreground">
+                          {canPublishWithNewProject
+                            ? "Usa el proyecto propuesto por el agente."
+                            : "No hay proyecto nuevo creado para esta tarea."}
+                        </span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setPublishProjectMode("existing");
+                          setPublishError(null);
+                          if (existingProjects.length === 0) {
+                            void loadExistingProjects();
+                          }
+                        }}
+                        className={`rounded-lg border px-3 py-2 text-left text-sm transition-colors cursor-pointer ${
+                          publishProjectMode === "existing"
+                            ? "border-primary bg-primary/10 text-foreground"
+                            : "border-border bg-background hover:bg-muted"
+                        }`}
+                      >
+                        <span className="block font-medium">
+                          Usar proyecto existente
+                        </span>
+                        <span className="block text-xs text-muted-foreground">
+                          Publica la tarea dentro de un proyecto activo.
+                        </span>
                       </button>
                     </div>
 
-                    {existingProjectsError && (
-                      <div className="flex items-center gap-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700 dark:border-red-900/50 dark:bg-red-900/20 dark:text-red-300">
-                        <AlertCircle className="h-3.5 w-3.5 flex-shrink-0" />
-                        <span>{existingProjectsError}</span>
-                      </div>
-                    )}
-
-                    <div className="max-h-44 space-y-2 overflow-y-auto pr-1">
-                      {isLoadingExistingProjects && (
-                        <div className="flex items-center gap-2 rounded-lg border border-dashed border-border px-3 py-3 text-sm text-muted-foreground">
-                          <Loader2 className="h-4 w-4 animate-spin" />
-                          Cargando proyectos activos...
+                    {publishProjectMode === "existing" && (
+                      <div className="mt-3 space-y-2">
+                        <div className="flex items-center gap-2 rounded-lg border border-border bg-background px-3 py-2">
+                          <Search className="h-4 w-4 text-muted-foreground" />
+                          <input
+                            value={existingProjectSearch}
+                            onChange={(event) =>
+                              setExistingProjectSearch(event.target.value)
+                            }
+                            placeholder="Buscar proyecto existente"
+                            className="min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => void loadExistingProjects()}
+                            disabled={isLoadingExistingProjects}
+                            className="rounded-md px-2 py-1 text-xs text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
+                          >
+                            {isLoadingExistingProjects
+                              ? "Cargando..."
+                              : "Actualizar"}
+                          </button>
                         </div>
-                      )}
 
-                      {!isLoadingExistingProjects &&
-                        filteredExistingProjects.length === 0 && (
-                          <div className="rounded-lg border border-dashed border-border px-3 py-3 text-sm text-muted-foreground">
-                            No hay proyectos activos para esta búsqueda.
+                        {existingProjectsError && (
+                          <div className="flex items-center gap-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700 dark:border-red-900/50 dark:bg-red-900/20 dark:text-red-300">
+                            <AlertCircle className="h-3.5 w-3.5 flex-shrink-0" />
+                            <span>{existingProjectsError}</span>
                           </div>
                         )}
 
-                      {!isLoadingExistingProjects &&
-                        filteredExistingProjects.map((item) => (
-                          <button
-                            key={item.id}
-                            type="button"
-                            onClick={() => {
-                              setSelectedExistingProjectId(item.id);
-                              setPublishError(null);
-                            }}
-                            className={`w-full rounded-lg border px-3 py-2 text-left transition-colors cursor-pointer ${
-                              selectedExistingProjectId === item.id
-                                ? "border-primary bg-primary/10"
-                                : "border-border bg-background hover:bg-muted"
-                            }`}
-                          >
-                            <span className="block text-sm font-medium text-foreground">
-                              {item.name}
-                            </span>
-                            <span className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
-                              <span>ID COR: {item.id}</span>
-                              <span className="inline-flex items-center gap-1">
-                                <CalendarDays className="h-3 w-3" />
-                                {formatExistingProjectDate(item.endDate)}
-                              </span>
-                              {typeof item.deliverables === "number" && (
-                                <span>{item.deliverables} entregables</span>
-                              )}
-                            </span>
-                          </button>
-                        ))}
-                    </div>
+                        <div className="max-h-44 space-y-2 overflow-y-auto pr-1">
+                          {isLoadingExistingProjects && (
+                            <div className="flex items-center gap-2 rounded-lg border border-dashed border-border px-3 py-3 text-sm text-muted-foreground">
+                              <Loader2 className="h-4 w-4 animate-spin" />
+                              Cargando proyectos activos...
+                            </div>
+                          )}
 
-                    {selectedExistingProject && (
-                      <div className="rounded-lg bg-muted/60 px-3 py-2 text-xs text-muted-foreground">
-                        Se publicará dentro de{" "}
-                        <span className="font-medium text-foreground">
-                          {selectedExistingProject.name}
-                        </span>
-                        .
+                          {!isLoadingExistingProjects &&
+                            filteredExistingProjects.length === 0 && (
+                              <div className="rounded-lg border border-dashed border-border px-3 py-3 text-sm text-muted-foreground">
+                                No hay proyectos activos para esta búsqueda.
+                              </div>
+                            )}
+
+                          {!isLoadingExistingProjects &&
+                            filteredExistingProjects.map((item) => (
+                              <button
+                                key={item.id}
+                                type="button"
+                                onClick={() => {
+                                  setSelectedExistingProjectId(item.id);
+                                  setPublishError(null);
+                                }}
+                                className={`w-full rounded-lg border px-3 py-2 text-left transition-colors cursor-pointer ${
+                                  selectedExistingProjectId === item.id
+                                    ? "border-primary bg-primary/10"
+                                    : "border-border bg-background hover:bg-muted"
+                                }`}
+                              >
+                                <span className="block text-sm font-medium text-foreground">
+                                  {item.name}
+                                </span>
+                                <span className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
+                                  <span>ID COR: {item.id}</span>
+                                  <span className="inline-flex items-center gap-1">
+                                    <CalendarDays className="h-3 w-3" />
+                                    {formatExistingProjectDate(item.endDate)}
+                                  </span>
+                                  {typeof item.deliverables === "number" && (
+                                    <span>{item.deliverables} entregables</span>
+                                  )}
+                                </span>
+                              </button>
+                            ))}
+                        </div>
+
+                        {selectedExistingProject && (
+                          <div className="rounded-lg bg-muted/60 px-3 py-2 text-xs text-muted-foreground">
+                            Se publicará dentro de{" "}
+                            <span className="font-medium text-foreground">
+                              {selectedExistingProject.name}
+                            </span>
+                            .
+                          </div>
+                        )}
                       </div>
                     )}
-                  </div>
+                  </>
                 )}
               </div>
             )}

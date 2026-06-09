@@ -19,13 +19,12 @@ import {
   Building2,
   FolderKanban,
   CalendarDays,
-  ExternalLink,
-  GripVertical,
   LayoutGrid,
   List as ListIcon,
+  ChevronDown,
+  ChevronRight,
 } from "lucide-react";
 import {
-  getPriorityConfig,
   getStatusColor,
   getStatusDisplay,
 } from "../../components/task/types";
@@ -67,6 +66,7 @@ interface FullTask {
   trelloCardUrl?: string;
   trelloSyncStatus?: string;
   trelloSyncError?: string;
+  trelloSyncedAt?: number;
 }
 
 interface ControlPanelClient {
@@ -87,6 +87,7 @@ interface ControlPanelClient {
   projects: Array<{
     project: {
       _id: Id<"projects"> | string;
+      _creationTime?: number;
       name: string;
       status?: string;
       endDate?: string;
@@ -97,6 +98,7 @@ interface ControlPanelClient {
 }
 
 type ControlPanelView = "cards" | "list";
+type ControlPanelPublicationTab = "all" | "cor" | "unpublished";
 
 export default function ControlPanelPage() {
   const router = useRouter();
@@ -107,7 +109,14 @@ export default function ControlPanelPage() {
   const [selectedClientId, setSelectedClientId] = useState<string | null>(null);
   const [selectedBrandId, setSelectedBrandId] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<ControlPanelView>("cards");
+  const [publicationTab, setPublicationTab] =
+    useState<ControlPanelPublicationTab>("all");
   const [selectedTask, setSelectedTask] = useState<FullTask | null>(null);
+  const [expandedProjectIds, setExpandedProjectIds] = useState<Set<string>>(
+    () => new Set(),
+  );
+  const [isUnpublishedSectionOpen, setIsUnpublishedSectionOpen] =
+    useState(true);
   const [toast, setToast] = useState<{
     type: "success" | "error";
     message: string;
@@ -205,6 +214,63 @@ export default function ControlPanelPage() {
     }));
   }, [selectedClient, selectedBrandId]);
 
+  const unpublishedTasks = useMemo(
+    () =>
+      filteredProjects
+        .flatMap(({ tasks }) => tasks)
+        .filter((task) => task.corSyncStatus !== "synced")
+        .sort((a, b) => getTaskUpdatedAt(b) - getTaskUpdatedAt(a)),
+    [filteredProjects],
+  );
+
+  const publishedProjectGroups = useMemo(
+    () =>
+      filteredProjects
+        .map(({ project, tasks }) => ({
+          project,
+          tasks: tasks.filter((task) => task.corSyncStatus === "synced"),
+        }))
+        .filter(({ tasks }) => tasks.length > 0),
+    [filteredProjects],
+  );
+
+  const publishedTaskCount = useMemo(
+    () =>
+      publishedProjectGroups.reduce(
+        (total, projectGroup) => total + projectGroup.tasks.length,
+        0,
+      ),
+    [publishedProjectGroups],
+  );
+
+  const filteredTaskCount = useMemo(
+    () =>
+      filteredProjects.reduce(
+        (total, projectGroup) => total + projectGroup.tasks.length,
+        0,
+      ),
+    [filteredProjects],
+  );
+
+  const showUnpublishedSection =
+    publicationTab !== "cor" && unpublishedTasks.length > 0;
+  const showPublishedSection =
+    publicationTab !== "unpublished" && publishedProjectGroups.length > 0;
+  const hasVisibleTasksForTab = showUnpublishedSection || showPublishedSection;
+
+  useEffect(() => {
+    setExpandedProjectIds((current) => {
+      const next = new Set<string>();
+      for (const { project } of publishedProjectGroups) {
+        const projectId = String(project._id);
+        if (current.has(projectId) || next.size === 0) {
+          next.add(projectId);
+        }
+      }
+      return next;
+    });
+  }, [publishedProjectGroups]);
+
   useEffect(() => {
     if (!panelClients || panelClients.length === 0) {
       setSelectedClientId(null);
@@ -271,34 +337,6 @@ export default function ControlPanelPage() {
     { value: "finalizada", label: "Finalizada" },
   ];
 
-  const getStrategicPriorityConfig = (
-    value?: FullTask["strategicPriority"],
-  ) => {
-    if (!value) return null;
-    const map: Record<string, string> = {
-      I_NU: "bg-amber-100 text-amber-800 border-amber-200",
-      I_U: "bg-rose-100 text-rose-800 border-rose-200",
-      NI_NU: "bg-emerald-100 text-emerald-800 border-emerald-200",
-      NI_U: "bg-cyan-100 text-cyan-800 border-cyan-200",
-    };
-    return {
-      label: value,
-      className: map[value] ?? "bg-muted text-muted-foreground border-border",
-    };
-  };
-
-  const getPriorityBadgeClass = (priority?: number) => {
-    const map: Record<number, string> = {
-      0: "border-slate-200 bg-slate-50 text-slate-600 dark:border-slate-700 dark:bg-slate-900/40 dark:text-slate-300",
-      1: "border-blue-200 bg-blue-50 text-blue-700 dark:border-blue-800 dark:bg-blue-900/30 dark:text-blue-300",
-      2: "border-orange-200 bg-orange-50 text-orange-700 dark:border-orange-800 dark:bg-orange-900/30 dark:text-orange-300",
-      3: "border-red-200 bg-red-50 text-red-700 dark:border-red-800 dark:bg-red-900/30 dark:text-red-300",
-    };
-    return priority === undefined || priority === null
-      ? "border-border bg-muted text-muted-foreground"
-      : (map[priority] ?? map[1]);
-  };
-
   const formatDeadline = (deadline?: string) => {
     if (!deadline) return null;
     const normalized = deadline.slice(0, 10);
@@ -307,25 +345,62 @@ export default function ControlPanelPage() {
     return `${day}/${month}/${year}`;
   };
 
-  const getBrandDotClass = (index: number) => {
-    const colors = [
-      "bg-indigo-500",
-      "bg-blue-500",
-      "bg-rose-500",
-      "bg-emerald-500",
-      "bg-amber-500",
-      "bg-cyan-500",
-    ];
-    return colors[index % colors.length];
+  function getTaskUpdatedAt(task: FullTask) {
+    return Math.max(
+      task.lastLocalEditAt ?? 0,
+      task.corSyncedAt ?? 0,
+      task.trelloSyncedAt ?? 0,
+      task._creationTime,
+    );
+  }
+
+  function getProjectUpdatedAt(project: ControlPanelClient["projects"][number]) {
+    return Math.max(
+      project.project._creationTime ?? 0,
+      ...project.tasks.map((task) => getTaskUpdatedAt(task)),
+    );
+  }
+
+  const formatTimestamp = (value?: number) => {
+    if (!value) return "Sin fecha";
+    return new Intl.DateTimeFormat("es-EC", {
+      day: "2-digit",
+      month: "short",
+      year: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+    }).format(new Date(value));
   };
 
-  const getCorActionLabel = (task: FullTask) => {
-    if (task.corSyncStatus === "synced") return "Publicado";
-    if (task.corSyncStatus === "syncing" || task.corSyncStatus === "retrying") {
-      return "Publicando...";
-    }
-    if (task.corSyncStatus === "error") return "Reintentar en COR";
-    return "Publicar en COR";
+  const getTaskCategoryLabel = (task: FullTask) => {
+    const category = task.brandName ?? "Sin categoría";
+    return task.subBrandName ? `${category} · ${task.subBrandName}` : category;
+  };
+
+  const getProjectProgress = (tasks: FullTask[]) => {
+    const total = tasks.length;
+    const published = tasks.filter(
+      (task) => task.corSyncStatus === "synced",
+    ).length;
+
+    return {
+      total,
+      published,
+      publishedPercent: total > 0 ? (published / total) * 100 : 0,
+      label: `${published}/${total}`,
+    };
+  };
+
+  const toggleProjectExpanded = (projectId: string) => {
+    setExpandedProjectIds((current) => {
+      const next = new Set(current);
+      if (next.has(projectId)) {
+        next.delete(projectId);
+      } else {
+        next.add(projectId);
+      }
+      return next;
+    });
   };
 
   return (
@@ -379,7 +454,7 @@ export default function ControlPanelPage() {
                         onClick={() =>
                           setSelectedClientId(String(entry.client._id))
                         }
-                        className={`w-full text-left rounded-md px-3 py-2 transition-colors ${
+                        className={`w-full cursor-pointer text-left rounded-md px-3 py-2 transition-colors ${
                           isSelected
                             ? "bg-primary/10 text-primary"
                             : "text-foreground hover:bg-accent"
@@ -438,12 +513,12 @@ export default function ControlPanelPage() {
                       </p>
                     </div>
 
-                    <div className="flex items-center gap-3">
+                    <div className="flex flex-wrap items-center justify-end gap-3">
                       <div className="inline-flex h-9 rounded-lg border border-border bg-card p-1">
                         <button
                           type="button"
                           onClick={() => handleViewModeChange("cards")}
-                          className={`inline-flex items-center gap-1.5 rounded-md px-2.5 text-xs font-medium transition-colors ${
+                          className={`inline-flex cursor-pointer items-center gap-1.5 rounded-md px-2.5 text-xs font-medium transition-colors ${
                             viewMode === "cards"
                               ? "bg-primary text-primary-foreground"
                               : "text-muted-foreground hover:bg-accent hover:text-foreground"
@@ -456,7 +531,7 @@ export default function ControlPanelPage() {
                         <button
                           type="button"
                           onClick={() => handleViewModeChange("list")}
-                          className={`inline-flex items-center gap-1.5 rounded-md px-2.5 text-xs font-medium transition-colors ${
+                          className={`inline-flex cursor-pointer items-center gap-1.5 rounded-md px-2.5 text-xs font-medium transition-colors ${
                             viewMode === "list"
                               ? "bg-primary text-primary-foreground"
                               : "text-muted-foreground hover:bg-accent hover:text-foreground"
@@ -468,14 +543,30 @@ export default function ControlPanelPage() {
                         </button>
                       </div>
 
-                      <div className="flex items-center gap-2">
+                      <div className="flex flex-wrap items-center justify-end gap-2">
                         <Filter className="h-4 w-4 text-muted-foreground" />
+                        {selectedClient.brands.length > 0 && (
+                          <select
+                            value={selectedBrandId || ""}
+                            onChange={(event) =>
+                              setSelectedBrandId(event.target.value || null)
+                            }
+                            className="h-9 max-w-[220px] cursor-pointer rounded-lg border border-border bg-card px-3 text-sm text-foreground outline-none focus:ring-2 focus:ring-primary"
+                          >
+                            <option value="">Todas las categorías</option>
+                            {selectedClient.brands.map((brand) => (
+                              <option key={brand._id} value={String(brand._id)}>
+                                {brand.name}
+                              </option>
+                            ))}
+                          </select>
+                        )}
                         <select
                           value={statusFilter || ""}
                           onChange={(event) =>
                             setStatusFilter(event.target.value || undefined)
                           }
-                          className="h-9 rounded-lg border border-border bg-card px-3 text-sm text-foreground outline-none focus:ring-2 focus:ring-primary"
+                          className="h-9 cursor-pointer rounded-lg border border-border bg-card px-3 text-sm text-foreground outline-none focus:ring-2 focus:ring-primary"
                         >
                           {statusOptions.map((opt) => (
                             <option key={opt.label} value={opt.value || ""}>
@@ -487,48 +578,46 @@ export default function ControlPanelPage() {
                     </div>
                   </div>
 
-                  {selectedClient.brands.length > 0 && (
-                    <div className="mt-4 flex flex-wrap items-center gap-2">
+                  <div className="mt-5 border-b border-border">
+                    <div className="flex flex-wrap items-center gap-6">
                       <button
                         type="button"
-                        onClick={() => setSelectedBrandId(null)}
-                        className={`inline-flex h-8 items-center rounded-md border px-3 text-xs font-medium transition-colors ${
-                          selectedBrandId === null
-                            ? "border-primary bg-primary/5 text-primary"
-                            : "border-border bg-card text-muted-foreground hover:border-primary/40 hover:bg-accent hover:text-foreground"
+                        onClick={() => setPublicationTab("all")}
+                        className={`inline-flex h-10 cursor-pointer items-center border-b-2 px-1 text-sm font-semibold transition-colors ${
+                          publicationTab === "all"
+                            ? "border-primary text-primary"
+                            : "border-transparent text-muted-foreground hover:text-foreground"
                         }`}
                       >
-                        Todas las categorías
+                        Todas ({filteredTaskCount})
                       </button>
-                      {selectedClient.brands.map((brand, index) => {
-                        const isSelected =
-                          selectedBrandId === String(brand._id);
-
-                        return (
-                          <button
-                            key={brand._id}
-                            type="button"
-                            onClick={() =>
-                              setSelectedBrandId(String(brand._id))
-                            }
-                            className={`inline-flex h-8 max-w-[220px] items-center gap-2 rounded-md border px-3 text-xs font-medium transition-colors ${
-                              isSelected
-                                ? "border-primary bg-primary/5 text-primary"
-                                : "border-border bg-card text-foreground hover:border-primary/40 hover:bg-accent"
-                            }`}
-                          >
-                            <span
-                              className={`h-2 w-2 rounded-full ${getBrandDotClass(index)}`}
-                            />
-                            <span className="truncate">{brand.name}</span>
-                          </button>
-                        );
-                      })}
+                      <button
+                        type="button"
+                        onClick={() => setPublicationTab("cor")}
+                        className={`inline-flex h-10 cursor-pointer items-center border-b-2 px-1 text-sm font-semibold transition-colors ${
+                          publicationTab === "cor"
+                            ? "border-primary text-primary"
+                            : "border-transparent text-muted-foreground hover:text-foreground"
+                        }`}
+                      >
+                        En COR ({publishedTaskCount})
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setPublicationTab("unpublished")}
+                        className={`inline-flex h-10 cursor-pointer items-center border-b-2 px-1 text-sm font-semibold transition-colors ${
+                          publicationTab === "unpublished"
+                            ? "border-primary text-primary"
+                            : "border-transparent text-muted-foreground hover:text-foreground"
+                        }`}
+                      >
+                        Sin publicar ({unpublishedTasks.length})
+                      </button>
                     </div>
-                  )}
+                  </div>
                 </div>
 
-                {filteredProjects.length === 0 ? (
+                {filteredProjects.length === 0 || !hasVisibleTasksForTab ? (
                   <div className="border border-border rounded-lg bg-card p-8 text-center">
                     <h3 className="text-sm font-medium text-foreground">
                       No hay tareas para este filtro
@@ -538,153 +627,402 @@ export default function ControlPanelPage() {
                     </p>
                   </div>
                 ) : viewMode === "cards" ? (
-                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-                    {filteredProjects.flatMap(({ tasks }) =>
-                      tasks.map((task) => (
-                        <TaskCard
-                          key={task._id}
-                          task={task}
-                          onClick={() => setSelectedTask(task)}
-                        />
-                      )),
+                  <div className="space-y-5">
+                    {showUnpublishedSection && (
+                      <section className="overflow-hidden rounded-lg border border-amber-200/80 bg-amber-50/35 dark:border-amber-900/60 dark:bg-amber-950/10">
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setIsUnpublishedSectionOpen((open) => !open)
+                          }
+                          className={`flex w-full cursor-pointer flex-col gap-3 bg-amber-50/60 px-4 py-4 text-left outline-none transition-colors hover:bg-amber-50 dark:bg-amber-950/20 dark:hover:bg-amber-950/30 sm:flex-row sm:items-center sm:justify-between ${
+                            isUnpublishedSectionOpen
+                              ? "border-b border-amber-200/70 dark:border-amber-900/50"
+                              : ""
+                          }`}
+                          aria-expanded={isUnpublishedSectionOpen}
+                        >
+                          <div className="flex min-w-0 items-center gap-3">
+                            <span className="inline-flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-md bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300">
+                              <AlertCircle className="h-4 w-4" />
+                            </span>
+                            <div className="min-w-0">
+                              <h3 className="truncate text-base font-semibold text-foreground transition-colors">
+                                Tareas aún no publicadas en COR
+                              </h3>
+                              <p className="mt-0.5 text-xs text-muted-foreground">
+                                {unpublishedTasks.length} tarea
+                                {unpublishedTasks.length !== 1 ? "s" : ""}
+                              </p>
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <span className="inline-flex h-8 items-center rounded-md border border-amber-200 bg-card px-3 text-xs font-medium text-amber-700 dark:border-amber-800 dark:bg-background dark:text-amber-300">
+                              Pendientes de publicar
+                            </span>
+                            {isUnpublishedSectionOpen ? (
+                              <ChevronDown className="h-4 w-4 text-amber-700 dark:text-amber-300" />
+                            ) : (
+                              <ChevronRight className="h-4 w-4 text-amber-700 dark:text-amber-300" />
+                            )}
+                          </div>
+                        </button>
+
+                        {isUnpublishedSectionOpen && (
+                          <div className="grid grid-cols-1 gap-4 p-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+                            {unpublishedTasks.map((task) => (
+                              <TaskCard
+                                key={task._id}
+                                task={task}
+                                onClick={() => setSelectedTask(task)}
+                              />
+                            ))}
+                          </div>
+                        )}
+                      </section>
+                    )}
+
+                    {showPublishedSection && (
+                      <section className="overflow-hidden rounded-lg border border-emerald-200/80 bg-emerald-50/30 dark:border-emerald-900/60 dark:bg-emerald-950/10">
+                        <div className="flex flex-col gap-3 border-b border-emerald-200/70 bg-emerald-50/60 px-4 py-4 dark:border-emerald-900/50 dark:bg-emerald-950/20 sm:flex-row sm:items-center sm:justify-between">
+                          <div className="flex min-w-0 items-center gap-3">
+                            <span className="inline-flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-md bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300">
+                              <CheckCircle2 className="h-4 w-4" />
+                            </span>
+                            <div className="min-w-0">
+                              <h3 className="truncate text-base font-semibold text-foreground">
+                                Proyectos en COR
+                              </h3>
+                              <p className="mt-0.5 text-xs text-muted-foreground">
+                                {publishedProjectGroups.length} proyecto
+                                {publishedProjectGroups.length !== 1
+                                  ? "s"
+                                  : ""}{" "}
+                                · {publishedTaskCount} tarea
+                                {publishedTaskCount !== 1 ? "s" : ""}
+                              </p>
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="space-y-4 p-4">
+                          {publishedProjectGroups.map((projectGroup) => {
+                            const { project, tasks } = projectGroup;
+                            const progress = getProjectProgress(tasks);
+                            const updatedAt = getProjectUpdatedAt(projectGroup);
+
+                            return (
+                              <section
+                                key={project._id}
+                                className="overflow-hidden rounded-lg border border-border bg-card"
+                              >
+                                <div className="flex flex-col gap-3 border-b border-border bg-muted/35 px-4 py-3 dark:bg-muted/20 sm:flex-row sm:items-center sm:justify-between">
+                                  <div className="min-w-0">
+                                    <div className="flex min-w-0 items-center gap-2">
+                                      <FolderKanban className="h-4 w-4 flex-shrink-0 text-primary" />
+                                      <h4 className="truncate text-sm font-semibold text-foreground">
+                                        {project.name}
+                                      </h4>
+                                    </div>
+                                    <p className="mt-1 text-xs text-muted-foreground">
+                                      {tasks.length} tarea
+                                      {tasks.length !== 1 ? "s" : ""} · Última
+                                      actualización {formatTimestamp(updatedAt)}
+                                    </p>
+                                  </div>
+                                  <div className="flex items-center gap-3">
+                                    <div className="h-1.5 w-24 overflow-hidden rounded-full bg-muted">
+                                      <div
+                                        className="h-full rounded-full bg-emerald-500"
+                                        style={{
+                                          width: `${progress.publishedPercent}%`,
+                                        }}
+                                      />
+                                    </div>
+                                    <span className="text-xs font-medium text-muted-foreground">
+                                      {progress.label}
+                                    </span>
+                                  </div>
+                                </div>
+
+                                <div className="grid grid-cols-1 gap-4 p-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+                                  {tasks.map((task) => (
+                                    <TaskCard
+                                      key={task._id}
+                                      task={task}
+                                      onClick={() => setSelectedTask(task)}
+                                    />
+                                  ))}
+                                </div>
+                              </section>
+                            );
+                          })}
+                        </div>
+                      </section>
                     )}
                   </div>
                 ) : (
-                  <div className="space-y-3">
-                    {filteredProjects.map(({ project, tasks }) => {
-                      const projectBrands = Array.from(
-                        new Set(
-                          tasks
-                            .map((task) => task.brandName)
-                            .filter(Boolean) as string[],
-                        ),
-                      );
-
-                      return (
-                        <div
-                          key={project._id}
-                          className="border border-border rounded-lg bg-card overflow-hidden"
+                  <div className="space-y-5">
+                    {showUnpublishedSection && (
+                      <section className="overflow-hidden rounded-lg border border-amber-200/80 bg-amber-50/35 dark:border-amber-900/60 dark:bg-amber-950/10">
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setIsUnpublishedSectionOpen((open) => !open)
+                          }
+                          className={`flex w-full cursor-pointer flex-col gap-3 bg-amber-50/60 px-4 py-4 text-left outline-none transition-colors hover:bg-amber-50 dark:bg-amber-950/20 dark:hover:bg-amber-950/30 sm:flex-row sm:items-center sm:justify-between ${
+                            isUnpublishedSectionOpen
+                              ? "border-b border-amber-200/70 dark:border-amber-900/50"
+                              : ""
+                          }`}
+                          aria-expanded={isUnpublishedSectionOpen}
                         >
-                          <div className="px-4 py-3 border-b border-border flex items-center justify-between gap-4 bg-muted/70 dark:bg-muted/40">
-                            <div className="min-w-0 flex items-center gap-2">
-                              <FolderKanban className="h-4 w-4 text-muted-foreground flex-shrink-0" />
-                              <div className="min-w-0">
-                                <div className="flex items-center gap-2 min-w-0">
-                                  <h3 className="text-sm font-semibold text-foreground truncate">
-                                    {project.name}
-                                  </h3>
-                                  {projectBrands.map((brandName) => (
-                                    <span
-                                      key={brandName}
-                                      className="text-[11px] px-2 py-0.5 rounded-md border border-blue-200 bg-blue-50 text-blue-700 dark:border-blue-800 dark:bg-blue-900/30 dark:text-blue-300 flex-shrink-0"
-                                    >
-                                      {brandName}
-                                    </span>
-                                  ))}
-                                </div>
-                                <p className="text-xs text-muted-foreground">
-                                  {tasks.length} tarea
-                                  {tasks.length !== 1 ? "s" : ""}
-                                </p>
-                              </div>
+                          <div className="flex min-w-0 items-center gap-3">
+                            <span className="inline-flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-md bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300">
+                              <AlertCircle className="h-4 w-4" />
+                            </span>
+                            <div className="min-w-0">
+                              <h3 className="truncate text-base font-semibold text-foreground transition-colors">
+                                Tareas aún no publicadas en COR
+                              </h3>
+                              <p className="mt-0.5 text-xs text-muted-foreground">
+                                {unpublishedTasks.length} tarea
+                                {unpublishedTasks.length !== 1 ? "s" : ""}
+                              </p>
                             </div>
                           </div>
+                          <div className="flex items-center gap-2">
+                            <span className="inline-flex h-8 items-center rounded-md border border-amber-200 bg-card px-3 text-xs font-medium text-amber-700 dark:border-amber-800 dark:bg-background dark:text-amber-300">
+                              Pendientes de publicar
+                            </span>
+                            {isUnpublishedSectionOpen ? (
+                              <ChevronDown className="h-4 w-4 text-amber-700 dark:text-amber-300" />
+                            ) : (
+                              <ChevronRight className="h-4 w-4 text-amber-700 dark:text-amber-300" />
+                            )}
+                          </div>
+                        </button>
 
-                          <div className="divide-y divide-border">
-                            {tasks.map((task) => {
-                              const priorityConfig = getPriorityConfig(
-                                task.priority,
-                              );
-                              const strategicPriorityConfig =
-                                getStrategicPriorityConfig(
-                                  task.strategicPriority,
-                                );
-                              const formattedDeadline = formatDeadline(
-                                task.deadline,
-                              );
+                        {isUnpublishedSectionOpen && (
+                          <div className="overflow-x-auto">
+                            <div className="min-w-[900px]">
+                              <div className="grid grid-cols-[minmax(340px,1fr)_240px_220px_220px_44px] items-center gap-x-8 border-b border-amber-200/70 bg-card/70 px-4 py-3 text-xs font-semibold text-muted-foreground dark:border-amber-900/40 dark:bg-background/50">
+                                <div className="pl-8">Tarea</div>
+                                <div>Categoría</div>
+                                <div>Fecha de creación</div>
+                                <div>Última actualización</div>
+                                <div />
+                              </div>
 
-                              return (
-                                <button
-                                  key={task._id}
-                                  type="button"
-                                  onClick={() => setSelectedTask(task)}
-                                  className="w-full px-4 py-3 text-left hover:bg-accent transition-colors"
-                                >
-                                  <div className="flex items-center gap-3">
-                                    <GripVertical className="h-4 w-4 text-muted-foreground/60 flex-shrink-0" />
-                                    <div className="min-w-0 flex-1">
-                                      <div className="flex flex-wrap items-center gap-2 min-w-0">
-                                        <p className="text-sm font-medium text-foreground truncate">
-                                          {task.title}
-                                        </p>
-                                        {task.source === "external" && (
-                                          <span className="text-[11px] px-2 py-0.5 rounded-md border border-blue-200 bg-blue-50 text-blue-700 dark:border-blue-800 dark:bg-blue-900/30 dark:text-blue-300 flex-shrink-0">
-                                            Cliente externo
+                              <div className="divide-y divide-amber-200/70 dark:divide-amber-900/40">
+                                {unpublishedTasks.map((task) => (
+                                  <button
+                                    key={task._id}
+                                    type="button"
+                                    onClick={() => setSelectedTask(task)}
+                                    className="grid w-full cursor-pointer grid-cols-[minmax(340px,1fr)_240px_220px_220px_44px] items-center gap-x-8 px-4 py-3 text-left transition-colors hover:bg-amber-100/40 dark:hover:bg-amber-950/20"
+                                  >
+                                    <div className="flex min-w-0 items-center gap-3 pl-8">
+                                      <span className="h-2.5 w-2.5 flex-shrink-0 rounded-full bg-amber-400" />
+                                      <div className="min-w-0">
+                                        <div className="min-w-0 space-y-1">
+                                          <span className="block truncate text-sm font-semibold text-foreground">
+                                            {task.title}
                                           </span>
-                                        )}
-                                        {task.brandName && (
-                                          <span className="text-[11px] px-2 py-0.5 rounded-md border border-border bg-muted text-muted-foreground flex-shrink-0">
-                                            {task.brandName}
-                                          </span>
-                                        )}
-                                      </div>
-                                      <div className="flex flex-wrap items-center gap-2 mt-1 text-xs text-muted-foreground">
-                                        {formattedDeadline && (
-                                          <span className="inline-flex items-center gap-1">
-                                            <CalendarDays className="h-3 w-3" />
-                                            {formattedDeadline}
-                                          </span>
-                                        )}
-                                        {priorityConfig && (
-                                          <span
-                                            className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md border ${getPriorityBadgeClass(task.priority)}`}
-                                          >
-                                            <span>{priorityConfig.icon}</span>
-                                            {priorityConfig.label}
-                                          </span>
-                                        )}
-                                        {strategicPriorityConfig && (
-                                          <span
-                                            className={`px-2 py-0.5 rounded-md border ${strategicPriorityConfig.className}`}
-                                          >
-                                            {strategicPriorityConfig.label}
-                                          </span>
-                                        )}
+                                          {task.source === "external" && (
+                                            <span className="inline-flex w-fit rounded-md border border-blue-200 bg-blue-50 px-2 py-0.5 text-[11px] text-blue-700 dark:border-blue-800 dark:bg-blue-900/30 dark:text-blue-300">
+                                              Cliente externo
+                                            </span>
+                                          )}
+                                        </div>
                                       </div>
                                     </div>
 
-                                    <span
-                                      className={`text-xs px-2 py-0.5 rounded-full border flex-shrink-0 ${getStatusColor(task.status)}`}
-                                    >
-                                      {getStatusDisplay(task.status)}
-                                    </span>
-                                    <span
-                                      className={`text-xs px-2 py-0.5 rounded-md border flex-shrink-0 ${
-                                        task.corSyncStatus === "synced"
-                                          ? "border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-300"
-                                          : task.corSyncStatus === "error"
-                                            ? "border-red-200 bg-red-50 text-red-700 dark:border-red-800 dark:bg-red-900/30 dark:text-red-300"
-                                            : "border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-800 dark:bg-amber-900/30 dark:text-amber-300"
-                                      }`}
-                                    >
-                                      {task.corSyncStatus === "synced"
-                                        ? "Publicado"
-                                        : task.corSyncStatus === "error"
-                                          ? "Error COR"
-                                          : "Pendiente COR"}
-                                    </span>
-                                    <span className="inline-flex items-center gap-1 text-xs px-3 py-1 rounded-md border border-primary/40 text-primary flex-shrink-0">
-                                      <ExternalLink className="h-3 w-3" />
-                                      {getCorActionLabel(task)}
-                                    </span>
-                                  </div>
-                                </button>
-                              );
-                            })}
+                                    <div className="truncate text-sm text-muted-foreground">
+                                      {getTaskCategoryLabel(task)}
+                                    </div>
+
+                                    <div className="text-sm text-muted-foreground">
+                                      {formatTimestamp(task._creationTime)}
+                                    </div>
+
+                                    <div className="text-sm text-muted-foreground">
+                                      {formatTimestamp(getTaskUpdatedAt(task))}
+                                    </div>
+
+                                    <ChevronRight className="h-4 w-4 text-primary" />
+                                  </button>
+                                ))}
+                              </div>
+                            </div>
+                          </div>
+                        )}
+                      </section>
+                    )}
+
+                    {showPublishedSection && (
+                      <section className="overflow-hidden rounded-lg border border-emerald-200/80 bg-emerald-50/30 dark:border-emerald-900/60 dark:bg-emerald-950/10">
+                        <div className="flex flex-col gap-3 border-b border-emerald-200/70 bg-emerald-50/60 px-4 py-4 dark:border-emerald-900/50 dark:bg-emerald-950/20 sm:flex-row sm:items-center sm:justify-between">
+                          <div className="flex min-w-0 items-center gap-3">
+                            <span className="inline-flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-md bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300">
+                              <CheckCircle2 className="h-4 w-4" />
+                            </span>
+                            <div className="min-w-0">
+                              <h3 className="truncate text-base font-semibold text-foreground">
+                                Proyectos en COR
+                              </h3>
+                              <p className="mt-0.5 text-xs text-muted-foreground">
+                                {publishedProjectGroups.length} proyecto
+                                {publishedProjectGroups.length !== 1
+                                  ? "s"
+                                  : ""}{" "}
+                                · {publishedTaskCount} tarea
+                                {publishedTaskCount !== 1 ? "s" : ""}
+                              </p>
+                            </div>
                           </div>
                         </div>
-                      );
-                    })}
+
+                        <div className="overflow-x-auto">
+                          <div className="min-w-[800px]">
+                            <div className="grid grid-cols-[minmax(280px,1fr)_110px_190px_220px] items-center border-b border-emerald-200/70 bg-card/70 px-4 py-3 text-xs font-semibold text-muted-foreground dark:border-emerald-900/40 dark:bg-background/50">
+                              <div className="pl-8">Proyecto</div>
+                              <div>Tareas</div>
+                              <div>Progreso</div>
+                              <div>Última actualización</div>
+                            </div>
+
+                            <div className="divide-y divide-border">
+                              {publishedProjectGroups.map((projectGroup) => {
+                                const { project, tasks } = projectGroup;
+                                const projectId = String(project._id);
+                                const isExpanded =
+                                  expandedProjectIds.has(projectId);
+                                const progress = getProjectProgress(tasks);
+                                const updatedAt =
+                                  getProjectUpdatedAt(projectGroup);
+
+                                return (
+                                  <div key={project._id}>
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        toggleProjectExpanded(projectId)
+                                      }
+                                      className="grid w-full cursor-pointer grid-cols-[minmax(280px,1fr)_110px_190px_220px] items-center px-4 py-4 text-left transition-colors hover:bg-accent/60"
+                                    >
+                                      <div className="flex min-w-0 items-center gap-3">
+                                        {isExpanded ? (
+                                          <ChevronDown className="h-4 w-4 flex-shrink-0 text-primary" />
+                                        ) : (
+                                          <ChevronRight className="h-4 w-4 flex-shrink-0 text-primary" />
+                                        )}
+                                        <span className="truncate text-sm font-semibold text-foreground">
+                                          {project.name}
+                                        </span>
+                                      </div>
+
+                                      <div className="text-sm font-medium text-muted-foreground">
+                                        {tasks.length}
+                                      </div>
+
+                                      <div className="flex items-center gap-3">
+                                        <div className="h-1.5 w-24 overflow-hidden rounded-full bg-muted">
+                                          <div
+                                            className="h-full rounded-full bg-emerald-500"
+                                            style={{
+                                              width: `${progress.publishedPercent}%`,
+                                            }}
+                                          />
+                                        </div>
+                                        <span className="text-xs font-medium text-muted-foreground">
+                                          {progress.label}
+                                        </span>
+                                      </div>
+
+                                      <div className="text-sm text-muted-foreground">
+                                        {formatTimestamp(updatedAt)}
+                                      </div>
+                                    </button>
+
+                                    {isExpanded && (
+                                      <div className="border-t border-border bg-background">
+                                        {tasks.map((task) => {
+                                          const formattedDeadline =
+                                            formatDeadline(task.deadline);
+
+                                          return (
+                                            <button
+                                              key={task._id}
+                                              type="button"
+                                              onClick={() =>
+                                                setSelectedTask(task)
+                                              }
+                                              className="grid w-full cursor-pointer grid-cols-[minmax(280px,1fr)_110px_190px_220px] items-center px-4 py-3 text-left transition-colors hover:bg-accent"
+                                            >
+                                              <div className="flex min-w-0 items-center gap-3 pl-8">
+                                                <ChevronRight className="h-3.5 w-3.5 flex-shrink-0 text-primary" />
+                                                <div className="min-w-0">
+                                                  <div className="flex min-w-0 items-center gap-2">
+                                                    <span className="truncate text-sm font-medium text-foreground">
+                                                      {task.title}
+                                                    </span>
+                                                    {task.source ===
+                                                      "external" && (
+                                                      <span className="flex-shrink-0 rounded-md border border-blue-200 bg-blue-50 px-2 py-0.5 text-[11px] text-blue-700 dark:border-blue-800 dark:bg-blue-900/30 dark:text-blue-300">
+                                                        Cliente externo
+                                                      </span>
+                                                    )}
+                                                  </div>
+                                                  {task.brandName && (
+                                                    <p className="mt-0.5 truncate text-xs text-muted-foreground">
+                                                      {getTaskCategoryLabel(
+                                                        task,
+                                                      )}
+                                                    </p>
+                                                  )}
+                                                </div>
+                                              </div>
+
+                                              <div className="flex items-center">
+                                                <span
+                                                  className={`rounded-full border px-2 py-0.5 text-xs ${getStatusColor(task.status)}`}
+                                                >
+                                                  {getStatusDisplay(
+                                                    task.status,
+                                                  )}
+                                                </span>
+                                              </div>
+
+                                              <div className="flex items-center gap-2">
+                                                <span className="rounded-md border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-xs text-emerald-700 dark:border-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-300">
+                                                  Creada en COR
+                                                </span>
+                                              </div>
+
+                                              <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                                                {formattedDeadline && (
+                                                  <>
+                                                    <CalendarDays className="h-3.5 w-3.5" />
+                                                    <span>
+                                                      {formattedDeadline}
+                                                    </span>
+                                                  </>
+                                                )}
+                                              </div>
+                                            </button>
+                                          );
+                                        })}
+                                      </div>
+                                    )}
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        </div>
+                      </section>
+                    )}
                   </div>
                 )}
               </div>
@@ -720,7 +1058,7 @@ export default function ControlPanelPage() {
             <p className="text-sm font-medium">{toast.message}</p>
             <button
               onClick={() => setToast(null)}
-              className="p-1 hover:bg-black/10 dark:hover:bg-white/10 rounded transition-colors ml-2"
+              className="ml-2 cursor-pointer rounded p-1 transition-colors hover:bg-black/10 dark:hover:bg-white/10"
             >
               <X className="h-4 w-4" />
             </button>
