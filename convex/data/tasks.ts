@@ -648,6 +648,20 @@ export const createTaskMessageInternal = internalMutation({
   },
 });
 
+export const getTaskMessageByTrelloCommentId = internalQuery({
+  args: {
+    trelloCommentId: v.string(),
+  },
+  handler: async (ctx, args) => {
+    return await ctx.db
+      .query("taskMessages")
+      .withIndex("by_trello_comment", (q) =>
+        q.eq("trelloCommentId", args.trelloCommentId),
+      )
+      .first();
+  },
+});
+
 export const updateTaskMessageSyncStatusInternal = internalMutation({
   args: {
     taskMessageId: v.id("taskMessages"),

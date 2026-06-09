@@ -2205,6 +2205,109 @@ export const processWebhookEvent: any = internalAction({
             : "Archivo importado desde Trello y guardado en Convex.",
         });
         appliedCount += 1;
+      } else if (event.actionType === "commentCard") {
+        const trelloCommentId = action?.id;
+        const commentText = typeof data.text === "string" ? data.text.trim() : "";
+
+        if (!trelloCommentId) {
+          throw new Error("Evento commentCard sin action.id.");
+        }
+
+        if (!commentText) {
+          await ctx.runMutation(internalTrello.markWebhookEventStatus, {
+            eventId: args.eventId,
+            status: "ignored",
+            taskId: context.task._id,
+            reason: "Comentario de Trello vacío.",
+          });
+          return { success: true, ignored: true };
+        }
+
+        const existingMessage = await ctx.runQuery(
+          (internal as any).data.tasks.getTaskMessageByTrelloCommentId,
+          { trelloCommentId },
+        );
+
+        if (existingMessage) {
+          await ctx.runMutation(internalTrello.markWebhookEventStatus, {
+            eventId: args.eventId,
+            status: "processed",
+            taskId: context.task._id,
+            reason: "Comentario de Trello ya importado.",
+          });
+          return { success: true, duplicate: true };
+        }
+
+        const corTaskId = context.task.corTaskId
+          ? Number(context.task.corTaskId)
+          : undefined;
+        const shouldSyncToCOR =
+          typeof corTaskId === "number" && Number.isFinite(corTaskId);
+
+        const taskMessageId = await ctx.runMutation(
+          (internal as any).data.tasks.createTaskMessageInternal,
+          {
+            taskId: context.task._id,
+            source: "trello",
+            message: commentText,
+            trelloCardId: cardId,
+            trelloCommentId,
+            trelloSyncStatus: "synced",
+            corTaskId: shouldSyncToCOR ? corTaskId : undefined,
+            corMessageSyncStatus: shouldSyncToCOR ? "pending" : "pending_cor_task",
+          },
+        );
+
+        let corSyncStatus = shouldSyncToCOR ? "pending" : "pending_cor_task";
+        let corSyncError: string | undefined;
+
+        if (shouldSyncToCOR) {
+          const provider = getProjectManagementProvider();
+          const result = await provider.postTaskMessage({
+            taskId: corTaskId!,
+            message: commentText,
+          });
+
+          corSyncStatus = result.success ? "synced" : "error";
+          corSyncError = result.success
+            ? undefined
+            : result.error || "No se pudo publicar el comentario en COR.";
+
+          await ctx.runMutation(
+            (internal as any).data.tasks.updateTaskMessageSyncStatusInternal,
+            {
+              taskMessageId,
+              corMessageSyncStatus: corSyncStatus,
+              corMessageSyncError: corSyncError,
+            },
+          );
+        }
+
+        await ctx.runMutation(internalTrello.recordInboundChange, {
+          eventId: args.eventId,
+          taskId: context.task._id,
+          projectId: context.project._id,
+          trelloCardId: cardId,
+          actionType: event.actionType,
+          field: "comment_added",
+          oldValueJson: undefined,
+          newValueJson: jsonValue({
+            trelloCommentId,
+            taskMessageId,
+            corTaskId: shouldSyncToCOR ? corTaskId : undefined,
+            corSyncStatus,
+            corSyncError,
+          }),
+          applied: true,
+          requiresReview: false,
+          note:
+            corSyncStatus === "synced"
+              ? "Comentario importado desde Trello y publicado en COR."
+              : shouldSyncToCOR
+                ? "Comentario importado desde Trello; falló la publicación en COR."
+                : "Comentario importado desde Trello; la task aún no está publicada en COR.",
+        });
+        appliedCount += 1;
       } else if (
         event.actionType === "deleteAttachmentFromCard" ||
         event.actionType === "addLabelToCard" ||

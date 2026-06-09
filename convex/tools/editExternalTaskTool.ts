@@ -12,12 +12,14 @@ export const editExternalTaskTool = createTool({
   description: `Editar un requerimiento ya creado por un usuario externo.
   SOLO puede actualizar descripción completa, fecha de entrega o agregar un comentario.
   No puede editar título, categoría, marca, prioridad, estado, entregables, proyecto ni ningún otro campo.
+  Si el usuario pide cambiar un campo no permitido, no intentes editar ese campo: registra la solicitud como comentario para el equipo interno.
 
   Reglas obligatorias:
   - Usar solo después de que el usuario confirme el cambio.
   - Si cambia la descripción, enviar la descripción completa preservando lo anterior y agregando/modificando solo lo pedido.
   - Si cambia la fecha, usar formato YYYY-MM-DD.
   - Si agrega un comentario, enviar solo el texto del comentario.
+  - Para solicitudes de cambios no permitidos, usar "comment" con un texto claro de lo que el usuario pidió.
   - El backend rechazará cualquier edición fuera de estos campos.`,
   args: z.object({
     taskId: z
