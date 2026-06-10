@@ -13,8 +13,14 @@ type ControlPanelTaskSectionsProps = {
   showPublishedSection: boolean;
   viewMode: ControlPanelView;
   unpublishedTasks: FullTask[];
+  unpublishedTotalCount: number;
+  hasMoreUnpublishedTasks: boolean;
+  onLoadMoreUnpublishedTasks: () => void;
   publishedProjectGroups: ControlPanelProjectGroup[];
+  publishedProjectTotalCount: number;
   publishedTaskCount: number;
+  hasMorePublishedProjects: boolean;
+  onLoadMorePublishedProjects: () => void;
   isUnpublishedSectionOpen: boolean;
   expandedProjectIds: Set<string>;
   onToggleUnpublishedSection: () => void;
@@ -29,8 +35,14 @@ export function ControlPanelTaskSections({
   showPublishedSection,
   viewMode,
   unpublishedTasks,
+  unpublishedTotalCount,
+  hasMoreUnpublishedTasks,
+  onLoadMoreUnpublishedTasks,
   publishedProjectGroups,
+  publishedProjectTotalCount,
   publishedTaskCount,
+  hasMorePublishedProjects,
+  onLoadMorePublishedProjects,
   isUnpublishedSectionOpen,
   expandedProjectIds,
   onToggleUnpublishedSection,
@@ -55,9 +67,12 @@ export function ControlPanelTaskSections({
       {showUnpublishedSection && (
         <UnpublishedTasksSection
           tasks={unpublishedTasks}
+          totalTaskCount={unpublishedTotalCount}
+          hasMoreTasks={hasMoreUnpublishedTasks}
           viewMode={viewMode}
           isOpen={isUnpublishedSectionOpen}
           onToggleOpen={onToggleUnpublishedSection}
+          onLoadMore={onLoadMoreUnpublishedTasks}
           onSelectTask={onSelectTask}
         />
       )}
@@ -65,10 +80,13 @@ export function ControlPanelTaskSections({
       {showPublishedSection && (
         <PublishedProjectsSection
           projectGroups={publishedProjectGroups}
+          totalProjectCount={publishedProjectTotalCount}
           publishedTaskCount={publishedTaskCount}
+          hasMoreProjects={hasMorePublishedProjects}
           viewMode={viewMode}
           expandedProjectIds={expandedProjectIds}
           onToggleProjectExpanded={onToggleProjectExpanded}
+          onLoadMoreProjects={onLoadMorePublishedProjects}
           onSelectTask={onSelectTask}
         />
       )}

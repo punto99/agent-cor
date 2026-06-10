@@ -20,6 +20,9 @@ import { getTaskUpdatedAt } from "../../components/control-panel/utils";
 import { LoadingScreen } from "../../components/LoadingScreen";
 import { WorkspaceLayout } from "../../components/WorkspaceLayout";
 
+const PANEL_PROJECT_PAGE_SIZE = 10;
+const PANEL_TASK_PAGE_SIZE = 10;
+
 export default function ControlPanelPage() {
   const router = useRouter();
   const [statusFilter, setStatusFilter] = useState<string | undefined>(
@@ -37,6 +40,10 @@ export default function ControlPanelPage() {
   );
   const [isUnpublishedSectionOpen, setIsUnpublishedSectionOpen] =
     useState(true);
+  const [visibleUnpublishedLimit, setVisibleUnpublishedLimit] =
+    useState(PANEL_TASK_PAGE_SIZE);
+  const [visiblePublishedProjectLimit, setVisiblePublishedProjectLimit] =
+    useState(PANEL_PROJECT_PAGE_SIZE);
   const [toast, setToast] = useState<ControlPanelToastState | null>(null);
 
   useEffect(() => {
@@ -158,6 +165,16 @@ export default function ControlPanelPage() {
     [publishedProjectGroups],
   );
 
+  const visibleUnpublishedTasks = useMemo(
+    () => unpublishedTasks.slice(0, visibleUnpublishedLimit),
+    [unpublishedTasks, visibleUnpublishedLimit],
+  );
+
+  const visiblePublishedProjectGroups = useMemo(
+    () => publishedProjectGroups.slice(0, visiblePublishedProjectLimit),
+    [publishedProjectGroups, visiblePublishedProjectLimit],
+  );
+
   const filteredTaskCount = useMemo(
     () =>
       filteredProjects.reduce(
@@ -172,6 +189,11 @@ export default function ControlPanelPage() {
   const showPublishedSection =
     publicationTab !== "unpublished" && publishedProjectGroups.length > 0;
   const hasVisibleTasksForTab = showUnpublishedSection || showPublishedSection;
+
+  useEffect(() => {
+    setVisibleUnpublishedLimit(PANEL_TASK_PAGE_SIZE);
+    setVisiblePublishedProjectLimit(PANEL_PROJECT_PAGE_SIZE);
+  }, [selectedClientId, selectedBrandId, statusFilter, publicationTab]);
 
   useEffect(() => {
     setExpandedProjectIds((current) => {
@@ -310,9 +332,28 @@ export default function ControlPanelPage() {
                   showUnpublishedSection={showUnpublishedSection}
                   showPublishedSection={showPublishedSection}
                   viewMode={viewMode}
-                  unpublishedTasks={unpublishedTasks}
-                  publishedProjectGroups={publishedProjectGroups}
+                  unpublishedTasks={visibleUnpublishedTasks}
+                  unpublishedTotalCount={unpublishedTasks.length}
+                  hasMoreUnpublishedTasks={
+                    visibleUnpublishedTasks.length < unpublishedTasks.length
+                  }
+                  onLoadMoreUnpublishedTasks={() =>
+                    setVisibleUnpublishedLimit(
+                      (limit) => limit + PANEL_TASK_PAGE_SIZE,
+                    )
+                  }
+                  publishedProjectGroups={visiblePublishedProjectGroups}
+                  publishedProjectTotalCount={publishedProjectGroups.length}
                   publishedTaskCount={publishedTaskCount}
+                  hasMorePublishedProjects={
+                    visiblePublishedProjectGroups.length <
+                    publishedProjectGroups.length
+                  }
+                  onLoadMorePublishedProjects={() =>
+                    setVisiblePublishedProjectLimit(
+                      (limit) => limit + PANEL_PROJECT_PAGE_SIZE,
+                    )
+                  }
                   isUnpublishedSectionOpen={isUnpublishedSectionOpen}
                   expandedProjectIds={expandedProjectIds}
                   onToggleUnpublishedSection={() =>

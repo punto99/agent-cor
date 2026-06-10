@@ -27,19 +27,25 @@ import {
 
 type PublishedProjectsSectionProps = {
   projectGroups: ControlPanelProjectGroup[];
+  totalProjectCount: number;
   publishedTaskCount: number;
+  hasMoreProjects: boolean;
   viewMode: ControlPanelView;
   expandedProjectIds: Set<string>;
   onToggleProjectExpanded: (projectId: string) => void;
+  onLoadMoreProjects: () => void;
   onSelectTask: (task: FullTask) => void;
 };
 
 export function PublishedProjectsSection({
   projectGroups,
+  totalProjectCount,
   publishedTaskCount,
+  hasMoreProjects,
   viewMode,
   expandedProjectIds,
   onToggleProjectExpanded,
+  onLoadMoreProjects,
   onSelectTask,
 }: PublishedProjectsSectionProps) {
   return (
@@ -54,8 +60,8 @@ export function PublishedProjectsSection({
               Proyectos en COR
             </h3>
             <p className="mt-0.5 text-xs text-muted-foreground">
-              {projectGroups.length} proyecto
-              {projectGroups.length !== 1 ? "s" : ""} · {publishedTaskCount}{" "}
+              {totalProjectCount} proyecto
+              {totalProjectCount !== 1 ? "s" : ""} · {publishedTaskCount}{" "}
               tarea
               {publishedTaskCount !== 1 ? "s" : ""}
             </p>
@@ -67,6 +73,8 @@ export function PublishedProjectsSection({
         <div className="space-y-4 p-4">
           {projectGroups.map((projectGroup) => {
             const { project, tasks } = projectGroup;
+            const projectId = String(project._id);
+            const isExpanded = expandedProjectIds.has(projectId);
             const progress = getProjectProgress(tasks);
             const updatedAt = getProjectUpdatedAt(projectGroup);
 
@@ -75,9 +83,21 @@ export function PublishedProjectsSection({
                 key={project._id}
                 className="overflow-hidden rounded-lg border border-border bg-card"
               >
-                <div className="flex flex-col gap-3 border-b border-border bg-muted/35 px-4 py-3 dark:bg-muted/20 sm:flex-row sm:items-center sm:justify-between">
+                <button
+                  type="button"
+                  onClick={() => onToggleProjectExpanded(projectId)}
+                  className={`flex w-full cursor-pointer flex-col gap-3 bg-muted/35 px-4 py-3 text-left transition-colors hover:bg-muted/55 dark:bg-muted/20 dark:hover:bg-muted/30 sm:flex-row sm:items-center sm:justify-between ${
+                    isExpanded ? "border-b border-border" : ""
+                  }`}
+                  aria-expanded={isExpanded}
+                >
                   <div className="min-w-0">
                     <div className="flex min-w-0 items-center gap-2">
+                      {isExpanded ? (
+                        <ChevronDown className="h-4 w-4 flex-shrink-0 text-primary" />
+                      ) : (
+                        <ChevronRight className="h-4 w-4 flex-shrink-0 text-primary" />
+                      )}
                       <FolderKanban className="h-4 w-4 flex-shrink-0 text-primary" />
                       <h4 className="truncate text-sm font-semibold text-foreground">
                         {project.name}
@@ -95,20 +115,23 @@ export function PublishedProjectsSection({
                     </p>
                   </div>
                   <ProjectProgress progress={progress} />
-                </div>
+                </button>
 
-                <div className="grid grid-cols-1 gap-4 p-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-                  {tasks.map((task) => (
-                    <TaskCard
-                      key={task._id}
-                      task={task}
-                      onClick={() => onSelectTask(task)}
-                    />
-                  ))}
-                </div>
+                {isExpanded && (
+                  <div className="grid grid-cols-1 gap-4 p-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+                    {tasks.map((task) => (
+                      <TaskCard
+                        key={task._id}
+                        task={task}
+                        onClick={() => onSelectTask(task)}
+                      />
+                    ))}
+                  </div>
+                )}
               </section>
             );
           })}
+          {hasMoreProjects && <LoadMoreProjectsButton onClick={onLoadMoreProjects} />}
         </div>
       ) : (
         <div className="overflow-x-auto">
@@ -235,10 +258,27 @@ export function PublishedProjectsSection({
                 );
               })}
             </div>
+            {hasMoreProjects && (
+              <LoadMoreProjectsButton onClick={onLoadMoreProjects} />
+            )}
           </div>
         </div>
       )}
     </section>
+  );
+}
+
+function LoadMoreProjectsButton({ onClick }: { onClick: () => void }) {
+  return (
+    <div className="flex justify-center border-t border-emerald-200/70 px-4 py-3 dark:border-emerald-900/40">
+      <button
+        type="button"
+        onClick={onClick}
+        className="cursor-pointer rounded-lg border border-emerald-200 bg-card px-4 py-2 text-sm font-medium text-emerald-700 transition-colors hover:bg-emerald-50 dark:border-emerald-800 dark:bg-background dark:text-emerald-300 dark:hover:bg-emerald-950/30"
+      >
+        Cargar más proyectos
+      </button>
+    </div>
   );
 }
 

@@ -69,6 +69,8 @@ type CORProjectOption = {
   deliverables?: number;
 };
 
+const EXISTING_PROJECTS_PAGE_SIZE = 20;
+
 type TaxonomySubBrandOption = {
   _id: Id<"subBrands">;
   name: string;
@@ -112,10 +114,8 @@ function EditableTaxonomyItem({
   const selectedEditBrand = brands.find(
     (brand) => String(brand._id) === editBrandId,
   );
-  const editBrandHasSubBrands =
-    (selectedEditBrand?.subBrands.length || 0) > 0;
-  const hasChanges =
-    editBrandId !== brandId || editSubBrandId !== subBrandId;
+  const editBrandHasSubBrands = (selectedEditBrand?.subBrands.length || 0) > 0;
+  const hasChanges = editBrandId !== brandId || editSubBrandId !== subBrandId;
   const canApply =
     Boolean(editBrandId) &&
     (!editBrandHasSubBrands || Boolean(editSubBrandId)) &&
@@ -334,10 +334,14 @@ export function TaskDetailDialog({
   const [existingProjects, setExistingProjects] = useState<CORProjectOption[]>(
     [],
   );
+  const [existingProjectsPage, setExistingProjectsPage] = useState(1);
+  const [hasMoreExistingProjects, setHasMoreExistingProjects] = useState(false);
   const [selectedExistingProjectId, setSelectedExistingProjectId] = useState<
     number | null
   >(null);
   const [isLoadingExistingProjects, setIsLoadingExistingProjects] =
+    useState(false);
+  const [isLoadingMoreExistingProjects, setIsLoadingMoreExistingProjects] =
     useState(false);
   const [existingProjectsError, setExistingProjectsError] = useState<
     string | null
@@ -408,7 +412,8 @@ export function TaskDetailDialog({
 
   const showPublishButton = clientConfig.ui.showPublishToExternalTool;
   const toolName = clientConfig.ui.externalToolName;
-  const liveTaskCorClientId = (liveTask as any)?.corClientId ?? task.corClientId;
+  const liveTaskCorClientId =
+    (liveTask as any)?.corClientId ?? task.corClientId;
   const liveTaskTrelloCardId =
     (liveTask as any)?.trelloCardId ?? task.trelloCardId;
   const liveTaskTrelloCardUrl =
@@ -434,8 +439,9 @@ export function TaskDetailDialog({
   const localClientId = ((liveTask as any)?.clientId ??
     (task as any).clientId ??
     (project as any)?.clientId) as Id<"corClients"> | undefined;
-  const projectSearchBrandId = ((liveTask as any)?.brandId ??
-    task.brandId) as number | undefined;
+  const projectSearchBrandId = ((liveTask as any)?.brandId ?? task.brandId) as
+    | number
+    | undefined;
   const projectSearchProductId = projectSearchBrandId
     ? (((liveTask as any)?.productId ?? task.productId) as number | undefined)
     : undefined;
@@ -518,6 +524,8 @@ export function TaskDetailDialog({
     setPublishProjectMode("new");
     setExistingProjectSearch("");
     setExistingProjects([]);
+    setExistingProjectsPage(1);
+    setHasMoreExistingProjects(false);
     setSelectedExistingProjectId(null);
     setExistingProjectsError(null);
   }, [task._id]);
@@ -547,11 +555,20 @@ export function TaskDetailDialog({
   const loadExistingProjects = async (filters?: {
     brandId?: number;
     productId?: number;
+    page?: number;
+    append?: boolean;
   }) => {
     if (!localClientId) return;
 
+    const pageToLoad = filters?.page ?? 1;
+    const shouldAppend = filters?.append === true;
+
     try {
-      setIsLoadingExistingProjects(true);
+      if (shouldAppend) {
+        setIsLoadingMoreExistingProjects(true);
+      } else {
+        setIsLoadingExistingProjects(true);
+      }
       setExistingProjectsError(null);
       const result = await searchActiveCORProjects({
         clientId: localClientId,
@@ -563,15 +580,38 @@ export function TaskDetailDialog({
           filters && "productId" in filters
             ? filters.productId
             : projectSearchProductId,
-        perPage: 50,
+        page: pageToLoad,
+        perPage: EXISTING_PROJECTS_PAGE_SIZE,
       });
-      setExistingProjects((result.projects || []) as CORProjectOption[]);
+      const nextProjects = (result.projects || []) as CORProjectOption[];
+      setExistingProjects((current) => {
+        if (!shouldAppend) return nextProjects;
+        const byId = new Map<number, CORProjectOption>();
+        for (const item of current) byId.set(item.id, item);
+        for (const item of nextProjects) byId.set(item.id, item);
+        return Array.from(byId.values());
+      });
+      const resolvedPage =
+        typeof result.page === "number" ? result.page : pageToLoad;
+      const resolvedPerPage =
+        typeof result.perPage === "number"
+          ? result.perPage
+          : EXISTING_PROJECTS_PAGE_SIZE;
+      setExistingProjectsPage(resolvedPage);
+      setHasMoreExistingProjects(
+        typeof result.lastPage === "number"
+          ? resolvedPage < result.lastPage
+          : typeof result.total === "number"
+            ? resolvedPage * resolvedPerPage < result.total
+            : nextProjects.length >= resolvedPerPage,
+      );
     } catch (err: any) {
       setExistingProjectsError(
         err.message || "No se pudieron cargar los proyectos existentes.",
       );
     } finally {
       setIsLoadingExistingProjects(false);
+      setIsLoadingMoreExistingProjects(false);
     }
   };
 
@@ -618,6 +658,8 @@ export function TaskDetailDialog({
       setDraftBrandId(nextValue.brandId);
       setDraftSubBrandId(normalizedSubBrandId);
       setExistingProjects([]);
+      setExistingProjectsPage(1);
+      setHasMoreExistingProjects(false);
       setSelectedExistingProjectId(null);
       setExistingProjectsError(null);
       if (publishProjectMode === "existing") {
@@ -660,7 +702,7 @@ export function TaskDetailDialog({
         taskId: task._id,
         existingCorProjectId:
           publishProjectMode === "existing"
-            ? selectedExistingProjectId ?? undefined
+            ? (selectedExistingProjectId ?? undefined)
             : undefined,
       });
       // No cerramos aquí — esperamos a que el useEffect detecte el cambio reactivo
@@ -1372,6 +1414,28 @@ export function TaskDetailDialog({
                                 </span>
                               </button>
                             ))}
+
+                          {!isLoadingExistingProjects &&
+                            hasMoreExistingProjects && (
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  void loadExistingProjects({
+                                    page: existingProjectsPage + 1,
+                                    append: true,
+                                  })
+                                }
+                                disabled={isLoadingMoreExistingProjects}
+                                className="flex w-full cursor-pointer items-center justify-center gap-2 rounded-lg border border-border px-3 py-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-60"
+                              >
+                                {isLoadingMoreExistingProjects && (
+                                  <Loader2 className="h-4 w-4 animate-spin" />
+                                )}
+                                {isLoadingMoreExistingProjects
+                                  ? "Cargando más..."
+                                  : "Cargar más proyectos"}
+                              </button>
+                            )}
                         </div>
 
                         {selectedExistingProject && (
