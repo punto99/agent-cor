@@ -411,13 +411,17 @@ export function TaskDetailDialog({
   const liveTaskCorClientId = (liveTask as any)?.corClientId ?? task.corClientId;
   const liveTaskTrelloCardId =
     (liveTask as any)?.trelloCardId ?? task.trelloCardId;
+  const liveTaskTrelloCardUrl =
+    (liveTask as any)?.trelloCardUrl ?? task.trelloCardUrl;
   const trelloSyncStatus =
     (liveTask as any)?.trelloSyncStatus ?? task.trelloSyncStatus ?? "pending";
+  const isPublishedInTrello =
+    trelloSyncStatus === "synced" ||
+    Boolean(liveTaskTrelloCardId || liveTaskTrelloCardUrl);
   const showPublishToTrelloButton =
     typeof liveTaskCorClientId === "number" &&
     clientConfig.ui.trelloPublishCorClientIds.includes(liveTaskCorClientId) &&
-    !liveTaskTrelloCardId &&
-    trelloSyncStatus !== "synced";
+    !isPublishedInTrello;
 
   // Obtener syncStatus en vivo (preferir liveTask, fallback a task prop)
   const syncStatus = liveTask?.corSyncStatus || task.corSyncStatus || "pending";
@@ -1108,6 +1112,26 @@ export function TaskDetailDialog({
                     <span className="text-muted-foreground ml-1">
                       (Task ID: {task.corTaskId})
                     </span>
+                  )}
+                </span>
+              </div>
+            )}
+
+            {isPublishedInTrello && (
+              <div className="flex items-center gap-2 text-sm text-emerald-600 dark:text-emerald-400 mb-3">
+                <CheckCircle2 className="h-4 w-4" />
+                <span>
+                  Publicada en Trello exitosamente
+                  {liveTaskTrelloCardUrl && (
+                    <a
+                      href={liveTaskTrelloCardUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="ml-2 inline-flex items-center gap-1 text-primary underline-offset-2 hover:underline"
+                    >
+                      Ver card
+                      <ExternalLink className="h-3.5 w-3.5" />
+                    </a>
                   )}
                 </span>
               </div>

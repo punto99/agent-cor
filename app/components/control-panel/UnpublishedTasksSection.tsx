@@ -100,6 +100,13 @@ export function UnpublishedTasksSection({
                               Cliente externo
                             </span>
                           )}
+                          {(task.trelloSyncStatus === "synced" ||
+                            task.trelloCardId ||
+                            task.trelloCardUrl) && (
+                            <span className="inline-flex w-fit rounded-md border border-sky-200 bg-sky-50 px-2 py-0.5 text-[11px] text-sky-700 dark:border-sky-800 dark:bg-sky-900/30 dark:text-sky-300">
+                              En Trello
+                            </span>
+                          )}
                         </div>
                       </div>
                     </div>

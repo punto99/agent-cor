@@ -22,6 +22,9 @@ interface TaskCardTask {
   corClientName?: string;
   corTaskMissingInCOR?: boolean;
   corProjectMissingInCOR?: boolean;
+  trelloCardId?: string;
+  trelloCardUrl?: string;
+  trelloSyncStatus?: string;
 }
 
 interface TaskCardProps {
@@ -98,6 +101,9 @@ export function TaskCard({ task, onClick }: TaskCardProps) {
   };
 
   const syncBadge = getSyncBadge();
+  const isPublishedInTrello =
+    task.trelloSyncStatus === "synced" ||
+    Boolean(task.trelloCardId || task.trelloCardUrl);
 
   return (
     <button
@@ -137,12 +143,19 @@ export function TaskCard({ task, onClick }: TaskCardProps) {
         >
           {getStatusDisplay(task.status)}
         </span>
-        <span
-          className={`text-xs px-2 py-0.5 rounded-full ${syncBadge.className}`}
-          title={syncBadge.tooltip}
-        >
-          {syncBadge.icon} {syncBadge.label}
-        </span>
+        <div className="flex min-w-0 flex-wrap items-center justify-end gap-1.5">
+          <span
+            className={`text-xs px-2 py-0.5 rounded-full ${syncBadge.className}`}
+            title={syncBadge.tooltip}
+          >
+            {syncBadge.icon} {syncBadge.label}
+          </span>
+          {isPublishedInTrello && (
+            <span className="text-xs px-2 py-0.5 rounded-full bg-sky-100 text-sky-700 dark:bg-sky-900/30 dark:text-sky-300">
+              ✅ En Trello
+            </span>
+          )}
+        </div>
       </div>
 
       {/* Date */}

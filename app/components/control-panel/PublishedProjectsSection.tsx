@@ -197,6 +197,13 @@ export function PublishedProjectsSection({
                                 <span className="rounded-md border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-xs text-emerald-700 dark:border-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-300">
                                   Creada en COR
                                 </span>
+                                {(task.trelloSyncStatus === "synced" ||
+                                  task.trelloCardId ||
+                                  task.trelloCardUrl) && (
+                                  <span className="rounded-md border border-sky-200 bg-sky-50 px-2 py-0.5 text-xs text-sky-700 dark:border-sky-800 dark:bg-sky-900/30 dark:text-sky-300">
+                                    En Trello
+                                  </span>
+                                )}
                               </div>
 
                               <div className="flex items-center gap-2 text-sm text-muted-foreground">
