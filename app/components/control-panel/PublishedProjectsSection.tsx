@@ -15,6 +15,8 @@ import {
   formatDeadline,
   formatTimestamp,
   getProjectProgress,
+  getProjectStatusColor,
+  getProjectStatusDisplay,
   getProjectUpdatedAt,
   getTaskCategoryLabel,
 } from "./utils";
@@ -80,6 +82,11 @@ export function PublishedProjectsSection({
                       <h4 className="truncate text-sm font-semibold text-foreground">
                         {project.name}
                       </h4>
+                      <span
+                        className={`flex-shrink-0 rounded-full border px-2 py-0.5 text-[11px] font-medium ${getProjectStatusColor(project.status)}`}
+                      >
+                        {getProjectStatusDisplay(project.status)}
+                      </span>
                     </div>
                     <p className="mt-1 text-xs text-muted-foreground">
                       {tasks.length} tarea
@@ -105,8 +112,8 @@ export function PublishedProjectsSection({
         </div>
       ) : (
         <div className="overflow-x-auto">
-          <div className="min-w-[800px]">
-            <div className="grid grid-cols-[minmax(280px,1fr)_110px_190px_220px] items-center border-b border-emerald-200/70 bg-card/70 px-4 py-3 text-xs font-semibold text-muted-foreground dark:border-emerald-900/40 dark:bg-background/50">
+          <div className="min-w-[980px]">
+            <div className="grid grid-cols-[minmax(430px,1fr)_120px_190px_220px] items-center gap-x-8 border-b border-emerald-200/70 bg-card/70 px-4 py-3 text-xs font-semibold text-muted-foreground dark:border-emerald-900/40 dark:bg-background/50">
               <div className="pl-8">Proyecto</div>
               <div>Tareas</div>
               <div>Progreso</div>
@@ -126,7 +133,7 @@ export function PublishedProjectsSection({
                     <button
                       type="button"
                       onClick={() => onToggleProjectExpanded(projectId)}
-                      className="grid w-full cursor-pointer grid-cols-[minmax(280px,1fr)_110px_190px_220px] items-center px-4 py-4 text-left transition-colors hover:bg-accent/60"
+                      className="grid w-full cursor-pointer grid-cols-[minmax(430px,1fr)_120px_190px_220px] items-center gap-x-8 px-4 py-4 text-left transition-colors hover:bg-accent/60"
                     >
                       <div className="flex min-w-0 items-center gap-3">
                         {isExpanded ? (
@@ -136,6 +143,11 @@ export function PublishedProjectsSection({
                         )}
                         <span className="truncate text-sm font-semibold text-foreground">
                           {project.name}
+                        </span>
+                        <span
+                          className={`flex-shrink-0 rounded-full border px-2 py-0.5 text-[11px] font-medium ${getProjectStatusColor(project.status)}`}
+                        >
+                          {getProjectStatusDisplay(project.status)}
                         </span>
                       </div>
 
@@ -162,7 +174,7 @@ export function PublishedProjectsSection({
                               key={task._id}
                               type="button"
                               onClick={() => onSelectTask(task)}
-                              className="grid w-full cursor-pointer grid-cols-[minmax(280px,1fr)_110px_190px_220px] items-center px-4 py-3 text-left transition-colors hover:bg-accent"
+                              className="grid w-full cursor-pointer grid-cols-[minmax(430px,1fr)_120px_190px_220px] items-center gap-x-8 px-4 py-3 text-left transition-colors hover:bg-accent"
                             >
                               <div className="flex min-w-0 items-center gap-3 pl-8">
                                 <ChevronRight className="h-3.5 w-3.5 flex-shrink-0 text-primary" />
@@ -240,7 +252,7 @@ function ProjectProgress({
       <div className="h-1.5 w-24 overflow-hidden rounded-full bg-muted">
         <div
           className="h-full rounded-full bg-emerald-500"
-          style={{ width: `${progress.publishedPercent}%` }}
+          style={{ width: `${progress.completedPercent}%` }}
         />
       </div>
       <span className="text-xs font-medium text-muted-foreground">

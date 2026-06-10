@@ -53,13 +53,37 @@ export function getTaskCategoryLabel(task: FullTask) {
 
 export function getProjectProgress(tasks: FullTask[]) {
   const total = tasks.length;
-  const published = tasks.filter((task) => task.corSyncStatus === "synced")
+  const completed = tasks.filter((task) => task.status === "finalizada")
     .length;
 
   return {
     total,
-    published,
-    publishedPercent: total > 0 ? (published / total) * 100 : 0,
-    label: `${published}/${total}`,
+    completed,
+    completedPercent: total > 0 ? (completed / total) * 100 : 0,
+    label: `${completed}/${total}`,
   };
+}
+
+export function getProjectStatusDisplay(status?: string) {
+  const labels: Record<string, string> = {
+    active: "Nuevo",
+    in_process: "En Proceso",
+    suspended: "Suspendido",
+    finished: "Finalizado",
+  };
+  return labels[status || ""] || status || "Sin estado";
+}
+
+export function getProjectStatusColor(status?: string) {
+  const colors: Record<string, string> = {
+    active:
+      "border-blue-200 bg-blue-50 text-blue-700 dark:border-blue-800 dark:bg-blue-900/30 dark:text-blue-300",
+    in_process:
+      "border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-800 dark:bg-amber-900/30 dark:text-amber-300",
+    suspended:
+      "border-red-200 bg-red-50 text-red-700 dark:border-red-800 dark:bg-red-900/30 dark:text-red-300",
+    finished:
+      "border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-300",
+  };
+  return colors[status || ""] || "border-border bg-muted text-muted-foreground";
 }
