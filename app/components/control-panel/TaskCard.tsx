@@ -119,26 +119,26 @@ export function TaskCard({ task, onClick }: TaskCardProps) {
   return (
     <button
       onClick={onClick}
-      className="group flex h-full w-full cursor-pointer flex-col rounded-xl border border-border bg-card p-4 text-left shadow-sm transition-all duration-200 hover:border-primary/30 hover:shadow-md"
+      className="group flex h-full w-full cursor-pointer flex-col rounded-xl border border-border bg-card p-3.5 text-left shadow-sm transition-all duration-200 hover:border-primary/30 hover:shadow-md"
     >
-      <div className="mb-2 flex items-center justify-between gap-3">
+      <div className="mb-1.5 flex items-center justify-between gap-3">
         <span
           className={`inline-flex rounded-full border px-2 py-0.5 text-[11px] font-medium ${getStatusColor(task.status)}`}
         >
           {getStatusDisplay(task.status)}
         </span>
-        <ArrowRight className="h-5 w-5 flex-shrink-0 text-primary transition-transform group-hover:translate-x-0.5" />
+        <ArrowRight className="h-4 w-4 flex-shrink-0 text-primary transition-transform group-hover:translate-x-0.5" />
       </div>
 
       <div className="mb-2">
-        <h3 className="line-clamp-2 text-[15px] font-semibold leading-snug text-foreground transition-colors group-hover:text-primary">
+        <h3 className="line-clamp-2 text-sm font-semibold leading-snug text-foreground transition-colors group-hover:text-primary">
           {task.title}
         </h3>
       </div>
 
-      <div className="mb-3 min-h-[2.15rem]">
+      <div className="mb-2.5 min-h-[2rem]">
         {descriptionPreview && (
-          <p className="line-clamp-2 text-[13px] leading-relaxed text-muted-foreground">
+          <p className="line-clamp-2 text-xs leading-relaxed text-muted-foreground">
             {descriptionPreview}
           </p>
         )}
@@ -146,22 +146,22 @@ export function TaskCard({ task, onClick }: TaskCardProps) {
 
       <div className="mb-1.5 flex flex-wrap items-center gap-2">
         <span
-          className={`rounded-full px-2.5 py-1 text-xs font-medium ${syncBadge.className}`}
+          className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${syncBadge.className}`}
           title={syncBadge.tooltip}
         >
           {syncBadge.icon} {syncBadge.label}
         </span>
         {isPublishedInTrello && (
-          <span className="rounded-full bg-emerald-100 px-2.5 py-1 text-xs font-medium text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300">
+          <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[11px] font-medium text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300">
             ✅ En Trello
           </span>
         )}
       </div>
 
       {priorityConfig && (
-        <div className="mb-3">
+        <div className="mb-2.5">
           <span
-            className={`inline-flex rounded-full bg-muted px-2.5 py-1 text-xs font-medium ${priorityConfig.color}`}
+            className={`inline-flex rounded-full bg-muted px-2 py-0.5 text-[11px] font-medium ${priorityConfig.color}`}
             title={priorityConfig.label}
           >
             {priorityConfig.icon} {priorityConfig.label}
@@ -170,22 +170,24 @@ export function TaskCard({ task, onClick }: TaskCardProps) {
       )}
 
       <div className="mt-auto space-y-2 text-xs text-muted-foreground">
-        <span className="inline-flex min-w-0 items-center gap-2 font-medium">
-          <CalendarDays className="h-3.5 w-3.5 flex-shrink-0" />
-          <span className="truncate">{formatDate(task._creationTime)}</span>
+        <span className="flex w-full min-w-0 items-center gap-1.5 pr-1 text-[10px] font-medium leading-4">
+          <CalendarDays className="h-3 w-3 flex-shrink-0" />
+          <span className="whitespace-nowrap">
+            {formatDate(task._creationTime)}
+          </span>
         </span>
 
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <span className="inline-flex min-w-0 items-center gap-2">
+        <div className="flex min-w-0 items-center justify-between gap-2">
+          <span className="inline-flex min-w-0 flex-1 items-center gap-2">
             <span className="inline-flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-full border border-primary text-[11px] font-semibold text-primary">
               {creatorInitials}
             </span>
-            <span className="max-w-[105px] truncate font-medium text-foreground">
+            <span className="min-w-0 truncate font-medium text-foreground">
               {creatorName}
             </span>
           </span>
           <span
-            className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${sourceBadgeClass}`}
+            className={`flex-shrink-0 rounded-full px-2 py-0.5 text-[11px] font-medium ${sourceBadgeClass}`}
           >
             {sourceLabel}
           </span>
