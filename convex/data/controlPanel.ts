@@ -10,6 +10,13 @@ async function isExternalUser(ctx: any, userId: any) {
   return Boolean(approvedExternalUser);
 }
 
+function formatUserName(user: Record<string, unknown> | null) {
+  if (!user) return undefined;
+  const name = typeof user.name === "string" ? user.name.trim() : "";
+  const email = typeof user.email === "string" ? user.email.trim() : "";
+  return name || email || undefined;
+}
+
 export const listMyClientProjects = query({
   args: {
     status: v.optional(v.string()),
@@ -115,6 +122,27 @@ export const listMyClientProjects = query({
 
     const tasksByClient = new Map<string, any[]>();
     const projectsById = new Map<string, any>();
+    const creatorInfoById = new Map<
+      string,
+      { createdByName?: string; createdByEmail?: string }
+    >();
+
+    const getCreatorInfo = async (createdBy: unknown) => {
+      if (typeof createdBy !== "string" || !createdBy) return {};
+      if (creatorInfoById.has(createdBy)) return creatorInfoById.get(createdBy)!;
+
+      const userId = ctx.db.normalizeId("users", createdBy);
+      const user = userId
+        ? ((await ctx.db.get(userId)) as Record<string, unknown> | null)
+        : null;
+      const info = {
+        createdByName: formatUserName(user),
+        createdByEmail:
+          typeof user?.email === "string" ? user.email.trim() : undefined,
+      };
+      creatorInfoById.set(createdBy, info);
+      return info;
+    };
 
     for (const task of tasksById.values()) {
       if (task.convexStatus === "deleted") continue;
@@ -135,8 +163,13 @@ export const listMyClientProjects = query({
         continue;
       }
 
+      const taskWithCreator = {
+        ...task,
+        ...(await getCreatorInfo(task.createdBy)),
+      };
+
       if (!tasksByClient.has(clientId)) tasksByClient.set(clientId, []);
-      tasksByClient.get(clientId)!.push(task);
+      tasksByClient.get(clientId)!.push(taskWithCreator);
 
       if (task.projectId && !projectsById.has(String(task.projectId))) {
         const project = (await ctx.db.get(task.projectId as any)) as any;

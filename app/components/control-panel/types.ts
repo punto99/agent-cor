@@ -12,6 +12,8 @@ export interface FullTask {
   status: string;
   threadId: string;
   createdBy?: string;
+  createdByName?: string;
+  createdByEmail?: string;
   corTaskId?: string;
   corProjectId?: number;
   corSyncStatus?: string;
