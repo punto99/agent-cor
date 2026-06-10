@@ -2205,6 +2205,106 @@ export const softDeleteTask = mutation({
   },
 });
 
+/**
+ * Soft delete seguro para borradores internos que aún no fueron publicados
+ * ni en COR ni en Trello. Si el proyecto propuesto ya no tiene otras tasks
+ * activas, también marca el proyecto como deleted.
+ */
+export const softDeleteUnpublishedDraftTask = mutation({
+  args: {
+    taskId: v.id("tasks"),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) throw new Error("No autenticado");
+    if (await isExternalUser(ctx, userId)) {
+      throw new Error("Los usuarios externos no pueden eliminar tareas desde el panel.");
+    }
+
+    const task = await ctx.db.get(args.taskId);
+    if (!task) throw new Error("Task no encontrada.");
+    if (task.convexStatus === "deleted") {
+      return {
+        success: true,
+        deletedProject: false,
+        message: "La tarea ya estaba eliminada.",
+      };
+    }
+
+    if (!(await hasTaskAccess(ctx, task, userId))) {
+      throw new Error("No tienes permisos para eliminar esta tarea.");
+    }
+
+    const isPublishedInCOR =
+      task.corSyncStatus === "synced" || Boolean(task.corTaskId);
+    if (isPublishedInCOR) {
+      throw new Error("No se puede eliminar una tarea que ya fue publicada en COR.");
+    }
+
+    const isPublishedInTrello =
+      task.trelloSyncStatus === "synced" ||
+      Boolean(task.trelloCardId || task.trelloCardUrl);
+    if (isPublishedInTrello) {
+      throw new Error("No se puede eliminar una tarea que ya fue publicada en Trello.");
+    }
+
+    if (task.source === "external") {
+      throw new Error("No se puede eliminar desde aquí una tarea creada por un cliente externo.");
+    }
+
+    await ctx.db.patch(args.taskId, {
+      convexStatus: "deleted",
+    });
+
+    let deletedProject = false;
+    if (task.projectId) {
+      const project = await ctx.db.get(task.projectId);
+      if (project && project.convexStatus !== "deleted") {
+        const isProjectPublishedExternally =
+          project.corSyncStatus === "synced" ||
+          Boolean(project.corProjectId) ||
+          project.trelloSyncStatus === "synced" ||
+          Boolean(project.trelloCardId || project.trelloCardUrl);
+        const activeProjectTasks = [
+          ...(await ctx.db
+            .query("tasks")
+            .withIndex("by_projectId_convexStatus", (q) =>
+              q.eq("projectId", task.projectId).eq("convexStatus", "active"),
+            )
+            .collect()),
+          ...(await ctx.db
+            .query("tasks")
+            .withIndex("by_projectId_convexStatus", (q) =>
+              q.eq("projectId", task.projectId).eq("convexStatus", undefined),
+            )
+            .collect()),
+        ];
+
+        const hasOtherActiveTasks = activeProjectTasks.some(
+          (projectTask) => projectTask._id !== args.taskId,
+        );
+
+        if (!hasOtherActiveTasks && !isProjectPublishedExternally) {
+          await ctx.db.patch(project._id, {
+            convexStatus: "deleted",
+          });
+          const deletedProjectDoc = await ctx.db.get(project._id);
+          await applyProjectDeliverablesDelta(ctx, project, deletedProjectDoc);
+          deletedProject = true;
+        }
+      }
+    }
+
+    return {
+      success: true,
+      deletedProject,
+      message: deletedProject
+        ? "Tarea y proyecto propuesto eliminados del panel."
+        : "Tarea eliminada del panel.",
+    };
+  },
+});
+
 // ==================== SYNC: CONVEX → COR (mapeo 1:1) ====================
 
 /**

@@ -129,10 +129,23 @@ export default defineSchema({
     .index("by_status", ["status"])
     .index("by_createdBy", ["createdBy"])
     .index("by_projectId", ["projectId"])
+    .index("by_projectId_convexStatus", ["projectId", "convexStatus"])
     .index("by_source", ["source"])
     .index("by_clientId", ["clientId"])
     .index("by_clientId_source_status", ["clientId", "source", "status"])
+    .index("by_clientId_source_convexStatus_status", [
+      "clientId",
+      "source",
+      "convexStatus",
+      "status",
+    ])
     .index("by_createdBy_clientId_status", ["createdBy", "clientId", "status"])
+    .index("by_createdBy_clientId_convexStatus_status", [
+      "createdBy",
+      "clientId",
+      "convexStatus",
+      "status",
+    ])
     .index("by_strategicPriority", ["strategicPriority"])
     .index("by_clientBrandId", ["clientBrandId"])
     .index("by_subBrandId", ["subBrandId"])
@@ -141,9 +154,21 @@ export default defineSchema({
       "clientBrandId",
       "status",
     ])
+    .index("by_createdBy_clientBrandId_convexStatus_status", [
+      "createdBy",
+      "clientBrandId",
+      "convexStatus",
+      "status",
+    ])
     .index("by_clientBrandId_source_status", [
       "clientBrandId",
       "source",
+      "status",
+    ])
+    .index("by_clientBrandId_source_convexStatus_status", [
+      "clientBrandId",
+      "source",
+      "convexStatus",
       "status",
     ])
     .index("by_corClientId", ["corClientId"])

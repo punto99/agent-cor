@@ -29,6 +29,7 @@ import {
   Pencil,
   ChevronDown,
   ChevronRight,
+  Trash2,
 } from "lucide-react";
 
 interface TaskDetailDialogProps {
@@ -53,6 +54,7 @@ interface TaskDetailDialogProps {
     trelloCardUrl?: string;
     trelloSyncStatus?: string;
     trelloSyncError?: string;
+    source?: "internal" | "external";
   };
   onClose: () => void;
   /** Callback cuando la publicación se completa (éxito o error) */
@@ -300,6 +302,9 @@ export function TaskDetailDialog({
   const startPublish = useMutation(api.data.tasks.startPublishTaskToExternal);
   const retryTask = useMutation(api.data.tasks.retryTaskSync);
   const updateTaskTaxonomy = useMutation(api.data.tasks.updateTaskTaxonomy);
+  const softDeleteUnpublishedDraftTask = useMutation(
+    api.data.tasks.softDeleteUnpublishedDraftTask,
+  );
   const retryProject = useMutation(api.data.projects.retryProjectSync);
   const softDeleteProject = useMutation(api.data.projects.softDeleteProject);
   const pullFromCOR = useMutation(api.data.corInboundSync.startPullFromCOR);
@@ -324,6 +329,7 @@ export function TaskDetailDialog({
   const [isPulling, setIsPulling] = useState(false);
   const [isDeletingLocal, setIsDeletingLocal] = useState(false);
   const [confirmDeleteTaskOpen, setConfirmDeleteTaskOpen] = useState(false);
+  const [confirmDeleteDraftOpen, setConfirmDeleteDraftOpen] = useState(false);
   const [confirmDeleteProjectOpen, setConfirmDeleteProjectOpen] =
     useState(false);
   const [publishProjectMode, setPublishProjectMode] =
@@ -436,6 +442,13 @@ export function TaskDetailDialog({
   const liveCorTaskId = (liveTask as any)?.corTaskId ?? task.corTaskId;
   const canEditFromDialog =
     !isPublishedInCOR && syncStatus !== "syncing" && syncStatus !== "retrying";
+  const canDeleteUnpublishedDraft =
+    !isPublishedInCOR &&
+    !isPublishedInTrello &&
+    syncStatus !== "syncing" &&
+    syncStatus !== "retrying" &&
+    trelloSyncStatus !== "syncing" &&
+    ((liveTask as any)?.source ?? task.source) !== "external";
   const localClientId = ((liveTask as any)?.clientId ??
     (task as any).clientId ??
     (project as any)?.clientId) as Id<"corClients"> | undefined;
@@ -877,6 +890,24 @@ export function TaskDetailDialog({
     } finally {
       setIsDeletingLocal(false);
       setConfirmDeleteProjectOpen(false);
+    }
+  };
+
+  const handleConfirmDeleteDraft = async () => {
+    try {
+      setIsDeletingLocal(true);
+      setPublishError(null);
+      const result = await softDeleteUnpublishedDraftTask({ taskId: task._id });
+      onPublishResult?.({
+        success: true,
+        message: result.message,
+      });
+      onClose();
+    } catch (err: any) {
+      setPublishError(err.message || "Error al eliminar la tarea.");
+    } finally {
+      setIsDeletingLocal(false);
+      setConfirmDeleteDraftOpen(false);
     }
   };
 
@@ -1513,6 +1544,18 @@ export function TaskDetailDialog({
                 Cerrar
               </button>
 
+              {canDeleteUnpublishedDraft && (
+                <button
+                  type="button"
+                  onClick={() => setConfirmDeleteDraftOpen(true)}
+                  disabled={isDeletingLocal}
+                  title="Eliminar tarea"
+                  className="ml-auto rounded-lg border border-red-200 p-2 text-red-600 transition-colors hover:bg-red-50 hover:text-red-700 disabled:cursor-not-allowed disabled:opacity-50 dark:border-red-900/60 dark:text-red-400 dark:hover:bg-red-950/30 cursor-pointer"
+                >
+                  <Trash2 className="h-4 w-4" />
+                </button>
+              )}
+
               {/* Botón pull inbound: actualizar desde COR */}
               {syncStatus === "synced" && task.corTaskId && (
                 <button
@@ -1569,6 +1612,16 @@ export function TaskDetailDialog({
         confirmLabel="Eliminar proyecto"
         isLoading={isDeletingLocal}
         onConfirm={handleConfirmDeleteProject}
+      />
+
+      <ConfirmDialog
+        open={confirmDeleteDraftOpen}
+        onClose={() => setConfirmDeleteDraftOpen(false)}
+        title="Eliminar tarea"
+        description="Se eliminará esta tarea del panel. Si su proyecto propuesto no tiene otras tareas activas, también se eliminará del panel. Esta acción no modifica COR ni Trello."
+        confirmLabel="Eliminar tarea"
+        isLoading={isDeletingLocal}
+        onConfirm={handleConfirmDeleteDraft}
       />
     </div>
   );
