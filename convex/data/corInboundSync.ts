@@ -31,32 +31,40 @@ import { hashText } from "../lib/briefFormat";
 import { applyProjectDeliverablesDelta } from "../lib/deliverableAnalytics";
 
 const SCHEDULED_SYNC_STATE_KEY = "scheduled-cor-inbound-sync";
+const SCHEDULED_EXPIRED_SYNC_STATE_KEY = "scheduled-expired-cor-inbound-sync";
 const SCHEDULED_SYNC_LEASE_MS = 8 * 60 * 1000;
 const SCHEDULED_TASKS_PER_RUN = 20;
 const SCHEDULED_PROJECTS_PER_RUN = 10;
 const SCHEDULED_WORKER_STAGGER_MS = 750;
 const SCHEDULED_ATTACHMENT_DELAY_MS = 30_000;
 const MAX_COR_ATTACHMENT_BYTES = 25 * 1024 * 1024;
-const TASK_LOCAL_EDIT_GRACE_MS = 60_000;
+const MAX_COR_ATTACHMENTS_PER_TASK = 5;
 
-const SCHEDULED_TASK_STATUSES = [
-  "nueva",
-  "en_proceso",
-  "en_revision",
-  "en_diseno",
-  "estancada",
+const SCHEDULED_TASK_BUCKETS = [
+  { key: "active-dated", convexStatus: "active", includeUndated: false },
+  { key: "legacy-dated", convexStatus: undefined, includeUndated: false },
+  { key: "active-undated", convexStatus: "active", includeUndated: true },
+  { key: "legacy-undated", convexStatus: undefined, includeUndated: true },
 ] as const;
 
-const SCHEDULED_PROJECT_STATUSES = [
-  "active",
-  "in_process",
-  "suspended",
+const SCHEDULED_PROJECT_BUCKETS = [
+  { key: "active-dated", convexStatus: "active", includeUndated: false },
+  { key: "legacy-dated", convexStatus: undefined, includeUndated: false },
+  { key: "active-undated", convexStatus: "active", includeUndated: true },
+  { key: "legacy-undated", convexStatus: undefined, includeUndated: true },
 ] as const;
+
+type ScheduledDateMode = "current" | "expired";
 
 function parseCORTaskId(raw: unknown): number | null {
   if (raw === null || raw === undefined) return null;
   const parsed = parseInt(String(raw).trim(), 10);
   return Number.isFinite(parsed) ? parsed : null;
+}
+
+function getEcuadorDateKey(now = Date.now()): string {
+  const utcMinusFive = new Date(now - 5 * 60 * 60 * 1000);
+  return utcMinusFive.toISOString().slice(0, 10);
 }
 
 async function isExternalUser(ctx: any, userId: any) {
@@ -164,7 +172,16 @@ async function syncTaskAttachmentsFromCOR(
   corTaskId: number,
 ): Promise<void> {
   const provider = getProjectManagementProvider();
-  const remoteAttachments = await provider.getTaskAttachments(corTaskId);
+  const allRemoteAttachments = await provider.getTaskAttachments(corTaskId);
+  const remoteAttachments = allRemoteAttachments.slice(
+    0,
+    MAX_COR_ATTACHMENTS_PER_TASK,
+  );
+  if (allRemoteAttachments.length > MAX_COR_ATTACHMENTS_PER_TASK) {
+    console.log(
+      `[InboundSync][Attachments] Task ${taskId} tiene ${allRemoteAttachments.length} attachments en COR; se sincronizan solo los primeros ${MAX_COR_ATTACHMENTS_PER_TASK}`,
+    );
+  }
   const localAttachments = await ctx.runQuery(
     internal.data.tasks.getTaskAttachments,
     {
@@ -441,6 +458,14 @@ export const pullFromCORAction = internalAction({
           );
         }
 
+        if (taskUpdateResult?.trelloFieldsChanged) {
+          await ctx.scheduler.runAfter(
+            0,
+            (internal as any).data.trello.syncTaskFieldsFromCORToTrello,
+            { taskId: args.taskId },
+          );
+        }
+
         await syncTaskAttachmentsFromCOR(ctx, args.taskId, corTaskId);
       }
 
@@ -517,30 +542,44 @@ function normalizeScheduledIndex(index: number, length: number) {
   return ((index % length) + length) % length;
 }
 
-async function getNextScheduledPage(
+async function getNextScheduledTaskPage(
   ctx: any,
   args: {
-    kind: "tasks" | "projects";
-    statuses: readonly string[];
-    statusIndex: number;
+    bucketIndex: number;
     cursor: string;
     numItems: number;
+    dateMode: ScheduledDateMode;
+    dateKey: string;
   },
 ) {
-  let statusIndex = normalizeScheduledIndex(
-    args.statusIndex,
-    args.statuses.length,
+  let bucketIndex = normalizeScheduledIndex(
+    args.bucketIndex,
+    SCHEDULED_TASK_BUCKETS.length,
   );
   let cursor: string | null = args.cursor || null;
 
-  for (let attempt = 0; attempt < args.statuses.length; attempt += 1) {
-    const status = args.statuses[statusIndex];
+  for (
+    let attempt = 0;
+    attempt < SCHEDULED_TASK_BUCKETS.length;
+    attempt += 1
+  ) {
+    const bucket = SCHEDULED_TASK_BUCKETS[bucketIndex];
+    if (args.dateMode === "expired" && bucket.includeUndated) {
+      bucketIndex = normalizeScheduledIndex(
+        bucketIndex + 1,
+        SCHEDULED_TASK_BUCKETS.length,
+      );
+      cursor = null;
+      continue;
+    }
+
     const page = await ctx.runQuery(
-      args.kind === "tasks"
-        ? internal.data.corInboundSync.listTasksForScheduledPull
-        : internal.data.corInboundSync.listProjectsForScheduledPull,
+      internal.data.corInboundSync.listTasksForScheduledPull,
       {
-        status,
+        convexStatus: bucket.convexStatus,
+        dateMode: args.dateMode,
+        dateKey: args.dateKey,
+        includeUndated: bucket.includeUndated,
         paginationOpts: {
           cursor,
           numItems: args.numItems,
@@ -548,28 +587,104 @@ async function getNextScheduledPage(
       },
     );
 
-    const nextStatusIndex = page.isDone
-      ? normalizeScheduledIndex(statusIndex + 1, args.statuses.length)
-      : statusIndex;
+    const nextBucketIndex = page.isDone
+      ? normalizeScheduledIndex(bucketIndex + 1, SCHEDULED_TASK_BUCKETS.length)
+      : bucketIndex;
     const nextCursor = page.isDone ? "" : page.continueCursor;
 
     if (page.page.length > 0 || !page.isDone) {
       return {
-        status,
+        bucket: bucket.key,
         page: page.page,
-        nextStatusIndex,
+        nextBucketIndex,
         nextCursor,
       };
     }
 
-    statusIndex = nextStatusIndex;
+    bucketIndex = nextBucketIndex;
     cursor = null;
   }
 
+  const bucket = SCHEDULED_TASK_BUCKETS[bucketIndex];
   return {
-    status: args.statuses[statusIndex],
+    bucket: bucket.key,
     page: [],
-    nextStatusIndex: statusIndex,
+    nextBucketIndex: bucketIndex,
+    nextCursor: "",
+  };
+}
+
+async function getNextScheduledProjectPage(
+  ctx: any,
+  args: {
+    bucketIndex: number;
+    cursor: string;
+    numItems: number;
+    dateMode: ScheduledDateMode;
+    dateKey: string;
+  },
+) {
+  let bucketIndex = normalizeScheduledIndex(
+    args.bucketIndex,
+    SCHEDULED_PROJECT_BUCKETS.length,
+  );
+  let cursor: string | null = args.cursor || null;
+
+  for (
+    let attempt = 0;
+    attempt < SCHEDULED_PROJECT_BUCKETS.length;
+    attempt += 1
+  ) {
+    const bucket = SCHEDULED_PROJECT_BUCKETS[bucketIndex];
+    if (args.dateMode === "expired" && bucket.includeUndated) {
+      bucketIndex = normalizeScheduledIndex(
+        bucketIndex + 1,
+        SCHEDULED_PROJECT_BUCKETS.length,
+      );
+      cursor = null;
+      continue;
+    }
+
+    const page = await ctx.runQuery(
+      internal.data.corInboundSync.listProjectsForScheduledPull,
+      {
+        convexStatus: bucket.convexStatus,
+        dateMode: args.dateMode,
+        dateKey: args.dateKey,
+        includeUndated: bucket.includeUndated,
+        paginationOpts: {
+          cursor,
+          numItems: args.numItems,
+        },
+      },
+    );
+
+    const nextBucketIndex = page.isDone
+      ? normalizeScheduledIndex(
+          bucketIndex + 1,
+          SCHEDULED_PROJECT_BUCKETS.length,
+        )
+      : bucketIndex;
+    const nextCursor = page.isDone ? "" : page.continueCursor;
+
+    if (page.page.length > 0 || !page.isDone) {
+      return {
+        bucket: bucket.key,
+        page: page.page,
+        nextBucketIndex,
+        nextCursor,
+      };
+    }
+
+    bucketIndex = nextBucketIndex;
+    cursor = null;
+  }
+
+  const bucket = SCHEDULED_PROJECT_BUCKETS[bucketIndex];
+  return {
+    bucket: bucket.key,
+    page: [],
+    nextBucketIndex: bucketIndex,
     nextCursor: "",
   };
 }
@@ -580,14 +695,26 @@ async function getNextScheduledPage(
  */
 export const listTasksForScheduledPull = internalQuery({
   args: {
-    status: v.string(),
+    convexStatus: v.optional(v.union(v.literal("active"), v.literal("deleted"))),
+    dateMode: v.union(v.literal("current"), v.literal("expired")),
+    dateKey: v.string(),
+    includeUndated: v.boolean(),
     paginationOpts: paginationOptsValidator,
   },
   handler: async (ctx, args) => {
+    const dateRange = (q: any) => {
+      if (args.includeUndated) return q.eq("deadline", undefined);
+      if (args.dateMode === "expired") {
+        return q.gt("deadline", "").lt("deadline", args.dateKey);
+      }
+      return q.gte("deadline", args.dateKey);
+    };
+
     return await ctx.db
       .query("tasks")
-      .withIndex("by_status", (q) => q.eq("status", args.status))
-      .filter((q) => q.neq(q.field("convexStatus"), "deleted"))
+      .withIndex("by_convexStatus_deadline", (q) =>
+        dateRange(q.eq("convexStatus", args.convexStatus)),
+      )
       .paginate(args.paginationOpts);
   },
 });
@@ -598,25 +725,39 @@ export const listTasksForScheduledPull = internalQuery({
  */
 export const listProjectsForScheduledPull = internalQuery({
   args: {
-    status: v.string(),
+    convexStatus: v.optional(v.union(v.literal("active"), v.literal("deleted"))),
+    dateMode: v.union(v.literal("current"), v.literal("expired")),
+    dateKey: v.string(),
+    includeUndated: v.boolean(),
     paginationOpts: paginationOptsValidator,
   },
   handler: async (ctx, args) => {
+    const dateRange = (q: any) => {
+      if (args.includeUndated) return q.eq("endDate", undefined);
+      if (args.dateMode === "expired") {
+        return q.gt("endDate", "").lt("endDate", args.dateKey);
+      }
+      return q.gte("endDate", args.dateKey);
+    };
+
     return await ctx.db
       .query("projects")
-      .withIndex("by_status", (q) => q.eq("status", args.status))
-      .filter((q) => q.neq(q.field("convexStatus"), "deleted"))
+      .withIndex("by_convexStatus_endDate", (q) =>
+        dateRange(q.eq("convexStatus", args.convexStatus)),
+      )
       .paginate(args.paginationOpts);
   },
 });
 
 export const claimScheduledInboundSyncRun = internalMutation({
-  args: {},
-  handler: async (ctx) => {
+  args: {
+    stateKey: v.string(),
+  },
+  handler: async (ctx, args) => {
     const now = Date.now();
     const existing = await ctx.db
       .query("corInboundSyncState")
-      .withIndex("by_key", (q) => q.eq("key", SCHEDULED_SYNC_STATE_KEY))
+      .withIndex("by_key", (q) => q.eq("key", args.stateKey))
       .unique();
 
     if (existing?.leaseUntil && existing.leaseUntil > now) {
@@ -645,7 +786,7 @@ export const claimScheduledInboundSyncRun = internalMutation({
       await ctx.db.patch(existing._id, patch);
     } else {
       await ctx.db.insert("corInboundSyncState", {
-        key: SCHEDULED_SYNC_STATE_KEY,
+        key: args.stateKey,
         ...patch,
       });
     }
@@ -659,6 +800,7 @@ export const claimScheduledInboundSyncRun = internalMutation({
 
 export const completeScheduledInboundSyncRun = internalMutation({
   args: {
+    stateKey: v.string(),
     taskStatusIndex: v.number(),
     taskCursor: v.string(),
     projectStatusIndex: v.number(),
@@ -669,7 +811,7 @@ export const completeScheduledInboundSyncRun = internalMutation({
   handler: async (ctx, args) => {
     const state = await ctx.db
       .query("corInboundSyncState")
-      .withIndex("by_key", (q) => q.eq("key", SCHEDULED_SYNC_STATE_KEY))
+      .withIndex("by_key", (q) => q.eq("key", args.stateKey))
       .unique();
     if (!state) return;
 
@@ -691,12 +833,13 @@ export const completeScheduledInboundSyncRun = internalMutation({
 
 export const failScheduledInboundSyncRun = internalMutation({
   args: {
+    stateKey: v.string(),
     error: v.string(),
   },
   handler: async (ctx, args) => {
     const state = await ctx.db
       .query("corInboundSyncState")
-      .withIndex("by_key", (q) => q.eq("key", SCHEDULED_SYNC_STATE_KEY))
+      .withIndex("by_key", (q) => q.eq("key", args.stateKey))
       .unique();
     if (!state) return;
 
@@ -708,96 +851,128 @@ export const failScheduledInboundSyncRun = internalMutation({
   },
 });
 
+async function runScheduledInboundSync(
+  ctx: any,
+  args: {
+    stateKey: string;
+    dateMode: ScheduledDateMode;
+    label: string;
+  },
+) {
+  const dateKey = getEcuadorDateKey();
+
+  console.log("\n========================================");
+  console.log(
+    `[InboundSync][Cron] ⏱️ Inicio corrida programada ${args.label} COR → Convex (fecha Ecuador: ${dateKey})`,
+  );
+  console.log("========================================\n");
+
+  const state = await ctx.runMutation(
+    internal.data.corInboundSync.claimScheduledInboundSyncRun,
+    { stateKey: args.stateKey },
+  );
+
+  if (!state.claimed) {
+    console.log(
+      `[InboundSync][Cron] ⏭️ Hay otra corrida activa para ${args.label} hasta ${state.leaseUntil}, se omite`,
+    );
+    return;
+  }
+
+  try {
+    const tasksPage = await getNextScheduledTaskPage(ctx, {
+      bucketIndex: state.taskStatusIndex,
+      cursor: state.taskCursor,
+      numItems: SCHEDULED_TASKS_PER_RUN,
+      dateMode: args.dateMode,
+      dateKey,
+    });
+
+    const projectsPage = await getNextScheduledProjectPage(ctx, {
+      bucketIndex: state.projectStatusIndex,
+      cursor: state.projectCursor,
+      numItems: SCHEDULED_PROJECTS_PER_RUN,
+      dateMode: args.dateMode,
+      dateKey,
+    });
+
+    let delay = 0;
+    for (const task of tasksPage.page as Array<{ _id: Id<"tasks"> }>) {
+      await ctx.scheduler.runAfter(
+        delay,
+        internal.data.corInboundSync.pullTaskFromCORWorker,
+        { taskId: task._id },
+      );
+      delay += SCHEDULED_WORKER_STAGGER_MS;
+    }
+
+    for (const project of projectsPage.page as Array<{ _id: Id<"projects"> }>) {
+      await ctx.scheduler.runAfter(
+        delay,
+        internal.data.corInboundSync.pullProjectFromCORWorker,
+        { projectId: project._id },
+      );
+      delay += SCHEDULED_WORKER_STAGGER_MS;
+    }
+
+    await ctx.runMutation(
+      internal.data.corInboundSync.completeScheduledInboundSyncRun,
+      {
+        stateKey: args.stateKey,
+        taskStatusIndex: tasksPage.nextBucketIndex,
+        taskCursor: tasksPage.nextCursor,
+        projectStatusIndex: projectsPage.nextBucketIndex,
+        projectCursor: projectsPage.nextCursor,
+        taskCount: tasksPage.page.length,
+        projectCount: projectsPage.page.length,
+      },
+    );
+
+    console.log(
+      `[InboundSync][Cron] ✅ Corrida ${args.label} despachada. Tasks: ${tasksPage.page.length} (${tasksPage.bucket}), Proyectos: ${projectsPage.page.length} (${projectsPage.bucket})`,
+    );
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    await ctx.runMutation(
+      internal.data.corInboundSync.failScheduledInboundSyncRun,
+      { stateKey: args.stateKey, error: message },
+    );
+    throw error;
+  }
+}
+
 /**
- * Orquestador programado por cron (cada 10 min).
- * Avanza por lotes pequeños sobre tasks/proyectos activos y continúa en la próxima corrida.
+ * Orquestador programado por cron frecuente.
+ * Avanza por lotes pequeños sobre tasks/proyectos no vencidos y continúa en la próxima corrida.
  */
 export const runScheduledInboundSyncAction = internalAction({
   args: {},
   handler: async (ctx) => {
-    console.log("\n========================================");
-    console.log(
-      "[InboundSync][Cron] ⏱️ Inicio corrida programada COR → Convex",
-    );
-    console.log("========================================\n");
+    await runScheduledInboundSync(ctx, {
+      stateKey: SCHEDULED_SYNC_STATE_KEY,
+      dateMode: "current",
+      label: "vigente",
+    });
+  },
+});
 
-    const state = await ctx.runMutation(
-      internal.data.corInboundSync.claimScheduledInboundSyncRun,
-      {},
-    );
-
-    if (!state.claimed) {
-      console.log(
-        `[InboundSync][Cron] ⏭️ Hay otra corrida activa hasta ${state.leaseUntil}, se omite`,
-      );
-      return;
-    }
-
-    try {
-      const tasksPage = await getNextScheduledPage(ctx, {
-        kind: "tasks",
-        statuses: SCHEDULED_TASK_STATUSES,
-        statusIndex: state.taskStatusIndex,
-        cursor: state.taskCursor,
-        numItems: SCHEDULED_TASKS_PER_RUN,
-      });
-
-      const projectsPage = await getNextScheduledPage(ctx, {
-        kind: "projects",
-        statuses: SCHEDULED_PROJECT_STATUSES,
-        statusIndex: state.projectStatusIndex,
-        cursor: state.projectCursor,
-        numItems: SCHEDULED_PROJECTS_PER_RUN,
-      });
-
-      let delay = 0;
-      for (const task of tasksPage.page as Array<{ _id: Id<"tasks"> }>) {
-        await ctx.scheduler.runAfter(
-          delay,
-          internal.data.corInboundSync.pullTaskFromCORWorker,
-          { taskId: task._id },
-        );
-        delay += SCHEDULED_WORKER_STAGGER_MS;
-      }
-
-      for (const project of projectsPage.page as Array<{ _id: Id<"projects"> }>) {
-        await ctx.scheduler.runAfter(
-          delay,
-          internal.data.corInboundSync.pullProjectFromCORWorker,
-          { projectId: project._id },
-        );
-        delay += SCHEDULED_WORKER_STAGGER_MS;
-      }
-
-      await ctx.runMutation(
-        internal.data.corInboundSync.completeScheduledInboundSyncRun,
-        {
-          taskStatusIndex: tasksPage.nextStatusIndex,
-          taskCursor: tasksPage.nextCursor,
-          projectStatusIndex: projectsPage.nextStatusIndex,
-          projectCursor: projectsPage.nextCursor,
-          taskCount: tasksPage.page.length,
-          projectCount: projectsPage.page.length,
-        },
-      );
-
-      console.log(
-        `[InboundSync][Cron] ✅ Corrida despachada. Tasks: ${tasksPage.page.length} (${tasksPage.status}), Proyectos: ${projectsPage.page.length} (${projectsPage.status})`,
-      );
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      await ctx.runMutation(
-        internal.data.corInboundSync.failScheduledInboundSyncRun,
-        { error: message },
-      );
-      throw error;
-    }
+/**
+ * Orquestador programado diario para tasks/proyectos vencidos.
+ */
+export const runScheduledExpiredInboundSyncAction = internalAction({
+  args: {},
+  handler: async (ctx) => {
+    await runScheduledInboundSync(ctx, {
+      stateKey: SCHEDULED_EXPIRED_SYNC_STATE_KEY,
+      dateMode: "expired",
+      label: "vencida",
+    });
   },
 });
 
 /**
  * Worker de task para sync inbound programado.
- * Evita conflictos saltando tasks en syncing/retrying o recién editadas localmente.
+ * Evita conflictos saltando tasks en syncing/retrying.
  */
 export const pullTaskFromCORWorker = internalAction({
   args: {
@@ -830,16 +1005,6 @@ export const pullTaskFromCORWorker = internalAction({
     if (task.corSyncStatus === "syncing" || task.corSyncStatus === "retrying") {
       console.log(
         `[InboundSync][Cron] ⏭️ Task ${args.taskId} en ${task.corSyncStatus}, se omite`,
-      );
-      return;
-    }
-
-    if (
-      task.lastLocalEditAt &&
-      Date.now() - task.lastLocalEditAt < TASK_LOCAL_EDIT_GRACE_MS
-    ) {
-      console.log(
-        `[InboundSync][Cron] ⏭️ Task ${args.taskId} editada recientemente, se omite`,
       );
       return;
     }
@@ -903,6 +1068,12 @@ export const pullTaskFromCORWorker = internalAction({
         { taskId: args.taskId },
       );
     }
+
+    await ctx.scheduler.runAfter(
+      0,
+      (internal as any).data.trello.syncTaskFieldsFromCORToTrello,
+      { taskId: args.taskId },
+    );
 
     await ctx.scheduler.runAfter(
       SCHEDULED_ATTACHMENT_DELAY_MS,
@@ -1154,7 +1325,13 @@ export const applyInboundTaskUpdate = internalMutation({
   handler: async (ctx, args) => {
     // Re-leer la task (estado fresco, atómico dentro de la mutation)
     const task = await ctx.db.get(args.taskId);
-    if (!task) return { updated: false, statusChanged: false };
+    if (!task) {
+      return {
+        updated: false,
+        statusChanged: false,
+        trelloFieldsChanged: false,
+      };
+    }
 
     // Guarda de conflicto: si un outbound sync se inició, no tocar
     if (
@@ -1165,7 +1342,11 @@ export const applyInboundTaskUpdate = internalMutation({
       console.log(
         `[InboundSync] ⏭️ Task ${args.taskId} en estado "${task.corSyncStatus}", omitiendo update inbound`,
       );
-      return { updated: false, statusChanged: false };
+      return {
+        updated: false,
+        statusChanged: false,
+        trelloFieldsChanged: false,
+      };
     }
 
     // Comparar campos — solo escribir si hay diferencia
@@ -1190,11 +1371,21 @@ export const applyInboundTaskUpdate = internalMutation({
       updates.status = args.corStatus;
     }
 
+    const titleChanged = updates.title !== undefined;
+    const descriptionChanged = updates.description !== undefined;
+    const deadlineChanged = updates.deadline !== undefined;
+    const trelloFieldsChanged =
+      titleChanged || descriptionChanged || deadlineChanged;
+
     if (Object.keys(updates).length === 0) {
       console.log(
         `[InboundSync] ✅ Task ${args.taskId} ya está al día — sin cambios`,
       );
-      return { updated: false, statusChanged: false };
+      return {
+        updated: false,
+        statusChanged: false,
+        trelloFieldsChanged: false,
+      };
     }
 
     // Actualizar timestamps de sync (NO lastLocalEditAt — esto no es edición local)
@@ -1209,7 +1400,7 @@ export const applyInboundTaskUpdate = internalMutation({
         .filter((k) => !k.startsWith("cor"))
         .join(", ")}`,
     );
-    return { updated: true, statusChanged };
+    return { updated: true, statusChanged, trelloFieldsChanged };
   },
 });
 

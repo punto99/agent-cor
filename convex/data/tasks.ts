@@ -457,7 +457,6 @@ export const getTaskCORSyncSnapshotInternal = internalQuery({
       status: task.status,
       corTaskId: task.corTaskId,
       corSyncStatus: task.corSyncStatus,
-      lastLocalEditAt: task.lastLocalEditAt,
     };
   },
 });

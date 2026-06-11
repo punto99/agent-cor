@@ -276,6 +276,7 @@ export const trelloProvider = {
 
   async updateCardFields(args: {
     cardId: string;
+    name?: string;
     desc?: string;
     due?: string;
   }): Promise<TrelloCard> {
@@ -283,6 +284,7 @@ export const trelloProvider = {
       `/cards/${args.cardId}`,
       { method: "PUT" },
       {
+        name: args.name,
         desc: args.desc,
         due: args.due,
       },

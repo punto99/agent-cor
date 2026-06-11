@@ -380,6 +380,44 @@ export const getTaskStatusFromCORTrelloContext = internalQuery({
   },
 });
 
+export const getTaskFieldsFromCORTrelloContext = internalQuery({
+  args: {
+    taskId: v.id("tasks"),
+  },
+  handler: async (ctx, args) => {
+    const task = await ctx.db.get(args.taskId);
+    if (!task || task.convexStatus === "deleted") {
+      return { ok: false as const, skip: true as const, error: "Task no encontrada." };
+    }
+
+    const trelloCard = await ctx.db
+      .query("trelloCards")
+      .withIndex("by_task", (q) => q.eq("taskId", task._id))
+      .first();
+
+    const trelloCardId = trelloCard?.trelloCardId || task.trelloCardId;
+    if (!trelloCardId) {
+      return {
+        ok: false as const,
+        skip: true as const,
+        taskId: task._id,
+        projectId: task.projectId,
+        error: "La task no tiene card Trello creada.",
+      };
+    }
+
+    return {
+      ok: true as const,
+      taskId: task._id,
+      projectId: task.projectId,
+      trelloCardId,
+      title: task.title,
+      description: task.description,
+      deadline: task.deadline,
+    };
+  },
+});
+
 export const listBoardMembers: any = action({
   args: {
     clientBrandId: v.optional(v.id("clientBrands")),
@@ -1398,6 +1436,36 @@ export const markTrelloCardListSyncedFromCOR = internalMutation({
   },
 });
 
+export const markTrelloCardFieldsSyncedFromCOR = internalMutation({
+  args: {
+    taskId: v.id("tasks"),
+    projectId: v.optional(v.id("projects")),
+  },
+  handler: async (ctx, args) => {
+    const now = Date.now();
+    const existing = await ctx.db
+      .query("trelloCards")
+      .withIndex("by_task", (q) => q.eq("taskId", args.taskId))
+      .first();
+
+    if (existing) {
+      await ctx.db.patch(existing._id, {
+        syncedAt: now,
+      });
+    }
+
+    await ctx.db.patch(args.taskId, {
+      trelloSyncedAt: now,
+    });
+
+    if (args.projectId) {
+      await ctx.db.patch(args.projectId, {
+        trelloSyncedAt: now,
+      });
+    }
+  },
+});
+
 export const markTrelloCardError = internalMutation({
   args: {
     taskId: v.id("tasks"),
@@ -1916,6 +1984,62 @@ export const syncTaskStatusFromCORToTrello: any = internalAction({
       const message = error instanceof Error ? error.message : String(error);
       console.error(
         `[TrelloSync][COR] Error moviendo card Trello para task ${args.taskId}: ${message}`,
+      );
+      await ctx.runMutation(internalTrello.markTrelloCardError, {
+        taskId: context.taskId,
+        projectId: context.projectId,
+        error: message,
+      });
+      return { success: false, error: message };
+    }
+  },
+});
+
+export const syncTaskFieldsFromCORToTrello: any = internalAction({
+  args: {
+    taskId: v.id("tasks"),
+  },
+  handler: async (ctx, args) => {
+    const context = await ctx.runQuery(
+      internalTrello.getTaskFieldsFromCORTrelloContext,
+      { taskId: args.taskId },
+    );
+
+    if (!context.ok) {
+      console.log(
+        `[TrelloSync][COR] No se actualizan campos de card para task ${args.taskId}: ${context.error}`,
+      );
+      if (!context.skip && context.taskId) {
+        await ctx.runMutation(internalTrello.markTrelloCardError, {
+          taskId: context.taskId,
+          projectId: context.projectId,
+          error: context.error,
+        });
+      }
+      return { success: false, skipped: context.skip, error: context.error };
+    }
+
+    try {
+      console.log(
+        `[TrelloSync][COR] Actualizando campos de card ${context.trelloCardId} desde COR para task ${args.taskId}`,
+      );
+      await trelloProvider.updateCardFields({
+        cardId: context.trelloCardId,
+        name: context.title,
+        desc: htmlToTrelloMarkdown(context.description),
+        due: formatDeadlineForTrelloDue(context.deadline),
+      });
+
+      await ctx.runMutation(internalTrello.markTrelloCardFieldsSyncedFromCOR, {
+        taskId: context.taskId,
+        projectId: context.projectId,
+      });
+
+      return { success: true };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.error(
+        `[TrelloSync][COR] Error actualizando campos Trello para task ${args.taskId}: ${message}`,
       );
       await ctx.runMutation(internalTrello.markTrelloCardError, {
         taskId: context.taskId,

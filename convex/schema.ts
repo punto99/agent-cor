@@ -173,6 +173,13 @@ export default defineSchema({
     ])
     .index("by_corClientId", ["corClientId"])
     .index("by_corTaskId", ["corTaskId"])
+    .index("by_convexStatus_corTaskId", ["convexStatus", "corTaskId"])
+    .index("by_convexStatus_deadline", ["convexStatus", "deadline"])
+    .index("by_convexStatus_corTaskId_deadline", [
+      "convexStatus",
+      "corTaskId",
+      "deadline",
+    ])
     .index("by_corSyncStatus", ["corSyncStatus"])
     .index("by_trelloCardId", ["trelloCardId"])
     .index("by_trelloSyncStatus", ["trelloSyncStatus"])
@@ -536,6 +543,7 @@ export default defineSchema({
     .index("by_subBrandId", ["subBrandId"])
     .index("by_corClientId", ["corClientId"])
     .index("by_corProjectId", ["corProjectId"])
+    .index("by_convexStatus_endDate", ["convexStatus", "endDate"])
     .index("by_createdBy", ["createdBy"])
     .index("by_threadId", ["threadId"])
     .index("by_corSyncStatus", ["corSyncStatus"])
