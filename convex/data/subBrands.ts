@@ -1,5 +1,6 @@
 import { v } from "convex/values";
 import { internalMutation, internalQuery, query } from "../_generated/server";
+import type { Id } from "../_generated/dataModel";
 
 function normalizeText(value: string) {
   return value
@@ -7,6 +8,24 @@ function normalizeText(value: string) {
     .toLowerCase()
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "");
+}
+
+function normalizeClientBrandId(
+  ctx: any,
+  value: string | undefined,
+): Id<"clientBrands"> | undefined {
+  const trimmed = value?.trim();
+  if (!trimmed) return undefined;
+  return ctx.db.normalizeId("clientBrands", trimmed) ?? undefined;
+}
+
+function normalizeSubBrandId(
+  ctx: any,
+  value: string | undefined,
+): Id<"subBrands"> | undefined {
+  const trimmed = value?.trim();
+  if (!trimmed) return undefined;
+  return ctx.db.normalizeId("subBrands", trimmed) ?? undefined;
 }
 
 export const listByBrand = query({
@@ -63,11 +82,14 @@ export const resolveBrandAndSubBrandForClient = internalQuery({
   args: {
     clientId: v.id("corClients"),
     brandName: v.optional(v.string()),
-    clientBrandId: v.optional(v.id("clientBrands")),
+    clientBrandId: v.optional(v.string()),
     subBrandName: v.optional(v.string()),
-    subBrandId: v.optional(v.id("subBrands")),
+    subBrandId: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
+    const clientBrandId = normalizeClientBrandId(ctx, args.clientBrandId);
+    const subBrandId = normalizeSubBrandId(ctx, args.subBrandId);
+
     const brands = await ctx.db
       .query("clientBrands")
       .withIndex("by_client", (q) => q.eq("clientId", args.clientId))
@@ -81,7 +103,7 @@ export const resolveBrandAndSubBrandForClient = internalQuery({
     }
 
     let brand =
-      args.clientBrandId !== undefined ? await ctx.db.get(args.clientBrandId) : null;
+      clientBrandId !== undefined ? await ctx.db.get(clientBrandId) : null;
 
     if (!brand && args.brandName?.trim()) {
       const requestedBrand = normalizeText(args.brandName);
@@ -143,7 +165,7 @@ export const resolveBrandAndSubBrandForClient = internalQuery({
     }
 
     let subBrand =
-      args.subBrandId !== undefined ? await ctx.db.get(args.subBrandId) : null;
+      subBrandId !== undefined ? await ctx.db.get(subBrandId) : null;
 
     if (!subBrand && args.subBrandName?.trim()) {
       const requestedSubBrand = normalizeText(args.subBrandName);
