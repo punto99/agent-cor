@@ -4,6 +4,7 @@ import { listMessages } from "@convex-dev/agent";
 import { internal, components } from "../_generated/api";
 import { buildBriefDescription } from "../lib/briefFormat";
 import { associateFilesHelper } from "../data/tasks";
+import { isTrelloEnabledForCorClientId } from "../lib/trelloPolicy";
 
 function inferDeliverablesCount(deliverablesText: string): number {
   const trimmed = deliverablesText.trim();
@@ -30,7 +31,7 @@ function inferDeliverablesCount(deliverablesText: string): number {
 export const createExternalTaskTool = createTool({
   description: `Crear un requerimiento externo en Convex para revisión del equipo interno.
   SOLO usar esta herramienta cuando el cliente haya confirmado explícitamente que el resumen está correcto.
-  No publica en COR. Para usuarios externos, el sistema también agenda la creación de una card en Trello.
+  No publica en COR. Solo agenda creación en Trello cuando el cliente está explícitamente habilitado para Trello.
   Vocabulario para hablar con el usuario: clientBrandId = categoría; subBrandId = marca.
   Todo dato relevante que no tenga campo propio debe ir en additionalBriefDetails para quedar guardado dentro de description.`,
   args: z.object({
@@ -124,16 +125,21 @@ export const createExternalTaskTool = createTool({
       return preparation.error;
     }
 
-    const trelloAccess = await ctx.runAction(
-      (internal as any).data.trello.validateExternalUserBoardMembership,
-      {
-        userId: preparation.userId as any,
-        clientBrandId: preparation.clientBrandId as any,
-      },
+    const trelloEnabled = isTrelloEnabledForCorClientId(
+      preparation.corClientId,
     );
+    if (trelloEnabled) {
+      const trelloAccess = await ctx.runAction(
+        (internal as any).data.trello.validateExternalUserBoardMembership,
+        {
+          userId: preparation.userId as any,
+          clientBrandId: preparation.clientBrandId as any,
+        },
+      );
 
-    if (!trelloAccess.ok) {
-      return `❌ ${trelloAccess.error}`;
+      if (!trelloAccess.ok) {
+        return `❌ ${trelloAccess.error}`;
+      }
     }
 
     const fullTitle = `${preparation.brandName} - ${args.title}`;
@@ -219,7 +225,7 @@ export const createExternalTaskTool = createTool({
         taskSubBrandName: preparation.subBrandName,
         threadId,
         existingProjectId: preparation.existingProjectId as any,
-        externalTrelloAccessVerified: true,
+        externalTrelloAccessVerified: trelloEnabled ? true : undefined,
       });
     } catch (error) {
       console.error("[CreateExternalTask] Error creando proyecto/task:", error);
@@ -261,23 +267,25 @@ export const createExternalTaskTool = createTool({
       );
     }
 
-    try {
-      await ctx.runMutation(
-        internal.data.trello.scheduleCreateCardForExternalTask,
-        {
-          taskId: result.taskId as any,
-          requestType: args.requestType,
-          deliverablesCount,
-        },
-      );
-    } catch (error) {
-      console.log(
-        "[CreateExternalTask] No se pudo programar creación de card en Trello:",
-        error,
-      );
+    if (trelloEnabled) {
+      try {
+        await ctx.runMutation(
+          internal.data.trello.scheduleCreateCardForExternalTask,
+          {
+            taskId: result.taskId as any,
+            requestType: args.requestType,
+            deliverablesCount,
+          },
+        );
+      } catch (error) {
+        console.log(
+          "[CreateExternalTask] No se pudo programar creación de card en Trello:",
+          error,
+        );
+      }
     }
 
-    const trelloBoardLink = preparation.trelloBoardUrl
+    const trelloBoardLink = trelloEnabled && preparation.trelloBoardUrl
       ? `\nPuedes seguir el avance en el [tablero de Trello](${preparation.trelloBoardUrl}).\n`
       : "";
 

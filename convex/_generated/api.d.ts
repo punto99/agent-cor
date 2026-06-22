@@ -61,6 +61,7 @@ import type * as lib_math from "../lib/math.js";
 import type * as lib_serverConfig from "../lib/serverConfig.js";
 import type * as lib_speechToText from "../lib/speechToText.js";
 import type * as lib_taskStatuses from "../lib/taskStatuses.js";
+import type * as lib_trelloPolicy from "../lib/trelloPolicy.js";
 import type * as messaging_chat from "../messaging/chat.js";
 import type * as messaging_chatGenerate from "../messaging/chatGenerate.js";
 import type * as messaging_threadTitle from "../messaging/threadTitle.js";
@@ -150,6 +151,7 @@ declare const fullApi: ApiFromModules<{
   "lib/serverConfig": typeof lib_serverConfig;
   "lib/speechToText": typeof lib_speechToText;
   "lib/taskStatuses": typeof lib_taskStatuses;
+  "lib/trelloPolicy": typeof lib_trelloPolicy;
   "messaging/chat": typeof messaging_chat;
   "messaging/chatGenerate": typeof messaging_chatGenerate;
   "messaging/threadTitle": typeof messaging_threadTitle;

@@ -5,7 +5,7 @@ import { internal } from "../_generated/api";
 export const listAccessibleBrandsTool = createTool({
   description: `Lista las categorías a las que el usuario externo tiene acceso.
   Internamente son clientBrands. Si una categoría tiene subBrands, de cara al usuario esas subBrands se llaman marcas.
-  Usar al inicio de la conversación o cuando el usuario pregunte con qué categorías/marcas puede trabajar.`,
+  Usar después de entender el requerimiento para recomendar dónde guardarlo, o cuando el usuario pregunte con qué categorías/marcas puede trabajar. No usar como primera pregunta de la conversación.`,
   args: z.object({}),
   handler: async (ctx): Promise<string> => {
     const threadId = ctx.threadId;

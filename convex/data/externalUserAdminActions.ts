@@ -7,6 +7,10 @@ import { internal } from "../_generated/api";
 import { action } from "../_generated/server";
 import { trelloProvider } from "../integrations/trelloProvider";
 import { canUserAccessInternalUserAdmin } from "../lib/internalUserAdminAccess";
+import {
+  getTrelloDisabledReason,
+  isTrelloEnabledForCorClientId,
+} from "../lib/trelloPolicy";
 
 const syncTrelloBoardConfigForBrand = makeFunctionReference<"action">(
   "data/trello:syncTrelloBoardConfigForBrand",
@@ -172,6 +176,9 @@ export const searchTrelloBoardsForBrand = action({
       if (!brand) {
         return { ok: false, error: "No encontramos esta categoría." };
       }
+      if (!isTrelloEnabledForCorClientId(brand.corClientId)) {
+        return { ok: false, error: getTrelloDisabledReason(brand.corClientId) };
+      }
 
       const boards = await trelloProvider.listMyBoards();
       const candidates = rankBoards({
@@ -234,6 +241,9 @@ export const associateTrelloBoardToBrand = action({
 
       if (!brand) {
         return { ok: false, error: "No encontramos esta categoría." };
+      }
+      if (!isTrelloEnabledForCorClientId(brand.corClientId)) {
+        return { ok: false, error: getTrelloDisabledReason(brand.corClientId) };
       }
 
       const board = await trelloProvider.getBoard(args.trelloBoardId);
@@ -337,8 +347,15 @@ export const searchTrelloMembersForExternalUser = action({
             "Primero selecciona al menos una categoría para saber en qué tablero buscar.",
         };
       }
+      const trelloBrands = context.brands.filter((brand) => brand.trelloEnabled);
+      if (trelloBrands.length === 0) {
+        return {
+          ok: false,
+          error: "Las categorías seleccionadas no están habilitadas para Trello.",
+        };
+      }
 
-      const brandWithBoard = context.brands.find(
+      const brandWithBoard = trelloBrands.find(
         (brand) => brand.trelloBoardId,
       );
       if (!brandWithBoard?.trelloBoardId) {
@@ -431,6 +448,13 @@ export const verifyExternalUserTrelloAccess = action({
           error: "Primero asigna al menos una categoría.",
         };
       }
+      const trelloBrands = context.brands.filter((brand) => brand.trelloEnabled);
+      if (trelloBrands.length === 0) {
+        return {
+          ok: false,
+          error: "Las categorías asignadas no están habilitadas para Trello.",
+        };
+      }
       if (!context.approvedUser.trelloMemberId) {
         return {
           ok: false,
@@ -438,7 +462,7 @@ export const verifyExternalUserTrelloAccess = action({
         };
       }
 
-      const missingBoards = context.brands.filter(
+      const missingBoards = trelloBrands.filter(
         (brand) => !brand.trelloBoardId,
       );
       if (missingBoards.length > 0) {
@@ -458,7 +482,7 @@ export const verifyExternalUserTrelloAccess = action({
       }
 
       const boardIds = Array.from(
-        new Set(context.brands.map((brand) => brand.trelloBoardId!)),
+        new Set(trelloBrands.map((brand) => brand.trelloBoardId!)),
       );
       let foundMember:
         | {
@@ -474,7 +498,7 @@ export const verifyExternalUserTrelloAccess = action({
           (candidate) => candidate.id === context.approvedUser.trelloMemberId,
         );
         if (!member) {
-          const brandNames = context.brands
+          const brandNames = trelloBrands
             .filter((brand) => brand.trelloBoardId === boardId)
             .map((brand) => brand.name)
             .join(", ");

@@ -12,7 +12,10 @@ import { components, internal } from "../_generated/api";
 import { trelloProvider } from "../integrations/trelloProvider";
 import { getProjectManagementProvider } from "../integrations/registry";
 import { TASK_STATUS_OPTIONS, getTaskStatusName } from "../lib/taskStatuses";
-import { clientConfig } from "../../config/tenant.config";
+import {
+  getTrelloDisabledReason,
+  isTrelloEnabledForCorClientId,
+} from "../lib/trelloPolicy";
 
 const CUSTOM_FIELDS = [
   { key: "requestType", name: "Tipo de requerimiento", type: "text" as const },
@@ -249,6 +252,15 @@ export const getTaskProjectForTrello = internalQuery({
       return { ok: false as const, error: "Marca no encontrada." };
     }
 
+    if (!isTrelloEnabledForCorClientId(brand.corClientId)) {
+      return {
+        ok: false as const,
+        skip: true as const,
+        trelloDisabled: true as const,
+        error: getTrelloDisabledReason(brand.corClientId),
+      };
+    }
+
     if (!brand.trelloBoardId) {
       return {
         ok: false as const,
@@ -314,6 +326,17 @@ export const getTaskStatusFromCORTrelloContext = internalQuery({
     const task = await ctx.db.get(args.taskId);
     if (!task || task.convexStatus === "deleted") {
       return { ok: false as const, skip: true as const, error: "Task no encontrada." };
+    }
+
+    if (!isTrelloEnabledForCorClientId(task.corClientId)) {
+      return {
+        ok: false as const,
+        skip: true as const,
+        trelloDisabled: true as const,
+        taskId: task._id,
+        projectId: task.projectId,
+        error: getTrelloDisabledReason(task.corClientId),
+      };
     }
 
     if (!task.clientBrandId) {
@@ -390,6 +413,17 @@ export const getTaskFieldsFromCORTrelloContext = internalQuery({
       return { ok: false as const, skip: true as const, error: "Task no encontrada." };
     }
 
+    if (!isTrelloEnabledForCorClientId(task.corClientId)) {
+      return {
+        ok: false as const,
+        skip: true as const,
+        trelloDisabled: true as const,
+        taskId: task._id,
+        projectId: task.projectId,
+        error: getTrelloDisabledReason(task.corClientId),
+      };
+    }
+
     const trelloCard = await ctx.db
       .query("trelloCards")
       .withIndex("by_task", (q) => q.eq("taskId", task._id))
@@ -432,6 +466,9 @@ export const listBoardMembers: any = action({
         clientBrandId: args.clientBrandId,
       });
       if (!brand) throw new Error("Categoría no encontrada.");
+      if (!isTrelloEnabledForCorClientId(brand.corClientId)) {
+        throw new Error(getTrelloDisabledReason(brand.corClientId));
+      }
       if (!brand.trelloBoardId) {
         throw new Error(`La categoría "${brand.name}" no tiene trelloBoardId configurado.`);
       }
@@ -468,6 +505,22 @@ export const validateExternalUserBoardMembership: any = internalAction({
     clientBrandId: v.id("clientBrands"),
   },
   handler: async (ctx, args) => {
+    const brand = await ctx.runQuery(internal.data.clientBrands.getById, {
+      clientBrandId: args.clientBrandId,
+    });
+
+    if (!brand) {
+      return { ok: false as const, error: "La categoría seleccionada no existe." };
+    }
+
+    if (!isTrelloEnabledForCorClientId(brand.corClientId)) {
+      return {
+        ok: false as const,
+        trelloDisabled: true as const,
+        error: getTrelloDisabledReason(brand.corClientId),
+      };
+    }
+
     const approvedExternalUser = await ctx.runQuery(
       internal.data.approvedExternalUsers.getApprovedExternalUserByUserId,
       { userId: args.userId },
@@ -486,14 +539,6 @@ export const validateExternalUserBoardMembership: any = internalAction({
         error:
           "No tienes un usuario de Trello vinculado. Pide a un administrador que configure tu acceso antes de crear este requerimiento.",
       };
-    }
-
-    const brand = await ctx.runQuery(internal.data.clientBrands.getById, {
-      clientBrandId: args.clientBrandId,
-    });
-
-    if (!brand) {
-      return { ok: false as const, error: "La categoría seleccionada no existe." };
     }
 
     if (!brand.trelloBoardId) {
@@ -1073,6 +1118,13 @@ export const editExternalTaskFromAgent: any = internalAction({
     }
 
     const task = context.task;
+    if (!isTrelloEnabledForCorClientId(task.corClientId)) {
+      return {
+        ok: false,
+        error: "Este requerimiento no está habilitado para operaciones en Trello.",
+      };
+    }
+
     const trelloCardId = task.trelloCardId;
     if (!trelloCardId) {
       return {
@@ -1690,10 +1742,27 @@ export const scheduleCreateCardForExternalTask = internalMutation({
     deliverablesCount: v.number(),
   },
   handler: async (ctx, args) => {
+    const task = await ctx.db.get(args.taskId);
+    if (!task || task.convexStatus === "deleted") {
+      console.warn(
+        `[TrelloSync] No se programa card para task ${args.taskId}: task no encontrada.`
+      );
+      return { scheduled: false, skipped: true, error: "Task no encontrada." };
+    }
+
+    if (!isTrelloEnabledForCorClientId(task.corClientId)) {
+      const reason = getTrelloDisabledReason(task.corClientId);
+      console.log(
+        `[TrelloSync] No se programa card para task ${args.taskId}: ${reason}`
+      );
+      return { scheduled: false, skipped: true, trelloDisabled: true, reason };
+    }
+
     console.log(
       `[TrelloSync] Programando creación de card para task ${args.taskId} (tipo: ${args.requestType}, entregables: ${args.deliverablesCount})`
     );
     await ctx.scheduler.runAfter(0, internalTrello.createCardForExternalTask, args);
+    return { scheduled: true };
   },
 });
 
@@ -1718,10 +1787,7 @@ export const startPublishTaskToTrello = mutation({
       throw new Error("Task no encontrada.");
     }
 
-    if (
-      typeof task.corClientId !== "number" ||
-      !clientConfig.ui.trelloPublishCorClientIds.includes(task.corClientId)
-    ) {
+    if (!isTrelloEnabledForCorClientId(task.corClientId)) {
       throw new Error("Esta task no está habilitada para publicación en Trello.");
     }
 
@@ -1807,6 +1873,14 @@ export const createCardForExternalTask: any = internalAction({
 
     if (!data.ok) {
       console.warn(`[TrelloSync] No se puede crear card para task ${args.taskId}: ${data.error}`);
+      if (data.trelloDisabled) {
+        return {
+          success: true,
+          skipped: true,
+          trelloDisabled: true,
+          reason: data.error,
+        };
+      }
       await ctx.runMutation(internalTrello.markTrelloCardError, {
         taskId: args.taskId,
         error: data.error,
@@ -2522,6 +2596,9 @@ export const syncTrelloWebhookForBrand: any = action({
       clientBrandId: args.clientBrandId,
     });
     if (!brand) throw new Error("Categoría no encontrada.");
+    if (!isTrelloEnabledForCorClientId(brand.corClientId)) {
+      throw new Error(getTrelloDisabledReason(brand.corClientId));
+    }
     if (!brand.trelloBoardId) {
       throw new Error(`La categoría "${brand.name}" no tiene trelloBoardId configurado.`);
     }
@@ -2572,6 +2649,10 @@ export const syncTrelloBoardConfigForBrand: any = action({
 
     if (!brand) {
       throw new Error("Marca no encontrada.");
+    }
+
+    if (!isTrelloEnabledForCorClientId(brand.corClientId)) {
+      throw new Error(getTrelloDisabledReason(brand.corClientId));
     }
 
     if (!brand.trelloBoardId) {

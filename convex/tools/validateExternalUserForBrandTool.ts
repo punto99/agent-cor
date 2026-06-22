@@ -1,6 +1,7 @@
 import { createTool } from "@convex-dev/agent";
 import { z } from "zod";
 import { internal } from "../_generated/api";
+import { isTrelloEnabledForCorClientId } from "../lib/trelloPolicy";
 
 function normalizeText(value: string) {
   return value
@@ -96,19 +97,22 @@ export const validateExternalUserForBrandTool = createTool({
     }
 
     const brand = matches[0];
-    const trelloAccess = await ctx.runAction(
-      (internal as any).data.trello.validateExternalUserBoardMembership,
-      {
-        userId: profile.userId as any,
-        clientBrandId: brand._id as any,
-      },
-    );
+    const trelloEnabled = isTrelloEnabledForCorClientId(brand.corClientId);
+    if (trelloEnabled) {
+      const trelloAccess = await ctx.runAction(
+        (internal as any).data.trello.validateExternalUserBoardMembership,
+        {
+          userId: profile.userId as any,
+          clientBrandId: brand._id as any,
+        },
+      );
 
-    if (!trelloAccess.ok) {
-      return JSON.stringify({
-        authorized: false,
-        error: trelloAccess.error,
-      });
+      if (!trelloAccess.ok) {
+        return JSON.stringify({
+          authorized: false,
+          error: trelloAccess.error,
+        });
+      }
     }
 
     const subBrands = await ctx.runQuery(
@@ -124,6 +128,7 @@ export const validateExternalUserForBrandTool = createTool({
       corBrandId: brand.corBrandId,
       corClientId: brand.corClientId,
       localClientId: brand.clientId ? String(brand.clientId) : undefined,
+      trelloEnabled,
       requiresSubBrand: subBrands.length > 0,
       requiresBrand: subBrands.length > 0,
       subBrands: subBrands.map((subBrand: any) => ({

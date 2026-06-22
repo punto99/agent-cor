@@ -28,6 +28,7 @@ import {
   MAX_RETRY_ATTEMPTS,
 } from "../lib/corRetry";
 import { applyProjectDeliverablesDelta } from "../lib/deliverableAnalytics";
+import { isTrelloEnabledForCorClientId } from "../lib/trelloPolicy";
 import type { ActionCtx } from "../_generated/server";
 import type { Id } from "../_generated/dataModel";
 
@@ -1483,7 +1484,12 @@ export const createProjectAndTask = internalMutation({
   handler: async (ctx, args) => {
     const isExternalCreation =
       args.taskSource === "external" || args.projectSource === "external";
-    if (isExternalCreation && !args.externalTrelloAccessVerified) {
+    const trelloRequired =
+      isExternalCreation &&
+      isTrelloEnabledForCorClientId(
+        args.taskCorClientId ?? args.projectCorClientId,
+      );
+    if (trelloRequired && !args.externalTrelloAccessVerified) {
       throw new Error(
         "❌ No se verificó el acceso del usuario externo al tablero de Trello.",
       );
