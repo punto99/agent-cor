@@ -7,7 +7,7 @@ import {
   createExternalTaskTool,
   editExternalTaskTool,
   listAccessibleBrandsTool,
-  reviewBriefTool,
+  reviewExternalBriefTool,
   nowTool,
   validateExternalUserForBrandTool,
 } from "../tools";
@@ -24,7 +24,7 @@ export const externalBriefAgent = new Agent(components.agent, {
   tools: {
     listAccessibleBrands: listAccessibleBrandsTool,
     validateExternalUserForBrand: validateExternalUserForBrandTool,
-    reviewBrief: reviewBriefTool,
+    reviewExternalBrief: reviewExternalBriefTool,
     createExternalTask: createExternalTaskTool,
     editExternalTask: editExternalTaskTool,
     now: nowTool,

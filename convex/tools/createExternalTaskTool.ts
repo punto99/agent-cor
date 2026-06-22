@@ -54,7 +54,10 @@ export const createExternalTaskTool = createTool({
       ),
     deadline: z
       .string()
-      .describe("Fecha límite - OBLIGATORIO (formato YYYY-MM-DD)"),
+      .optional()
+      .describe(
+        "Fecha de lanzamiento validada con now, guardada internamente como deadline. Opcional para usuarios externos; omitir si el cliente no la tiene definida.",
+      ),
     deliverables: z.string().describe("Entregables concretos - OBLIGATORIO"),
     deliverablesCount: z
       .number()
@@ -98,10 +101,6 @@ export const createExternalTaskTool = createTool({
     const threadId = ctx.threadId;
     if (!threadId) {
       return "Error: No se pudo identificar el thread de la conversación.";
-    }
-
-    if (!args.deadline) {
-      return "No se puede crear el requerimiento sin una fecha límite. Pregunta al cliente cuándo necesita el entregable.";
     }
 
     if (!args.deliverables) {

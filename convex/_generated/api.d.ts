@@ -84,6 +84,7 @@ import type * as tools_index from "../tools/index.js";
 import type * as tools_listAccessibleBrandsTool from "../tools/listAccessibleBrandsTool.js";
 import type * as tools_nowTool from "../tools/nowTool.js";
 import type * as tools_reviewBriefTool from "../tools/reviewBriefTool.js";
+import type * as tools_reviewExternalBriefTool from "../tools/reviewExternalBriefTool.js";
 import type * as tools_searchClientInCORTool from "../tools/searchClientInCORTool.js";
 import type * as tools_validateExternalUserForBrandTool from "../tools/validateExternalUserForBrandTool.js";
 import type * as tools_validateUserForClientTool from "../tools/validateUserForClientTool.js";
@@ -172,6 +173,7 @@ declare const fullApi: ApiFromModules<{
   "tools/listAccessibleBrandsTool": typeof tools_listAccessibleBrandsTool;
   "tools/nowTool": typeof tools_nowTool;
   "tools/reviewBriefTool": typeof tools_reviewBriefTool;
+  "tools/reviewExternalBriefTool": typeof tools_reviewExternalBriefTool;
   "tools/searchClientInCORTool": typeof tools_searchClientInCORTool;
   "tools/validateExternalUserForBrandTool": typeof tools_validateExternalUserForBrandTool;
   "tools/validateUserForClientTool": typeof tools_validateUserForClientTool;

@@ -2,6 +2,7 @@
 // Barrel export de todos los tools de agentes
 export { nowTool } from "./nowTool";
 export { reviewBriefTool } from "./reviewBriefTool";
+export { reviewExternalBriefTool } from "./reviewExternalBriefTool";
 export { createTaskTool } from "./createTaskTool";
 export { getTaskTool } from "./getTaskTool";
 export { editTaskTool } from "./editTaskTool";
