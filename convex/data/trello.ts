@@ -16,6 +16,7 @@ import {
   getTrelloDisabledReason,
   isTrelloEnabledForCorClientId,
 } from "../lib/trelloPolicy";
+import { formatTrelloCommentForCOR } from "../lib/trelloCommentFormat";
 
 const CUSTOM_FIELDS = [
   { key: "requestType", name: "Tipo de requerimiento", type: "text" as const },
@@ -2166,6 +2167,12 @@ export const processWebhookEvent: any = internalAction({
       payload?.action?.data?.card?.id ||
       payload?.action?.data?.card?.idShort;
     if (!cardId) {
+      if (event.actionType === "commentCard") {
+        console.log("[TrelloWebhook][commentCard] ignored_missing_card", {
+          eventId: args.eventId,
+          trelloActionId: event.trelloActionId,
+        });
+      }
       await ctx.runMutation(internalTrello.markWebhookEventStatus, {
         eventId: args.eventId,
         status: "ignored",
@@ -2177,7 +2184,25 @@ export const processWebhookEvent: any = internalAction({
     const context = await ctx.runQuery(internalTrello.getTrelloCardContextByCardId, {
       trelloCardId: cardId,
     });
-    if (!context?.task || !context.project) {
+    const contextCorTaskId = context?.task?.corTaskId
+      ? Number(context.task.corTaskId)
+      : undefined;
+    const isPublishedTaskComment =
+      event.actionType === "commentCard" &&
+      typeof contextCorTaskId === "number" &&
+      Number.isFinite(contextCorTaskId);
+
+    if (!context?.task || (!context.project && !isPublishedTaskComment)) {
+      if (event.actionType === "commentCard") {
+        console.log("[TrelloWebhook][commentCard] ignored_missing_mapping", {
+          eventId: args.eventId,
+          trelloActionId: event.trelloActionId,
+          trelloCardId: cardId,
+          hasTask: Boolean(context?.task),
+          hasProject: Boolean(context?.project),
+          hasCorTaskId: Boolean(context?.task?.corTaskId),
+        });
+      }
       await ctx.runMutation(internalTrello.markWebhookEventStatus, {
         eventId: args.eventId,
         status: "ignored",
@@ -2408,6 +2433,12 @@ export const processWebhookEvent: any = internalAction({
         const commentText = typeof data.text === "string" ? data.text.trim() : "";
 
         if (!trelloCommentId) {
+          console.log("[TrelloWebhook][commentCard] failed_missing_comment_id", {
+            eventId: args.eventId,
+            trelloActionId: event.trelloActionId,
+            trelloCardId: cardId,
+            taskId: context.task._id,
+          });
           throw new Error("Evento commentCard sin action.id.");
         }
 
@@ -2463,7 +2494,7 @@ export const processWebhookEvent: any = internalAction({
           const provider = getProjectManagementProvider();
           const result = await provider.postTaskMessage({
             taskId: corTaskId!,
-            message: commentText,
+            message: formatTrelloCommentForCOR(commentText),
           });
 
           corSyncStatus = result.success ? "synced" : "error";
@@ -2479,12 +2510,22 @@ export const processWebhookEvent: any = internalAction({
               corMessageSyncError: corSyncError,
             },
           );
+
+          if (!result.success) {
+            console.error("[TrelloWebhook][commentCard] cor_post_failed", {
+              eventId: args.eventId,
+              trelloCommentId,
+              taskMessageId,
+              corTaskId,
+              error: result.error,
+            });
+          }
         }
 
         await ctx.runMutation(internalTrello.recordInboundChange, {
           eventId: args.eventId,
           taskId: context.task._id,
-          projectId: context.project._id,
+          projectId: context.project?._id,
           trelloCardId: cardId,
           actionType: event.actionType,
           field: "comment_added",

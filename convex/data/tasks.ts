@@ -14,6 +14,7 @@ import {
 import { listMessages } from "@convex-dev/agent";
 import { internal, components } from "../_generated/api";
 import { getProjectManagementProvider } from "../integrations/registry";
+import type { ProjectManagementProvider } from "../integrations/types";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import {
   hashText,
@@ -28,6 +29,7 @@ import {
   MAX_RETRY_ATTEMPTS,
 } from "../lib/corRetry";
 import { applyProjectDeliverablesDelta } from "../lib/deliverableAnalytics";
+import { formatTrelloCommentForCOR } from "../lib/trelloCommentFormat";
 import { isTrelloEnabledForCorClientId } from "../lib/trelloPolicy";
 import type { ActionCtx } from "../_generated/server";
 import type { Id } from "../_generated/dataModel";
@@ -38,6 +40,8 @@ const STRATEGIC_PRIORITY_LABEL_IDS: Record<StrategicPriority, number> = {
   NI_NU: 370188,
   NI_U: 370187,
 };
+const PENDING_COR_MESSAGE_STATUSES = new Set(["pending_cor_task", "pending"]);
+const EXTERNAL_COMMENT_SOURCES = new Set(["trello", "external_agent"]);
 
 const MIN_PUBLISHABLE_DESCRIPTION_LENGTH = 40;
 const DESCRIPTION_MIN_REMAINING_RATIO = 0.35;
@@ -216,6 +220,18 @@ function isDateBeforeToday(value: string | undefined): boolean {
   const date = value.slice(0, 10);
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return false;
   return date < new Date().toISOString().slice(0, 10);
+}
+
+function optionalStringFromExternal(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim().length > 0
+    ? value
+    : undefined;
+}
+
+function optionalNumberFromExternal(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value)
+    ? value
+    : undefined;
 }
 
 async function syncStrategicPriorityLabelInCOR(
@@ -668,6 +684,7 @@ export const updateTaskMessageSyncStatusInternal = internalMutation({
     trelloSyncStatus: v.optional(v.string()),
     trelloSyncError: v.optional(v.string()),
     trelloCommentId: v.optional(v.string()),
+    corTaskId: v.optional(v.number()),
     corMessageSyncStatus: v.optional(v.string()),
     corMessageSyncError: v.optional(v.string()),
   },
@@ -686,16 +703,80 @@ export const updateTaskMessageSyncStatusInternal = internalMutation({
     if (args.trelloCommentId !== undefined) {
       patch.trelloCommentId = args.trelloCommentId;
     }
+    if (args.corTaskId !== undefined) {
+      patch.corTaskId = args.corTaskId;
+    }
     if (args.corMessageSyncStatus !== undefined) {
       patch.corMessageSyncStatus = args.corMessageSyncStatus;
       patch.corSyncedAt =
         args.corMessageSyncStatus === "synced" ? Date.now() : undefined;
+      if (args.corMessageSyncStatus === "synced") {
+        patch.corMessageSyncError = undefined;
+      }
     }
     if (args.corMessageSyncError !== undefined) {
       patch.corMessageSyncError = args.corMessageSyncError;
     }
 
     await ctx.db.patch(args.taskMessageId, patch);
+  },
+});
+
+export const listPendingTaskMessagesForCORInternal = internalQuery({
+  args: {
+    taskId: v.id("tasks"),
+  },
+  handler: async (ctx, args) => {
+    const messages = await ctx.db
+      .query("taskMessages")
+      .withIndex("by_task", (q) => q.eq("taskId", args.taskId))
+      .collect();
+
+    return messages
+      .filter(
+        (message) =>
+          EXTERNAL_COMMENT_SOURCES.has(message.source) &&
+          PENDING_COR_MESSAGE_STATUSES.has(message.corMessageSyncStatus || ""),
+      )
+      .sort((a, b) => a.createdAt - b.createdAt);
+  },
+});
+
+export const listPendingExternalTaskMessages = query({
+  args: {
+    taskId: v.id("tasks"),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) throw new Error("No autenticado");
+    if (await isExternalUser(ctx, userId)) return [];
+
+    const task = await ctx.db.get(args.taskId);
+    if (!task || task.convexStatus === "deleted") return [];
+    if (!(await hasTaskAccess(ctx, task, userId))) return [];
+    if (task.corTaskId || task.corSyncStatus === "synced") return [];
+
+    const messages = await ctx.db
+      .query("taskMessages")
+      .withIndex("by_task", (q) => q.eq("taskId", args.taskId))
+      .collect();
+
+    return messages
+      .filter(
+        (message) =>
+          EXTERNAL_COMMENT_SOURCES.has(message.source) &&
+          PENDING_COR_MESSAGE_STATUSES.has(message.corMessageSyncStatus || ""),
+      )
+      .sort((a, b) => a.createdAt - b.createdAt)
+      .map((message) => ({
+        _id: message._id,
+        source: message.source,
+        message: message.message,
+        trelloCommentId: message.trelloCommentId,
+        trelloCardId: message.trelloCardId,
+        corMessageSyncStatus: message.corMessageSyncStatus,
+        createdAt: message.createdAt,
+      }));
   },
 });
 
@@ -3116,6 +3197,70 @@ async function uploadPendingAttachmentsToCOR(
   );
 }
 
+async function publishPendingTaskMessagesToCOR(
+  ctx: ActionCtx,
+  taskId: string,
+  corTaskId: number,
+  provider: ProjectManagementProvider,
+): Promise<void> {
+  const pendingMessages = await ctx.runQuery(
+    internal.data.tasks.listPendingTaskMessagesForCORInternal,
+    { taskId: taskId as any },
+  );
+
+  if (pendingMessages.length === 0) return;
+
+  console.log(
+    `[TaskMessages] Publicando ${pendingMessages.length} comentario(s) pendiente(s) en COR task ${corTaskId}...`,
+  );
+
+  for (const message of pendingMessages) {
+    try {
+      const corMessage =
+        message.source === "trello"
+          ? formatTrelloCommentForCOR(message.message)
+          : message.message;
+
+      const result = await provider.postTaskMessage({
+        taskId: corTaskId,
+        message: corMessage,
+      });
+
+      await ctx.runMutation(
+        internal.data.tasks.updateTaskMessageSyncStatusInternal,
+        {
+          taskMessageId: message._id,
+          corTaskId,
+          corMessageSyncStatus: result.success ? "synced" : "error",
+          corMessageSyncError: result.success
+            ? undefined
+            : result.error || "No se pudo publicar el comentario en COR.",
+        },
+      );
+
+      if (!result.success) {
+        console.error(
+          `[TaskMessages] Error publicando comentario ${message._id} en COR: ${result.error}`,
+        );
+      }
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      await ctx.runMutation(
+        internal.data.tasks.updateTaskMessageSyncStatusInternal,
+        {
+          taskMessageId: message._id,
+          corTaskId,
+          corMessageSyncStatus: "error",
+          corMessageSyncError: errorMessage,
+        },
+      );
+      console.error(
+        `[TaskMessages] Error publicando comentario ${message._id} en COR: ${errorMessage}`,
+      );
+    }
+  }
+}
+
 /**
  * Mutation pública que inicia la publicación de una task en el sistema externo.
  *
@@ -3336,7 +3481,10 @@ export const publishTaskToExternalAction = internalAction({
             "El proyecto seleccionado no pertenece al cliente de esta tarea.",
           );
         }
-        if (isDateBeforeToday(existingProject.endDate)) {
+        const existingProjectEndDate = optionalStringFromExternal(
+          existingProject.endDate,
+        );
+        if (isDateBeforeToday(existingProjectEndDate)) {
           throw new Error(
             "El proyecto seleccionado ya está vencido. Selecciona otro proyecto activo.",
           );
@@ -3356,9 +3504,14 @@ export const publishTaskToExternalAction = internalAction({
             : undefined;
         localProjectDeliverables =
           taskDeliverablesCount !== undefined
-            ? Math.max(0, Math.trunc(existingProject.deliverables ?? 0)) +
+            ? Math.max(
+                0,
+                Math.trunc(
+                  optionalNumberFromExternal(existingProject.deliverables) ?? 0,
+                ),
+              ) +
               taskDeliverablesCount
-            : existingProject.deliverables;
+            : optionalNumberFromExternal(existingProject.deliverables);
         const proposedEstimatedTime =
           typeof localProject?.estimatedTime === "number" &&
           Number.isFinite(localProject.estimatedTime) &&
@@ -3367,9 +3520,12 @@ export const publishTaskToExternalAction = internalAction({
             : undefined;
         localProjectEstimatedTime =
           proposedEstimatedTime !== undefined
-            ? Math.max(0, existingProject.estimatedTime ?? 0) +
+            ? Math.max(
+                0,
+                optionalNumberFromExternal(existingProject.estimatedTime) ?? 0,
+              ) +
               proposedEstimatedTime
-            : existingProject.estimatedTime;
+            : optionalNumberFromExternal(existingProject.estimatedTime);
         localProjectPmId = undefined;
         shouldUpdateProjectFields =
           taskDeliverablesCount !== undefined ||
@@ -3382,11 +3538,11 @@ export const publishTaskToExternalAction = internalAction({
               projectId: projectId as any,
               taskId: args.taskId,
               corProjectId: existingProject.id,
-              name: existingProject.name,
-              brief: existingProject.brief,
-              startDate: existingProject.startDate,
-              endDate: existingProject.endDate,
-              status: existingProject.status,
+              name: optionalStringFromExternal(existingProject.name),
+              brief: optionalStringFromExternal(existingProject.brief),
+              startDate: optionalStringFromExternal(existingProject.startDate),
+              endDate: existingProjectEndDate,
+              status: optionalStringFromExternal(existingProject.status),
               deliverables: localProjectDeliverables,
               estimatedTime: localProjectEstimatedTime,
             },
@@ -3551,7 +3707,22 @@ export const publishTaskToExternalAction = internalAction({
         `[PublishTask] ✅ IDs guardados — corTaskId: ${externalTask.id}, corProjectId: ${corProjectId}, clientId: ${clientId}, hash: ${descriptionHash}`,
       );
 
-      // 6. Subir archivos pendientes a COR (no-fatal: la task ya está publicada)
+      // 6. Publicar comentarios externos pendientes en COR (no-fatal: la task ya está publicada)
+      try {
+        await publishPendingTaskMessagesToCOR(
+          ctx,
+          args.taskId,
+          externalTask.id,
+          provider,
+        );
+      } catch (messageError) {
+        console.error(
+          "[PublishTask] ⚠️ Error publicando comentarios pendientes (task ya publicada):",
+          messageError,
+        );
+      }
+
+      // 7. Subir archivos pendientes a COR (no-fatal: la task ya está publicada)
       try {
         await uploadPendingAttachmentsToCOR(ctx, args.taskId, externalTask.id);
       } catch (fileError) {

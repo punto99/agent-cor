@@ -30,6 +30,7 @@ import {
   ChevronDown,
   ChevronRight,
   Trash2,
+  MessageCircle,
 } from "lucide-react";
 
 interface TaskDetailDialogProps {
@@ -72,6 +73,24 @@ type CORProjectOption = {
 };
 
 const EXISTING_PROJECTS_PAGE_SIZE = 20;
+
+function formatMessageTimestamp(value: number) {
+  return new Intl.DateTimeFormat("es", {
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(new Date(value));
+}
+
+function getFriendlySyncError(toolName: string) {
+  return `No pudimos sincronizar con ${toolName}. Intenta nuevamente. Si el problema continúa, contacta al equipo interno.`;
+}
+
+function getFriendlyRetryMessage(toolName: string) {
+  return `No pudimos sincronizar con ${toolName}. Estamos reintentando automáticamente.`;
+}
 
 type TaxonomySubBrandOption = {
   _id: Id<"subBrands">;
@@ -439,6 +458,10 @@ export function TaskDetailDialog({
   const isPublishedInCOR =
     syncStatus === "synced" ||
     Boolean((liveTask as any)?.corTaskId ?? task.corTaskId);
+  const pendingExternalMessages = useQuery(
+    api.data.tasks.listPendingExternalTaskMessages,
+    !isPublishedInCOR ? { taskId: task._id } : "skip",
+  );
   const liveCorTaskId = (liveTask as any)?.corTaskId ?? task.corTaskId;
   const canEditFromDialog =
     !isPublishedInCOR && syncStatus !== "syncing" && syncStatus !== "retrying";
@@ -490,26 +513,40 @@ export function TaskDetailDialog({
     (liveTask as any)?.corProjectMissingInCOR ??
     task.corProjectMissingInCOR,
   );
+  const pendingExternalMessageList = pendingExternalMessages || [];
+  const showPendingExternalMessages =
+    !isPublishedInCOR && pendingExternalMessageList.length > 0;
 
   // Detectar cuando la publicación finaliza (synced o error)
   useEffect(() => {
+    if (syncStatus === "synced") {
+      setIsPublishing(false);
+      setIsRetrying(false);
+      setPublishError(null);
+
+      if (publishInitiatedRef.current) {
+        // Publicación exitosa → notificar al padre y cerrar
+        publishInitiatedRef.current = false;
+        onPublishResult?.({
+          success: true,
+          message: `Tarea publicada exitosamente en ${toolName}`,
+        });
+        onClose();
+      }
+      return;
+    }
+
+    if (syncStatus === "syncing" || syncStatus === "retrying") {
+      setPublishError(null);
+    }
+
     if (!publishInitiatedRef.current) return;
 
-    if (syncStatus === "synced") {
-      // Publicación exitosa → notificar al padre y cerrar
-      publishInitiatedRef.current = false;
-      setIsPublishing(false);
-      onPublishResult?.({
-        success: true,
-        message: `Tarea publicada exitosamente en ${toolName}`,
-      });
-      onClose();
-    } else if (syncStatus === "error" && isPublishing) {
+    if (syncStatus === "error" && isPublishing) {
       // Error → mostrar en dialog, no cerrar
       publishInitiatedRef.current = false;
       setIsPublishing(false);
-      const errorMsg =
-        (liveTask as any)?.corSyncError || "Error desconocido al publicar";
+      const errorMsg = getFriendlySyncError(toolName);
       setPublishError(errorMsg);
       onPublishResult?.({
         success: false,
@@ -1056,6 +1093,40 @@ export function TaskDetailDialog({
                       )}
                     </button>
                   </div>
+                  {showPendingExternalMessages && (
+                    <section className="mx-6 mb-3 rounded-lg border border-amber-200 bg-amber-50/80 p-3 text-sm dark:border-amber-900/50 dark:bg-amber-950/20">
+                      <div className="mb-2 flex items-center gap-2 text-amber-800 dark:text-amber-300">
+                        <MessageCircle className="h-4 w-4 flex-shrink-0" />
+                        <span className="font-medium">
+                          {pendingExternalMessageList.length === 1
+                            ? "1 comentario pendiente para COR"
+                            : `${pendingExternalMessageList.length} comentarios pendientes para COR`}
+                        </span>
+                      </div>
+                      <div className="space-y-2">
+                        {pendingExternalMessageList.map((message) => (
+                          <article
+                            key={message._id}
+                            className="rounded-md border border-amber-200/80 bg-background/70 px-3 py-2 dark:border-amber-900/50"
+                          >
+                            <div className="mb-1 flex items-center justify-between gap-2 text-xs text-muted-foreground">
+                              <span>
+                                {message.source === "trello"
+                                  ? "Comentario desde Trello"
+                                  : "Comentario desde agente externo"}
+                              </span>
+                              <time dateTime={new Date(message.createdAt).toISOString()}>
+                                {formatMessageTimestamp(message.createdAt)}
+                              </time>
+                            </div>
+                            <p className="whitespace-pre-wrap break-words text-foreground">
+                              {message.message}
+                            </p>
+                          </article>
+                        ))}
+                      </div>
+                    </section>
+                  )}
                   <TaskBriefContent
                     task={liveTask ?? task}
                     editable={canEditFromDialog}
@@ -1120,7 +1191,7 @@ export function TaskDetailDialog({
                   </div>
                   {(project as any).corSyncError && (
                     <p className="text-xs text-muted-foreground ml-6">
-                      {(project as any).corSyncError}
+                      {getFriendlySyncError(toolName)}
                     </p>
                   )}
                   <button
@@ -1129,8 +1200,8 @@ export function TaskDetailDialog({
                         setIsRetrying(true);
                         setPublishError(null);
                         await retryProject({ projectId: project._id });
-                      } catch (err: any) {
-                        setPublishError(err.message || "Error al reintentar");
+                      } catch {
+                        setPublishError(getFriendlySyncError(toolName));
                       } finally {
                         setIsRetrying(false);
                       }
@@ -1224,7 +1295,7 @@ export function TaskDetailDialog({
                   Sincronizando con {toolName} (reintentando)...
                   {(liveTask as any)?.corSyncError && (
                     <span className="block text-xs text-muted-foreground mt-0.5">
-                      {(liveTask as any).corSyncError}
+                      {getFriendlyRetryMessage(toolName)}
                     </span>
                   )}
                 </span>
@@ -1239,7 +1310,7 @@ export function TaskDetailDialog({
                 </div>
                 {((liveTask as any)?.corSyncError || task.corSyncError) && (
                   <p className="text-xs text-muted-foreground ml-6">
-                    {(liveTask as any)?.corSyncError || task.corSyncError}
+                    {getFriendlySyncError(toolName)}
                   </p>
                 )}
                 {/* Botón reintentar sync (cuando ya está publicada pero falló un edit sync) */}
@@ -1250,8 +1321,8 @@ export function TaskDetailDialog({
                         setIsRetrying(true);
                         setPublishError(null);
                         await retryTask({ taskId: task._id });
-                      } catch (err: any) {
-                        setPublishError(err.message || "Error al reintentar");
+                      } catch {
+                        setPublishError(getFriendlySyncError(toolName));
                       } finally {
                         setIsRetrying(false);
                       }
