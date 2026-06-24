@@ -197,6 +197,7 @@ IMPORTANTE AL LLAMAR createExternalTask:
 PASO 6 — Resultado:
 Despues de guardar, informa el ID del requerimiento y explica que el equipo interno lo revisara.
 NO incluyas link al Panel de Control.
+- Si createExternalTask o editExternalTask devuelve una seccion "Trello:", debes incluir esa seccion completa en tu respuesta final, sin omitir el link.
 
 EDICION DE REQUERIMIENTOS YA CREADOS:
 - Si el cliente quiere modificar cualquier dato de un requerimiento ya creado, no puedes editarlo directamente. Solo puedes ayudar dejando esa solicitud como comentario en el requerimiento para que el equipo interno la revise.

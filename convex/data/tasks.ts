@@ -591,11 +591,17 @@ export const getExternalEditableTaskContext = internalQuery({
       }
     }
 
+    const clientBrand = task.clientBrandId
+      ? await ctx.db.get(task.clientBrandId)
+      : null;
+
     return {
       ok: true,
       task,
       userId: chatThread.userId,
       approvedExternalUserId: approvedExternalUser._id,
+      trelloBoardId: clientBrand?.trelloBoardId,
+      trelloBoardUrl: clientBrand?.trelloBoardUrl,
     };
   },
 });
@@ -1504,6 +1510,7 @@ export const validateAndPrepareExternalTask = internalQuery({
       clientBrandId: brand._id,
       corBrandId: brand.corBrandId,
       brandName: brand.name,
+      trelloBoardId: brand.trelloBoardId,
       trelloBoardUrl: brand.trelloBoardUrl,
       subBrandId: subBrand?._id,
       corProductId: subBrand?.corProductId,

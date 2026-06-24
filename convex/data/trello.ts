@@ -69,6 +69,15 @@ function markdownFileLink(filename: string, url: string): string {
   return `[${markdownLinkLabel(filename)}](${url})`;
 }
 
+function getTrelloBoardUrl(value: {
+  trelloBoardUrl?: string;
+  trelloBoardId?: string;
+}) {
+  if (value.trelloBoardUrl) return value.trelloBoardUrl;
+  if (value.trelloBoardId) return `https://trello.com/b/${value.trelloBoardId}`;
+  return undefined;
+}
+
 async function getLatestExternalCommentFileLinks(
   ctx: any,
   args: {
@@ -1277,6 +1286,7 @@ export const editExternalTaskFromAgent: any = internalAction({
       applied,
       warnings,
       taskId: String(task._id),
+      trelloBoardUrl: getTrelloBoardUrl(context),
       corSyncScheduled: false,
     };
   },

@@ -6,6 +6,17 @@ import { buildBriefDescription } from "../lib/briefFormat";
 import { associateFilesHelper } from "../data/tasks";
 import { isTrelloEnabledForCorClientId } from "../lib/trelloPolicy";
 
+function getTrelloBoardUrl(preparation: {
+  trelloBoardUrl?: string;
+  trelloBoardId?: string;
+}) {
+  if (preparation.trelloBoardUrl) return preparation.trelloBoardUrl;
+  if (preparation.trelloBoardId) {
+    return `https://trello.com/b/${preparation.trelloBoardId}`;
+  }
+  return undefined;
+}
+
 function inferDeliverablesCount(deliverablesText: string): number {
   const trimmed = deliverablesText.trim();
   if (!trimmed) return 0;
@@ -285,14 +296,20 @@ export const createExternalTaskTool = createTool({
       }
     }
 
-    const trelloBoardLink = trelloEnabled && preparation.trelloBoardUrl
-      ? `\nPuedes seguir el avance en el [tablero de Trello](${preparation.trelloBoardUrl}).\n`
+    const trelloBoardUrl = trelloEnabled
+      ? getTrelloBoardUrl(preparation)
+      : undefined;
+    const trelloBoardLink = trelloBoardUrl
+      ? [
+          "",
+          "Trello:",
+          `- Tablero del requerimiento: [Abrir tablero de Trello](${trelloBoardUrl})`,
+        ].join("\n")
       : "";
 
     return `Listo, el requerimiento quedó guardado para revisión del equipo.
 
 ID del requerimiento: ${result.taskId}
-Proyecto asociado: ${result.projectId}
 ${trelloBoardLink}
 El equipo interno lo revisará y continuará el proceso.`;
   },

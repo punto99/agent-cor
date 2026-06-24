@@ -56,7 +56,11 @@ export const editExternalTaskTool = createTool({
 
     const warningText =
       warnings.length > 0 ? `\n\n${warnings.join("\n")}` : "";
+    const trelloText =
+      typeof result.trelloBoardUrl === "string" && result.trelloBoardUrl
+        ? `\n\nTrello:\n- Tablero del requerimiento: [Abrir tablero de Trello](${result.trelloBoardUrl})`
+        : "";
 
-    return `Listo, agregué el ${applied.join(", ")} al requerimiento.${warningText}`;
+    return `Listo, agregué el ${applied.join(", ")} al requerimiento.${trelloText}${warningText}`;
   },
 });
