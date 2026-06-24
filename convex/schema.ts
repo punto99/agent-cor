@@ -43,6 +43,12 @@ export default defineSchema({
     .index("by_email", ["email"])
     .index("by_user", ["userId"]),
 
+  externalOtpRequestLimits: defineTable({
+    email: v.string(),
+    requestTimestamps: v.array(v.number()),
+    updatedAt: v.number(),
+  }).index("by_email", ["email"]),
+
   // Registro de threads de chat del usuario (para diferenciar de threads de evaluación)
   // Esta tabla complementa la tabla threads del agent component para lógica de negocio
   chatThreads: defineTable({

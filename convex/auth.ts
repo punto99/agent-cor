@@ -41,6 +41,11 @@ export const { auth, signIn, signOut, store, isAuthenticated } = convexAuth({
           throw new Error("Usuario no autorizado");
         }
 
+        await ctx.runMutation(
+          internal.data.approvedExternalUsers.recordExternalOtpRequest,
+          { email },
+        );
+
         const apiKey = process.env.RESEND_API_KEY;
         if (!apiKey) {
           throw new Error("RESEND_API_KEY no está configurada en Convex.");
