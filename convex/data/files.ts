@@ -1,7 +1,7 @@
 // convex/files.ts
 // Manejo de archivos e imágenes para el agente de Brief
 import { v } from "convex/values";
-import { action, mutation, query } from "../_generated/server";
+import { action, internalMutation, internalQuery, mutation, query } from "../_generated/server";
 import { storeFile, getFile } from "@convex-dev/agent";
 import { components } from "../_generated/api";
 
@@ -220,6 +220,120 @@ export const getFileInfo = mutation({
   handler: async (ctx, args) => {
     const fileInfo = await getFile(ctx, components.agent, args.fileId);
     return fileInfo;
+  },
+});
+
+// Obtener cache vigente de Google Files API para un archivo del chat.
+export const getValidGoogleFileUpload = internalQuery({
+  args: {
+    fileId: v.string(),
+    now: v.number(),
+  },
+  handler: async (ctx, args) => {
+    const uploads = await ctx.db
+      .query("googleFileUploads")
+      .withIndex("by_file", (q) => q.eq("fileId", args.fileId))
+      .order("desc")
+      .collect();
+
+    return (
+      uploads.find(
+        (upload) =>
+          upload.source === "chat_user_upload" &&
+          upload.state === "ACTIVE" &&
+          upload.expiresAt > args.now
+      ) || null
+    );
+  },
+});
+
+// Guardar o actualizar metadata temporal de Google Files API.
+export const saveGoogleFileUpload = internalMutation({
+  args: {
+    fileId: v.string(),
+    storageId: v.string(),
+    filename: v.optional(v.string()),
+    mimeType: v.string(),
+    sizeBytes: v.optional(v.number()),
+    googleFileName: v.string(),
+    googleFileUri: v.string(),
+    state: v.string(),
+    uploadedAt: v.number(),
+    expiresAt: v.number(),
+  },
+  handler: async (ctx, args) => {
+    const existing = await ctx.db
+      .query("googleFileUploads")
+      .withIndex("by_file", (q) => q.eq("fileId", args.fileId))
+      .order("desc")
+      .first();
+
+    const doc = {
+      fileId: args.fileId,
+      storageId: args.storageId,
+      source: "chat_user_upload" as const,
+      filename: args.filename,
+      mimeType: args.mimeType,
+      sizeBytes: args.sizeBytes,
+      googleFileName: args.googleFileName,
+      googleFileUri: args.googleFileUri,
+      state: args.state,
+      uploadedAt: args.uploadedAt,
+      expiresAt: args.expiresAt,
+      updatedAt: Date.now(),
+      lastError: undefined,
+    };
+
+    if (existing) {
+      await ctx.db.patch(existing._id, doc);
+      return existing._id;
+    }
+
+    return await ctx.db.insert("googleFileUploads", doc);
+  },
+});
+
+export const markGoogleFileUploadError = internalMutation({
+  args: {
+    fileId: v.string(),
+    storageId: v.optional(v.string()),
+    filename: v.optional(v.string()),
+    mimeType: v.optional(v.string()),
+    sizeBytes: v.optional(v.number()),
+    error: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const existing = await ctx.db
+      .query("googleFileUploads")
+      .withIndex("by_file", (q) => q.eq("fileId", args.fileId))
+      .order("desc")
+      .first();
+
+    const now = Date.now();
+    if (existing) {
+      await ctx.db.patch(existing._id, {
+        state: "FAILED",
+        lastError: args.error,
+        updatedAt: now,
+      });
+      return existing._id;
+    }
+
+    return await ctx.db.insert("googleFileUploads", {
+      fileId: args.fileId,
+      storageId: args.storageId || "",
+      source: "chat_user_upload",
+      filename: args.filename,
+      mimeType: args.mimeType || "application/octet-stream",
+      sizeBytes: args.sizeBytes,
+      googleFileName: "",
+      googleFileUri: "",
+      state: "FAILED",
+      uploadedAt: now,
+      expiresAt: now,
+      updatedAt: now,
+      lastError: args.error,
+    });
   },
 });
 

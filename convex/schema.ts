@@ -334,6 +334,26 @@ export default defineSchema({
     updatedBy: v.optional(v.string()),
   }).index("by_provider", ["provider"]),
 
+  // Cache temporal de archivos subidos a Google Files API para Gemini.
+  // Convex Storage sigue siendo la fuente de verdad; estos registros expiran.
+  googleFileUploads: defineTable({
+    fileId: v.string(), // ID del archivo en el agent component
+    storageId: v.string(), // ID del blob en Convex storage
+    source: v.literal("chat_user_upload"),
+    filename: v.optional(v.string()),
+    mimeType: v.string(),
+    sizeBytes: v.optional(v.number()),
+    googleFileName: v.string(), // ej: files/abc123
+    googleFileUri: v.string(), // URL/URI que Gemini soporta nativamente
+    state: v.string(), // "ACTIVE" | "PROCESSING" | "FAILED" | etc.
+    uploadedAt: v.number(),
+    expiresAt: v.number(),
+    updatedAt: v.number(),
+    lastError: v.optional(v.string()),
+  })
+    .index("by_file", ["fileId"])
+    .index("by_expiration", ["expiresAt"]),
+
   // =====================================================
   // RAG - Tablas para búsqueda en documentos
   // =====================================================
