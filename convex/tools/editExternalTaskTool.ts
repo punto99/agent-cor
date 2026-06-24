@@ -15,6 +15,7 @@ export const editExternalTaskTool = createTool({
   Reglas obligatorias:
   - Usar solo después de que el usuario confirme el cambio.
   - Enviar solo el texto del comentario.
+  - Si el usuario subió archivos en su último mensaje, usa esta herramienta igual; el sistema agregará links a esos archivos dentro del comentario.
   - Para solicitudes de cambios, usar "comment" con un texto claro de lo que el usuario pidió.
   - El backend rechazará cualquier edición directa de campos.`,
   args: z.object({

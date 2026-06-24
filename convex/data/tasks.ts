@@ -42,6 +42,7 @@ const STRATEGIC_PRIORITY_LABEL_IDS: Record<StrategicPriority, number> = {
 };
 const PENDING_COR_MESSAGE_STATUSES = new Set(["pending_cor_task", "pending"]);
 const EXTERNAL_COMMENT_SOURCES = new Set(["trello", "external_agent"]);
+const MARKDOWN_LINK_PATTERN = /\[[^\]]+\]\(https?:\/\/[^\s)]+(?:\s+"[^"]*")?\)/;
 
 const MIN_PUBLISHABLE_DESCRIPTION_LENGTH = 40;
 const DESCRIPTION_MIN_REMAINING_RATIO = 0.35;
@@ -3217,7 +3218,9 @@ async function publishPendingTaskMessagesToCOR(
   for (const message of pendingMessages) {
     try {
       const corMessage =
-        message.source === "trello"
+        message.source === "trello" ||
+        (message.source === "external_agent" &&
+          MARKDOWN_LINK_PATTERN.test(message.message))
           ? formatTrelloCommentForCOR(message.message)
           : message.message;
 

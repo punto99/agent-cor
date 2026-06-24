@@ -7,7 +7,7 @@ import {
   internalQuery,
 } from "../_generated/server";
 import { getAuthUserId } from "@convex-dev/auth/server";
-import { storeFile } from "@convex-dev/agent";
+import { listMessages, storeFile } from "@convex-dev/agent";
 import { components, internal } from "../_generated/api";
 import { trelloProvider } from "../integrations/trelloProvider";
 import { getProjectManagementProvider } from "../integrations/registry";
@@ -40,6 +40,84 @@ const LABEL_SYNC_STALE_MS = 60_000;
 const LABEL_SYNC_RETRY_DELAYS_MS = [1000, 2000, 4000, 8000];
 const CONVEX_TRELLO_CLIENT_IDENTIFIER = "agent-core-convex-trello-sync";
 const BUSINESS_TIME_ZONE = "America/Guayaquil";
+
+function uniqueStrings(values: string[]): string[] {
+  return Array.from(new Set(values.filter(Boolean)));
+}
+
+function extractFileIdsFromMessage(msg: any): string[] {
+  const ids: string[] = [];
+
+  if (Array.isArray(msg.fileIds)) ids.push(...msg.fileIds);
+  if (Array.isArray(msg.metadata?.fileIds)) ids.push(...msg.metadata.fileIds);
+  if (Array.isArray(msg.message?.metadata?.fileIds)) {
+    ids.push(...msg.message.metadata.fileIds);
+  }
+
+  return uniqueStrings(ids);
+}
+
+function messageCreationTime(msg: any): number {
+  return typeof msg._creationTime === "number" ? msg._creationTime : 0;
+}
+
+function markdownLinkLabel(value: string): string {
+  return value.replace(/[\r\n]+/g, " ").replace(/\[/g, "(").replace(/\]/g, ")");
+}
+
+function markdownFileLink(filename: string, url: string): string {
+  return `[${markdownLinkLabel(filename)}](${url})`;
+}
+
+async function getLatestExternalCommentFileLinks(
+  ctx: any,
+  args: {
+    threadId: string;
+    taskCreatedAt?: number;
+  },
+): Promise<Array<{ filename: string; url: string }>> {
+  const messagesResult = await listMessages(ctx, components.agent, {
+    threadId: args.threadId,
+    paginationOpts: { cursor: null, numItems: 20 },
+  });
+
+  const userMessagesWithFiles = messagesResult.page
+    .filter((msg: any) => msg.message?.role === "user")
+    .map((msg: any) => ({
+      msg,
+      fileIds: extractFileIdsFromMessage(msg),
+      createdAt: messageCreationTime(msg),
+    }))
+    .filter((entry) => entry.fileIds.length > 0)
+    .filter(
+      (entry) =>
+        typeof args.taskCreatedAt !== "number" ||
+        entry.createdAt >= args.taskCreatedAt,
+    )
+    .sort((a, b) => b.createdAt - a.createdAt);
+  const latestUserMessageWithFiles = userMessagesWithFiles[0];
+
+  if (!latestUserMessageWithFiles) return [];
+
+  const links: Array<{ filename: string; url: string }> = [];
+  for (const fileId of latestUserMessageWithFiles.fileIds) {
+    try {
+      const fileInfo = await ctx.runQuery(internal.data.tasks.getFileInfoInternal, {
+        fileId,
+      });
+      if (fileInfo?.url && fileInfo.filename) {
+        links.push({ filename: fileInfo.filename, url: fileInfo.url });
+      }
+    } catch (error) {
+      console.error("[ExternalTaskComment] No se pudo resolver archivo:", {
+        fileId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  return links;
+}
 
 function normalizeTrelloLabelName(value: string) {
   return value
@@ -1077,20 +1155,6 @@ export const editExternalTaskFromAgent: any = internalAction({
       };
     }
 
-    if (comment === undefined) {
-      return {
-        ok: false,
-        error: "Indica el comentario que quieres agregar al requerimiento.",
-      };
-    }
-
-    if (comment.length === 0) {
-      return {
-        ok: false,
-        error: "El comentario no puede quedar vacío.",
-      };
-    }
-
     const context = await ctx.runQuery(
       (internal as any).data.tasks.getExternalEditableTaskContext,
       {
@@ -1125,10 +1189,38 @@ export const editExternalTaskFromAgent: any = internalAction({
 
     const applied: string[] = [];
     const warnings: string[] = [];
+    const fileLinks = await getLatestExternalCommentFileLinks(ctx, {
+      threadId: args.threadId,
+      taskCreatedAt: task.createdAt,
+    });
+    const commentParts: string[] = [];
+
+    if (comment && comment.length > 0) {
+      commentParts.push(comment);
+    }
+
+    if (fileLinks.length > 0) {
+      commentParts.push(
+        [
+          "Archivos adjuntos:",
+          ...fileLinks.map((file) => `- ${markdownFileLink(file.filename, file.url)}`),
+        ].join("\n"),
+      );
+    }
+
+    const finalComment = commentParts.join("\n\n").trim();
+
+    if (!finalComment) {
+      return {
+        ok: false,
+        error:
+          "Indica el comentario o sube un archivo para agregar al requerimiento.",
+      };
+    }
 
     const trelloComment = await trelloProvider.addCommentToCard({
       cardId: trelloCardId,
-      text: comment,
+      text: finalComment,
     });
 
     const corTaskId = task.corTaskId ? Number(task.corTaskId) : undefined;
@@ -1141,7 +1233,7 @@ export const editExternalTaskFromAgent: any = internalAction({
         taskId: task._id,
         userId: context.userId,
         source: "external_agent",
-        message: comment,
+        message: finalComment,
         trelloCardId,
         trelloCommentId: trelloComment.id,
         trelloSyncStatus: "synced",
@@ -1154,7 +1246,10 @@ export const editExternalTaskFromAgent: any = internalAction({
       const provider = getProjectManagementProvider();
       const result = await provider.postTaskMessage({
         taskId: corTaskId!,
-        message: comment,
+        message:
+          fileLinks.length > 0
+            ? formatTrelloCommentForCOR(finalComment)
+            : finalComment,
       });
 
       await ctx.runMutation(
