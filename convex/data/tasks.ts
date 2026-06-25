@@ -3541,23 +3541,21 @@ export const publishTaskToExternalAction = internalAction({
           taskDeliverablesCount !== undefined ||
           proposedEstimatedTime !== undefined;
 
-        if (projectId) {
-          await ctx.runMutation(
-            internal.data.projects.attachProjectToExistingCORProject,
-            {
-              projectId: projectId as any,
-              taskId: args.taskId,
-              corProjectId: existingProject.id,
-              name: optionalStringFromExternal(existingProject.name),
-              brief: optionalStringFromExternal(existingProject.brief),
-              startDate: optionalStringFromExternal(existingProject.startDate),
-              endDate: existingProjectEndDate,
-              status: optionalStringFromExternal(existingProject.status),
-              deliverables: localProjectDeliverables,
-              estimatedTime: localProjectEstimatedTime,
-            },
-          );
-        }
+        await ctx.runMutation(
+          internal.data.projects.attachProjectToExistingCORProject,
+          {
+            projectId: projectId ? (projectId as any) : undefined,
+            taskId: args.taskId,
+            corProjectId: existingProject.id,
+            name: optionalStringFromExternal(existingProject.name),
+            brief: optionalStringFromExternal(existingProject.brief),
+            startDate: optionalStringFromExternal(existingProject.startDate),
+            endDate: existingProjectEndDate,
+            status: optionalStringFromExternal(existingProject.status),
+            deliverables: localProjectDeliverables,
+            estimatedTime: localProjectEstimatedTime,
+          },
+        );
       } else if (projectId) {
         // Leer el proyecto local
         const localProject = await ctx.runQuery(

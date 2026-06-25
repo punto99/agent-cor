@@ -8,7 +8,6 @@
 
 import { v } from "convex/values";
 import {
-  action,
   query,
   mutation,
   internalMutation,
@@ -95,14 +94,6 @@ function normalizeOptionalCorId(value: number | undefined) {
   if (typeof value !== "number" || !Number.isFinite(value)) return undefined;
   const normalized = Math.trunc(value);
   return normalized > 0 ? normalized : undefined;
-}
-
-function normalizeDateEnd(value: string | undefined) {
-  const dateEnd = value?.trim() || new Date().toISOString().slice(0, 10);
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(dateEnd)) {
-    throw new Error("La fecha de búsqueda de proyectos no es válida.");
-  }
-  return dateEnd;
 }
 
 function projectEndsBefore(projectEndDate: string | undefined, dateEnd: string) {
@@ -208,48 +199,9 @@ export const getProjectInternal = internalQuery({
   },
 });
 
-export const getCORProjectSearchContext = internalQuery({
+export const listPublishedLocalProjectsForClient = query({
   args: {
     clientId: v.id("corClients"),
-    userId: v.id("users"),
-  },
-  handler: async (ctx, args) => {
-    if (await isExternalUser(ctx, args.userId)) {
-      return {
-        ok: false,
-        error: "Esta búsqueda está disponible solo para usuarios internos.",
-      };
-    }
-
-    const client = await ctx.db.get(args.clientId);
-    if (!client) {
-      return {
-        ok: false,
-        error: "Cliente no encontrado.",
-      };
-    }
-
-    const hasAccess = await hasAnyClientAccess(ctx, args.clientId, args.userId);
-    if (!hasAccess) {
-      return {
-        ok: false,
-        error: "No tienes permisos para consultar proyectos de este cliente.",
-      };
-    }
-
-    return {
-      ok: true,
-      clientId: client._id,
-      clientName: client.name,
-      corClientId: client.corClientId,
-    };
-  },
-});
-
-export const searchActiveCORProjectsForClient = action({
-  args: {
-    clientId: v.id("corClients"),
-    dateEnd: v.optional(v.string()),
     brandId: v.optional(v.number()),
     productId: v.optional(v.number()),
     page: v.optional(v.number()),
@@ -258,51 +210,98 @@ export const searchActiveCORProjectsForClient = action({
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
     if (!userId) throw new Error("No autenticado");
-
-    const searchContext: any = await ctx.runQuery(
-      internal.data.projects.getCORProjectSearchContext,
-      { clientId: args.clientId, userId },
-    );
-    if (!searchContext?.ok) {
-      throw new Error(
-        searchContext?.error || "No se pudo consultar proyectos para este cliente.",
-      );
+    if (await isExternalUser(ctx, userId)) {
+      throw new Error("Esta búsqueda está disponible solo para usuarios internos.");
     }
 
-    const dateEnd = normalizeDateEnd(args.dateEnd);
+    const client = await ctx.db.get(args.clientId);
+    if (!client) {
+      throw new Error("Cliente no encontrado.");
+    }
+
+    const hasAccess = await hasAnyClientAccess(ctx, args.clientId, userId);
+    if (!hasAccess) {
+      throw new Error("No tienes permisos para consultar proyectos de este cliente.");
+    }
+
     const page = normalizePage(args.page, 1);
     const perPage = normalizePerPage(args.perPage, 20);
     const brandId = normalizeOptionalCorId(args.brandId);
     const productId = brandId
       ? normalizeOptionalCorId(args.productId)
       : undefined;
-    const provider = getProjectManagementProvider();
-    const result = await provider.listProjects({
-      clientId: searchContext.corClientId,
-      dateEnd,
-      brandId,
-      productId,
-      page,
-      perPage,
-      archived: 2,
-    });
+    const today = new Date().toISOString().slice(0, 10);
+    const projectsById = new Map<string, any>();
 
-    const projects = result.projects.filter(
-      (project) => !projectEndsBefore(project.endDate, dateEnd),
-    );
+    const byClientId = await ctx.db
+      .query("projects")
+      .withIndex("by_clientId", (q) => q.eq("clientId", args.clientId))
+      .collect();
+    for (const project of byClientId) {
+      projectsById.set(String(project._id), project);
+    }
+
+    const byCorClientId = await ctx.db
+      .query("projects")
+      .withIndex("by_corClientId", (q) => q.eq("corClientId", client.corClientId))
+      .collect();
+    for (const project of byCorClientId) {
+      projectsById.set(String(project._id), project);
+    }
+
+    const clientBrands = await ctx.db
+      .query("clientBrands")
+      .withIndex("by_client", (q) => q.eq("clientId", args.clientId))
+      .collect();
+    for (const brand of clientBrands) {
+      const brandProjects = await ctx.db
+        .query("projects")
+        .withIndex("by_clientBrandId", (q) => q.eq("clientBrandId", brand._id))
+        .collect();
+      for (const project of brandProjects) {
+        projectsById.set(String(project._id), project);
+      }
+    }
+
+    const projects = Array.from(projectsById.values())
+      .filter((project) => {
+        if (project.convexStatus === "deleted") return false;
+        if (!project.corProjectId) return false;
+        if (project.corSyncStatus !== "synced") return false;
+        if (projectEndsBefore(project.endDate, today)) return false;
+        if (brandId !== undefined && project.brandId !== brandId) return false;
+        if (productId !== undefined && project.productId !== productId) return false;
+        return true;
+      })
+      .sort((a, b) => {
+        const aEnd = a.endDate || "9999-12-31";
+        const bEnd = b.endDate || "9999-12-31";
+        if (aEnd !== bEnd) return aEnd.localeCompare(bEnd);
+        return a.name.localeCompare(b.name, "es", { sensitivity: "base" });
+      });
+
+    const total = projects.length;
+    const lastPage = Math.max(1, Math.ceil(total / perPage));
+    const start = (page - 1) * perPage;
 
     return {
       client: {
-        clientId: searchContext.clientId,
-        name: searchContext.clientName,
-        corClientId: searchContext.corClientId,
+        clientId: client._id,
+        name: client.name,
+        corClientId: client.corClientId,
       },
-      dateEnd,
-      projects,
-      page: result.page,
-      perPage: result.perPage,
-      total: result.total,
-      lastPage: result.lastPage,
+      projects: projects.slice(start, start + perPage).map((project) => ({
+        id: project.corProjectId as number,
+        localProjectId: project._id,
+        name: project.name,
+        endDate: project.endDate,
+        status: project.status,
+        deliverables: project.deliverables,
+      })),
+      page,
+      perPage,
+      total,
+      lastPage,
     };
   },
 });
@@ -742,7 +741,7 @@ export const updateProjectPublishStatus = internalMutation({
 
 export const attachProjectToExistingCORProject = internalMutation({
   args: {
-    projectId: v.id("projects"),
+    projectId: v.optional(v.id("projects")),
     taskId: v.optional(v.id("tasks")),
     corProjectId: v.number(),
     name: v.optional(v.string()),
@@ -754,8 +753,9 @@ export const attachProjectToExistingCORProject = internalMutation({
     estimatedTime: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
-    const previousProject = await ctx.db.get(args.projectId);
-    if (!previousProject) throw new Error("Proyecto no encontrado");
+    const previousProject = args.projectId
+      ? await ctx.db.get(args.projectId)
+      : null;
 
     const existingProjects = await ctx.db
       .query("projects")
@@ -802,25 +802,33 @@ export const attachProjectToExistingCORProject = internalMutation({
         });
       }
 
-      const remainingTasksForPreviousProject = await ctx.db
-        .query("tasks")
-        .withIndex("by_projectId", (q) => q.eq("projectId", args.projectId))
-        .collect();
-      const hasOtherActiveTasks = remainingTasksForPreviousProject.some(
-        (task) =>
-          task._id !== args.taskId && task.convexStatus !== "deleted",
-      );
+      let deletedUnusedProject = false;
+      if (args.projectId && previousProject) {
+        const remainingTasksForPreviousProject = await ctx.db
+          .query("tasks")
+          .withIndex("by_projectId", (q) => q.eq("projectId", args.projectId!))
+          .collect();
+        const hasOtherActiveTasks = remainingTasksForPreviousProject.some(
+          (task) =>
+            task._id !== args.taskId && task.convexStatus !== "deleted",
+        );
 
-      if (!hasOtherActiveTasks) {
-        await applyProjectDeliverablesDelta(ctx, previousProject, null);
-        await ctx.db.delete(args.projectId);
+        if (!hasOtherActiveTasks) {
+          await applyProjectDeliverablesDelta(ctx, previousProject, null);
+          await ctx.db.delete(args.projectId);
+          deletedUnusedProject = true;
+        }
       }
 
       return {
         projectId: canonicalProject._id,
         reusedExistingProject: true,
-        deletedUnusedProject: !hasOtherActiveTasks,
+        deletedUnusedProject,
       };
+    }
+
+    if (!args.projectId || !previousProject) {
+      throw new Error("Proyecto seleccionado no encontrado en Convex.");
     }
 
     await ctx.db.patch(args.projectId, updates);

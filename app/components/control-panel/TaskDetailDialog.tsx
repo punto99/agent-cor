@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useMemo, useRef } from "react";
-import { useMutation, useQuery, useAction } from "convex/react";
+import { useMutation, useQuery, useAction, useConvex } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import { TaskBriefContent } from "../task/TaskBriefContent";
@@ -64,8 +64,9 @@ interface TaskDetailDialogProps {
 
 type PublishProjectMode = "new" | "existing";
 
-type CORProjectOption = {
+type ExistingProjectOption = {
   id: number;
+  localProjectId?: Id<"projects">;
   name: string;
   endDate?: string;
   status?: string;
@@ -318,6 +319,7 @@ export function TaskDetailDialog({
   onClose,
   onPublishResult,
 }: TaskDetailDialogProps) {
+  const convex = useConvex();
   const startPublish = useMutation(api.data.tasks.startPublishTaskToExternal);
   const retryTask = useMutation(api.data.tasks.retryTaskSync);
   const updateTaskTaxonomy = useMutation(api.data.tasks.updateTaskTaxonomy);
@@ -338,9 +340,6 @@ export function TaskDetailDialog({
   );
   const generateUploadUrl = useMutation(api.data.files.generateUploadUrl);
   const registerUploadedFile = useAction(api.data.files.registerUploadedFile);
-  const searchActiveCORProjects = useAction(
-    api.data.projects.searchActiveCORProjectsForClient,
-  );
   const [publishError, setPublishError] = useState<string | null>(null);
   const [isPublishing, setIsPublishing] = useState(false);
   const [isPublishingToTrello, setIsPublishingToTrello] = useState(false);
@@ -356,9 +355,9 @@ export function TaskDetailDialog({
   const [isPublishProjectSectionOpen, setIsPublishProjectSectionOpen] =
     useState(true);
   const [existingProjectSearch, setExistingProjectSearch] = useState("");
-  const [existingProjects, setExistingProjects] = useState<CORProjectOption[]>(
-    [],
-  );
+  const [existingProjects, setExistingProjects] = useState<
+    ExistingProjectOption[]
+  >([]);
   const [existingProjectsPage, setExistingProjectsPage] = useState(1);
   const [hasMoreExistingProjects, setHasMoreExistingProjects] = useState(false);
   const [selectedExistingProjectId, setSelectedExistingProjectId] = useState<
@@ -620,23 +619,26 @@ export function TaskDetailDialog({
         setIsLoadingExistingProjects(true);
       }
       setExistingProjectsError(null);
-      const result = await searchActiveCORProjects({
-        clientId: localClientId,
-        brandId:
-          filters && "brandId" in filters
-            ? filters.brandId
-            : projectSearchBrandId,
-        productId:
-          filters && "productId" in filters
-            ? filters.productId
-            : projectSearchProductId,
-        page: pageToLoad,
-        perPage: EXISTING_PROJECTS_PAGE_SIZE,
-      });
-      const nextProjects = (result.projects || []) as CORProjectOption[];
+      const result = await convex.query(
+        api.data.projects.listPublishedLocalProjectsForClient,
+        {
+          clientId: localClientId,
+          brandId:
+            filters && "brandId" in filters
+              ? filters.brandId
+              : projectSearchBrandId,
+          productId:
+            filters && "productId" in filters
+              ? filters.productId
+              : projectSearchProductId,
+          page: pageToLoad,
+          perPage: EXISTING_PROJECTS_PAGE_SIZE,
+        },
+      );
+      const nextProjects = (result.projects || []) as ExistingProjectOption[];
       setExistingProjects((current) => {
         if (!shouldAppend) return nextProjects;
-        const byId = new Map<number, CORProjectOption>();
+        const byId = new Map<number, ExistingProjectOption>();
         for (const item of current) byId.set(item.id, item);
         for (const item of nextProjects) byId.set(item.id, item);
         return Array.from(byId.values());
