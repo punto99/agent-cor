@@ -32,6 +32,10 @@ export interface ExternalClient {
   condition?: string;
 }
 
+export interface ClientSearchResult {
+  clients: ExternalClient[];
+}
+
 /** Marca tal como existe en COR */
 export interface ExternalBrand {
   id: number;
@@ -227,6 +231,12 @@ export interface ProjectManagementProvider {
    * Retorna el primer resultado más relevante, o null si no se encuentra.
    */
   searchClient(name: string): Promise<ExternalClient | null>;
+
+  /**
+   * Buscar clientes/marcas por nombre en el sistema externo.
+   * Retorna todos los candidatos disponibles para permitir desambiguación.
+   */
+  searchClientsByName?(name: string): Promise<ClientSearchResult>;
 
   /**
    * Crear un proyecto en el sistema externo.

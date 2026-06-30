@@ -12,6 +12,7 @@ import type {
   ProjectManagementProvider,
   ExternalUser,
   ExternalClient,
+  ClientSearchResult,
   ExternalBrand,
   ExternalProduct,
   ExternalProject,
@@ -117,6 +118,67 @@ function parseDateFlexible(dateStr: string): Date | null {
   if (!isNaN(d.getTime())) return d;
 
   return null;
+}
+
+function normalizeClientName(name: string): string {
+  return name
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .trim()
+    .replace(/\s+/g, " ")
+    .toLowerCase();
+}
+
+function mapCORClient(client: Record<string, unknown>): ExternalClient {
+  return {
+    id: client.id as number,
+    name: (client.name as string) || "",
+    businessName: (client.business_name as string) ?? undefined,
+    email: (client.email_contact as string) ?? undefined,
+  };
+}
+
+async function searchCORClientsByName(name: string): Promise<ClientSearchResult> {
+  console.log(`[COR Provider] 🔍 Buscando cliente: "${name}"`);
+
+  try {
+    const encodedName = encodeURIComponent(name);
+    const response = await corApiFetch(
+      `/clients/search-by-name/${encodedName}`,
+    );
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error(
+        `[COR Provider] ❌ Error buscando cliente: ${response.status} - ${errorText}`,
+      );
+      return { clients: [] };
+    }
+
+    const result = await response.json();
+
+    // La API puede retornar un array directo o un objeto con propiedad "data"
+    const rawClients = Array.isArray(result) ? result : result.data || [];
+    const clients = rawClients.map((client: Record<string, unknown>) =>
+      mapCORClient(client),
+    );
+
+    if (clients.length === 0) {
+      console.log(
+        `[COR Provider] ⚠️ No se encontró cliente con nombre "${name}"`,
+      );
+      return { clients: [] };
+    }
+
+    console.log(
+      `[COR Provider] ✅ Encontrados ${clients.length} clientes para "${name}"`,
+    );
+
+    return { clients };
+  } catch (error) {
+    console.error(`[COR Provider] ❌ Error en searchClientsByName:`, error);
+    return { clients: [] };
+  }
 }
 
 /**
@@ -363,51 +425,26 @@ export function createCORProvider(): ProjectManagementProvider {
 
     // ==================== SEARCH CLIENT ====================
 
+    async searchClientsByName(name: string): Promise<ClientSearchResult> {
+      return searchCORClientsByName(name);
+    },
+
     async searchClient(name: string): Promise<ExternalClient | null> {
-      console.log(`[COR Provider] 🔍 Buscando cliente: "${name}"`);
+      const { clients } = await searchCORClientsByName(name);
 
-      try {
-        const encodedName = encodeURIComponent(name);
-        const response = await corApiFetch(
-          `/clients/search-by-name/${encodedName}`,
-        );
+      if (clients.length === 0) return null;
 
-        if (!response.ok) {
-          const errorText = await response.text();
-          console.error(
-            `[COR Provider] ❌ Error buscando cliente: ${response.status} - ${errorText}`,
-          );
-          return null;
-        }
+      const normalizedSearch = normalizeClientName(name);
+      const exactClient = clients.find(
+        (client) => normalizeClientName(client.name) === normalizedSearch,
+      );
+      const client = exactClient ?? clients[0];
 
-        const result = await response.json();
+      console.log(
+        `[COR Provider] ✅ Cliente encontrado: ${client.name} (ID: ${client.id})`,
+      );
 
-        // La API puede retornar un array directo o un objeto con propiedad "data"
-        const clients = Array.isArray(result) ? result : result.data || [];
-
-        if (clients.length === 0) {
-          console.log(
-            `[COR Provider] ⚠️ No se encontró cliente con nombre "${name}"`,
-          );
-          return null;
-        }
-
-        // Tomar el primer resultado (más relevante)
-        const client = clients[0];
-        console.log(
-          `[COR Provider] ✅ Cliente encontrado: ${client.name} (ID: ${client.id})`,
-        );
-
-        return {
-          id: client.id,
-          name: client.name,
-          businessName: (client.business_name as string) ?? undefined,
-          email: (client.email_contact as string) ?? undefined,
-        };
-      } catch (error) {
-        console.error(`[COR Provider] ❌ Error en searchClient:`, error);
-        return null;
-      }
+      return client;
     },
 
     // ==================== CREATE PROJECT ====================
