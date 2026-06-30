@@ -64,11 +64,10 @@ export const createExternalTaskTool = createTool({
       .describe(
         "ID local de subBrands cuando validateExternalUserForBrand indicó que la categoría tiene marcas.",
       ),
-    deadline: z
+    launchDate: z
       .string()
-      .optional()
       .describe(
-        "Fecha de lanzamiento validada con now, guardada internamente como deadline. Opcional para usuarios externos; omitir si el cliente no la tiene definida.",
+        "Fecha de lanzamiento exacta o aproximada indicada por el cliente externo. Obligatoria y guardada dentro de description, no como deadline.",
       ),
     deliverables: z.string().describe("Entregables concretos - OBLIGATORIO"),
     deliverablesCount: z
@@ -119,6 +118,10 @@ export const createExternalTaskTool = createTool({
       return "No se puede crear el requerimiento sin especificar los entregables. Pregunta al cliente qué se debe entregar concretamente.";
     }
 
+    if (!args.launchDate.trim()) {
+      return "No se puede crear el requerimiento sin una fecha de lanzamiento exacta o aproximada. Pregunta al cliente por una fecha o referencia aproximada.";
+    }
+
     if (!args.clientBrandId) {
       return `No se puede crear el requerimiento sin una categoría validada. Usa primero "validateExternalUserForBrand".`;
     }
@@ -157,7 +160,7 @@ export const createExternalTaskTool = createTool({
     const description = buildBriefDescription({
       requestType: args.requestType,
       brand: preparation.brandName,
-      deadline: args.deadline,
+      launchDate: args.launchDate,
       deliverables: args.deliverables,
       objective: args.objective,
       keyMessage: args.keyMessage,
@@ -204,7 +207,6 @@ export const createExternalTaskTool = createTool({
       result = await ctx.runMutation(internal.data.tasks.createProjectAndTask, {
         projectName: fullTitle,
         projectBrief: fileUrls.length > 0 ? fileUrls.join(", ") : undefined,
-        projectEndDate: args.deadline,
         projectDeliverables: deliverablesCount,
         projectEstimatedTime: args.estimatedTime,
         projectCorClientId: preparation.corClientId,
@@ -219,7 +221,6 @@ export const createExternalTaskTool = createTool({
         projectSubBrandName: preparation.subBrandName,
         taskTitle: fullTitle,
         taskDescription: description,
-        taskDeadline: args.deadline,
         taskDeliverablesCount: deliverablesCount,
         taskPriority: args.priority ?? 1,
         taskStatus: "nueva",
@@ -257,7 +258,6 @@ export const createExternalTaskTool = createTool({
           objective: args.objective,
           keyMessage: args.keyMessage,
           kpis: args.kpis,
-          deadline: args.deadline,
           budget: args.budget,
           approvers: args.approvers,
         },
