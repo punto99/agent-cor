@@ -2288,142 +2288,20 @@ export const processWebhookEvent: any = internalAction({
 
     try {
       if (event.actionType === "updateCard") {
-        if (Object.prototype.hasOwnProperty.call(oldValues, "name")) {
-          safeUpdates.title = String(card.name ?? "");
-          await ctx.runMutation(internalTrello.recordInboundChange, {
-            eventId: args.eventId,
-            taskId: context.task._id,
-            projectId: context.project._id,
-            trelloCardId: cardId,
-            actionType: event.actionType,
-            field: "title",
-            oldValueJson: jsonValue(oldValues.name),
-            newValueJson: jsonValue(card.name),
-            applied: true,
-            requiresReview: false,
-            note: "Título actualizado desde Trello en Convex. No se publicó en COR.",
-          });
-          appliedCount += 1;
-        }
-
-        if (Object.prototype.hasOwnProperty.call(oldValues, "due")) {
-          if (typeof card.due === "string" && card.due.length > 0) {
-            const businessDeadline = formatDateInBusinessTimeZone(card.due);
-            if (!businessDeadline) {
-              await ctx.runMutation(internalTrello.recordInboundChange, {
-                eventId: args.eventId,
-                taskId: context.task._id,
-                projectId: context.project._id,
-                trelloCardId: cardId,
-                actionType: event.actionType,
-                field: "deadline",
-                oldValueJson: jsonValue(oldValues.due),
-                newValueJson: jsonValue(card.due),
-                applied: false,
-                requiresReview: true,
-                reviewStatus: "pending",
-                note: "Trello envió una fecha inválida; requiere revisión interna.",
-              });
-              reviewCount += 1;
-            } else {
-              safeUpdates.deadline = businessDeadline;
-              await ctx.runMutation(internalTrello.recordInboundChange, {
-                eventId: args.eventId,
-                taskId: context.task._id,
-                projectId: context.project._id,
-                trelloCardId: cardId,
-                actionType: event.actionType,
-                field: "deadline",
-                oldValueJson: jsonValue(oldValues.due),
-                newValueJson: jsonValue({
-                  trelloDue: card.due,
-                  businessDate: businessDeadline,
-                  timeZone: BUSINESS_TIME_ZONE,
-                }),
-                applied: true,
-                requiresReview: false,
-                note: "Deadline actualizado desde Trello como fecha calendario de Ecuador. No se publicó en COR.",
-              });
-              appliedCount += 1;
-            }
-          } else {
-            await ctx.runMutation(internalTrello.recordInboundChange, {
-              eventId: args.eventId,
-              taskId: context.task._id,
-              projectId: context.project._id,
-              trelloCardId: cardId,
-              actionType: event.actionType,
-              field: "deadline",
-              oldValueJson: jsonValue(oldValues.due),
-              newValueJson: jsonValue(card.due),
-              applied: false,
-              requiresReview: true,
-              reviewStatus: "pending",
-              note: "Remover deadline desde Trello requiere revisión interna.",
-            });
-            reviewCount += 1;
-          }
-        }
-
         if (Object.prototype.hasOwnProperty.call(oldValues, "idList")) {
-          const mapping = card.idList
-            ? await ctx.runQuery(internalTrello.getStatusByTrelloListId, {
-                trelloListId: card.idList,
-              })
-            : null;
-
-          if (mapping?.status) {
-            safeUpdates.status = mapping.status;
-            safeUpdates.trelloListId = card.idList;
-            await ctx.runMutation(internalTrello.recordInboundChange, {
-              eventId: args.eventId,
-              taskId: context.task._id,
-              projectId: context.project._id,
-              trelloCardId: cardId,
-              actionType: event.actionType,
-              field: "status",
-              oldValueJson: jsonValue(oldValues.idList),
-              newValueJson: jsonValue(card.idList),
-              applied: true,
-              requiresReview: false,
-              note: "Status actualizado desde lista Trello en Convex. No se publicó en COR.",
-            });
-            appliedCount += 1;
-          } else {
-            await ctx.runMutation(internalTrello.recordInboundChange, {
-              eventId: args.eventId,
-              taskId: context.task._id,
-              projectId: context.project._id,
-              trelloCardId: cardId,
-              actionType: event.actionType,
-              field: "status",
-              oldValueJson: jsonValue(oldValues.idList),
-              newValueJson: jsonValue(card.idList),
-              applied: false,
-              requiresReview: true,
-              reviewStatus: "pending",
-              note: "La lista Trello no tiene mapping local de status.",
-            });
-            reviewCount += 1;
-          }
-        }
-
-        if (Object.prototype.hasOwnProperty.call(oldValues, "desc")) {
-          safeUpdates.description = trelloMarkdownToConvexHtml(String(card.desc ?? ""));
           await ctx.runMutation(internalTrello.recordInboundChange, {
             eventId: args.eventId,
             taskId: context.task._id,
             projectId: context.project._id,
             trelloCardId: cardId,
             actionType: event.actionType,
-            field: "description",
-            oldValueJson: jsonValue(oldValues.desc),
-            newValueJson: jsonValue(card.desc),
-            applied: true,
+            field: "status",
+            oldValueJson: jsonValue(oldValues.idList),
+            newValueJson: jsonValue(card.idList),
+            applied: false,
             requiresReview: false,
-            note: "Descripción completa actualizada desde Trello en Convex como HTML. No se publicó en COR.",
+            note: "Cambio de lista recibido desde Trello. No se actualizó el status en Convex.",
           });
-          appliedCount += 1;
         }
 
         if (Object.prototype.hasOwnProperty.call(oldValues, "closed")) {
@@ -2451,44 +2329,6 @@ export const processWebhookEvent: any = internalAction({
             updates: safeUpdates,
           });
         }
-      } else if (event.actionType === "addAttachmentToCard") {
-        const attachment = data.attachment ?? {};
-        const trelloAttachmentId = attachment.id;
-        if (!trelloAttachmentId) {
-          throw new Error("Evento addAttachmentToCard sin attachment.id.");
-        }
-
-        const result = await ctx.runAction(
-          internalTrello.syncInboundTrelloAttachmentToTask,
-          {
-            taskId: context.task._id,
-            trelloCardId: cardId,
-            trelloAttachmentId,
-            trelloAttachmentUrl: attachment.url,
-            filename: attachment.name,
-          },
-        );
-
-        await ctx.runMutation(internalTrello.recordInboundChange, {
-          eventId: args.eventId,
-          taskId: context.task._id,
-          projectId: context.project._id,
-          trelloCardId: cardId,
-          actionType: event.actionType,
-          field: "attachment_added",
-          oldValueJson: undefined,
-          newValueJson: jsonValue({
-            attachment,
-            localAttachmentId: result?.attachmentId,
-            uploadedToCOR: result?.uploadedToCOR,
-          }),
-          applied: true,
-          requiresReview: false,
-          note: result?.uploadedToCOR
-            ? "Archivo importado desde Trello y subido a COR."
-            : "Archivo importado desde Trello y guardado en Convex.",
-        });
-        appliedCount += 1;
       } else if (event.actionType === "commentCard") {
         const trelloCommentId = action?.id;
         const commentText = typeof data.text === "string" ? data.text.trim() : "";
@@ -2608,15 +2448,9 @@ export const processWebhookEvent: any = internalAction({
                 : "Comentario importado desde Trello; la task aún no está publicada en COR.",
         });
         appliedCount += 1;
-      } else if (
-        event.actionType === "deleteAttachmentFromCard" ||
-        event.actionType === "addLabelToCard" ||
-        event.actionType === "removeLabelFromCard"
-      ) {
+      } else if (event.actionType === "deleteAttachmentFromCard") {
         const fieldMap: Record<string, string> = {
           deleteAttachmentFromCard: "attachment_removed",
-          addLabelToCard: "label_added",
-          removeLabelFromCard: "label_removed",
         };
         await ctx.runMutation(internalTrello.recordInboundChange, {
           eventId: args.eventId,
