@@ -23,9 +23,22 @@ interface EditableInfoItemProps {
   value: string;
   fieldKey: string;
   multiline?: boolean;
-  inputType?: "text" | "number";
+  inputType?: "text" | "number" | "date";
   editable?: boolean;
   onSave?: (fieldKey: string, newValue: string) => Promise<void>;
+}
+
+function toDateInputValue(value: string) {
+  const match = value.match(/^(\d{4})-(\d{2})-(\d{2})(?:$|[ T])/);
+  return match ? `${match[1]}-${match[2]}-${match[3]}` : "";
+}
+
+function getTodayDateInputValue() {
+  const today = new Date();
+  const year = today.getFullYear();
+  const month = String(today.getMonth() + 1).padStart(2, "0");
+  const day = String(today.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
 }
 
 /**
@@ -60,22 +73,29 @@ function EditableInfoItem({
 
   // Sync editValue when external value changes (e.g., after another save)
   useEffect(() => {
-    if (!isEditing) setEditValue(value);
-  }, [value, isEditing]);
+    if (!isEditing) {
+      setEditValue(inputType === "date" ? toDateInputValue(value) : value);
+    }
+  }, [value, isEditing, inputType]);
 
   const handleStartEdit = () => {
-    setEditValue(value);
+    setEditValue(inputType === "date" ? toDateInputValue(value) : value);
     setIsEditing(true);
   };
 
   const handleCancel = () => {
-    setEditValue(value);
+    setEditValue(inputType === "date" ? toDateInputValue(value) : value);
     setIsEditing(false);
   };
 
   const handleSave = async () => {
     if (!onSave) return;
     const trimmed = editValue.trim();
+    if (inputType === "date" && !trimmed) return;
+    if (inputType === "date" && trimmed === toDateInputValue(value)) {
+      setIsEditing(false);
+      return;
+    }
     if (trimmed === value) {
       setIsEditing(false);
       return;
@@ -131,13 +151,21 @@ function EditableInfoItem({
                   value={editValue}
                   onChange={(e) => setEditValue(e.target.value)}
                   onKeyDown={handleKeyDown}
+                  min={
+                    inputType === "date" ? getTodayDateInputValue() : undefined
+                  }
                   className="w-full text-sm text-foreground bg-background border border-primary/40 rounded-md px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-primary/50"
                 />
+              )}
+              {inputType === "date" && (
+                <p className="mt-1 text-xs text-muted-foreground">
+                  Selecciona una fecha desde el calendario.
+                </p>
               )}
               <div className="flex items-center gap-1.5 mt-1.5">
                 <button
                   onClick={handleSave}
-                  disabled={isSaving}
+                  disabled={isSaving || (inputType === "date" && !editValue)}
                   className="flex items-center gap-1 text-xs px-2 py-1 rounded-md bg-primary text-primary-foreground hover:bg-primary/90 transition-colors disabled:opacity-50 cursor-pointer"
                 >
                   <Check className="h-3 w-3" />
@@ -749,6 +777,7 @@ export function TaskBriefContent({
             label="Fecha de Fin"
             value={task.deadline || "No especificado"}
             fieldKey="deadline"
+            inputType="date"
             editable={editable}
             onSave={handleSaveField}
           />

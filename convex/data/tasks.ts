@@ -223,6 +223,51 @@ function isDateBeforeToday(value: string | undefined): boolean {
   return date < new Date().toISOString().slice(0, 10);
 }
 
+function getTodayDateKey() {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/Cancun",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(new Date());
+  const year = parts.find((part) => part.type === "year")?.value;
+  const month = parts.find((part) => part.type === "month")?.value;
+  const day = parts.find((part) => part.type === "day")?.value;
+  return `${year}-${month}-${day}`;
+}
+
+function getPublishDeadlineError(deadline: unknown): string | null {
+  if (typeof deadline !== "string" || !deadline.trim()) {
+    return "No se puede publicar en COR: completa la fecha de fin.";
+  }
+
+  const match = deadline
+    .trim()
+    .match(/^(\d{4})-(\d{2})-(\d{2})(?:$|[ T])/);
+  if (!match) {
+    return "No se puede publicar en COR: la fecha de fin debe ser una fecha valida en formato AAAA-MM-DD.";
+  }
+
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const date = new Date(year, month - 1, day);
+  if (
+    date.getFullYear() !== year ||
+    date.getMonth() !== month - 1 ||
+    date.getDate() !== day
+  ) {
+    return "No se puede publicar en COR: la fecha de fin no es una fecha valida.";
+  }
+
+  const dateKey = `${match[1]}-${match[2]}-${match[3]}`;
+  if (dateKey < getTodayDateKey()) {
+    return "No se puede publicar en COR: la fecha de fin no puede ser una fecha pasada.";
+  }
+
+  return null;
+}
+
 function optionalStringFromExternal(value: unknown): string | undefined {
   return typeof value === "string" && value.trim().length > 0
     ? value
@@ -3326,6 +3371,11 @@ export const startPublishTaskToExternal = mutation({
       );
     }
 
+    const deadlineError = getPublishDeadlineError(task.deadline);
+    if (deadlineError) {
+      throw new Error(deadlineError);
+    }
+
     if (
       args.existingCorProjectId !== undefined &&
       (!Number.isInteger(args.existingCorProjectId) ||
@@ -3429,6 +3479,17 @@ export const publishTaskToExternalAction = internalAction({
           taskId: args.taskId,
           corSyncStatus: "error",
           corSyncError: "Task no encontrada en la base de datos",
+        });
+        return;
+      }
+
+      const deadlineError = getPublishDeadlineError(task.deadline);
+      if (deadlineError) {
+        console.error(`[PublishTask] ❌ ${deadlineError}`);
+        await ctx.runMutation(internal.data.tasks.updatePublishStatus, {
+          taskId: args.taskId,
+          corSyncStatus: "error",
+          corSyncError: deadlineError,
         });
         return;
       }

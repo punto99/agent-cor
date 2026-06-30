@@ -93,6 +93,47 @@ function getFriendlyRetryMessage(toolName: string) {
   return `No pudimos sincronizar con ${toolName}. Estamos reintentando automáticamente.`;
 }
 
+function parseDeadlineDate(value?: string) {
+  const raw = value?.trim();
+  if (!raw) return null;
+  const match = raw.match(/^(\d{4})-(\d{2})-(\d{2})(?:$|[ T])/);
+  if (!match) return null;
+
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const date = new Date(year, month - 1, day);
+
+  if (
+    date.getFullYear() !== year ||
+    date.getMonth() !== month - 1 ||
+    date.getDate() !== day
+  ) {
+    return null;
+  }
+
+  return date;
+}
+
+function getPublishDeadlineError(deadline?: string) {
+  if (!deadline?.trim()) {
+    return "Completa la fecha de fin antes de crear la tarea en COR.";
+  }
+
+  const deadlineDate = parseDeadlineDate(deadline);
+  if (!deadlineDate) {
+    return "La fecha de fin debe ser una fecha valida en formato AAAA-MM-DD.";
+  }
+
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  if (deadlineDate < today) {
+    return "La fecha de fin no puede ser una fecha pasada.";
+  }
+
+  return null;
+}
+
 type TaxonomySubBrandOption = {
   _id: Id<"subBrands">;
   name: string;
@@ -457,6 +498,8 @@ export function TaskDetailDialog({
   const isPublishedInCOR =
     syncStatus === "synced" ||
     Boolean((liveTask as any)?.corTaskId ?? task.corTaskId);
+  const liveTaskDeadline = (liveTask as any)?.deadline ?? task.deadline;
+  const publishDeadlineError = getPublishDeadlineError(liveTaskDeadline);
   const pendingExternalMessages = useQuery(
     api.data.tasks.listPendingExternalTaskMessages,
     !isPublishedInCOR ? { taskId: task._id } : "skip",
@@ -734,6 +777,10 @@ export function TaskDetailDialog({
   const handlePublish = async () => {
     try {
       setPublishError(null);
+      if (publishDeadlineError) {
+        setPublishError(publishDeadlineError);
+        return;
+      }
       if (publishProjectMode === "existing" && !selectedExistingProjectId) {
         setPublishError("Selecciona un proyecto existente para publicar.");
         return;
@@ -1350,6 +1397,13 @@ export function TaskDetailDialog({
               </div>
             )}
 
+            {!isPublishedInCOR && !liveCorTaskId && publishDeadlineError && (
+              <div className="mb-3 flex items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800 dark:border-amber-900/50 dark:bg-amber-900/20 dark:text-amber-300">
+                <AlertCircle className="h-4 w-4 flex-shrink-0" />
+                <span>{publishDeadlineError}</span>
+              </div>
+            )}
+
             {/* COR Client info */}
             {task.corClientName && (
               <p className="text-xs text-muted-foreground mb-3">
@@ -1566,7 +1620,12 @@ export function TaskDetailDialog({
                 !liveCorTaskId && (
                   <button
                     onClick={handlePublish}
-                    disabled={isPublishing || syncStatus === "syncing"}
+                    disabled={
+                      isPublishing ||
+                      syncStatus === "syncing" ||
+                      Boolean(publishDeadlineError)
+                    }
+                    title={publishDeadlineError || undefined}
                     className="flex items-center gap-2 px-4 py-2 bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed text-sm font-medium cursor-pointer"
                   >
                     {isPublishing || syncStatus === "syncing" ? (
