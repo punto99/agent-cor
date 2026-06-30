@@ -14,6 +14,7 @@ import {
 import { listMessages } from "@convex-dev/agent";
 import { internal, components } from "../_generated/api";
 import { getProjectManagementProvider } from "../integrations/registry";
+import type { ProjectManagementProvider } from "../integrations/types";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import {
   hashText,
@@ -28,6 +29,8 @@ import {
   MAX_RETRY_ATTEMPTS,
 } from "../lib/corRetry";
 import { applyProjectDeliverablesDelta } from "../lib/deliverableAnalytics";
+import { formatTrelloCommentForCOR } from "../lib/trelloCommentFormat";
+import { isTrelloEnabledForCorClientId } from "../lib/trelloPolicy";
 import type { ActionCtx } from "../_generated/server";
 import type { Id } from "../_generated/dataModel";
 
@@ -37,6 +40,9 @@ const STRATEGIC_PRIORITY_LABEL_IDS: Record<StrategicPriority, number> = {
   NI_NU: 370188,
   NI_U: 370187,
 };
+const PENDING_COR_MESSAGE_STATUSES = new Set(["pending_cor_task", "pending"]);
+const EXTERNAL_COMMENT_SOURCES = new Set(["trello", "external_agent"]);
+const MARKDOWN_LINK_PATTERN = /\[[^\]]+\]\(https?:\/\/[^\s)]+(?:\s+"[^"]*")?\)/;
 
 const MIN_PUBLISHABLE_DESCRIPTION_LENGTH = 40;
 const DESCRIPTION_MIN_REMAINING_RATIO = 0.35;
@@ -210,6 +216,70 @@ function validatePublishableDescription(description: unknown): string | null {
   return null;
 }
 
+function isDateBeforeToday(value: string | undefined): boolean {
+  if (!value) return false;
+  const date = value.slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return false;
+  return date < new Date().toISOString().slice(0, 10);
+}
+
+function getTodayDateKey() {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/Cancun",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(new Date());
+  const year = parts.find((part) => part.type === "year")?.value;
+  const month = parts.find((part) => part.type === "month")?.value;
+  const day = parts.find((part) => part.type === "day")?.value;
+  return `${year}-${month}-${day}`;
+}
+
+function getPublishDeadlineError(deadline: unknown): string | null {
+  if (typeof deadline !== "string" || !deadline.trim()) {
+    return "No se puede publicar en COR: completa la fecha de fin.";
+  }
+
+  const match = deadline
+    .trim()
+    .match(/^(\d{4})-(\d{2})-(\d{2})(?:$|[ T])/);
+  if (!match) {
+    return "No se puede publicar en COR: la fecha de fin debe ser una fecha valida en formato AAAA-MM-DD.";
+  }
+
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const date = new Date(year, month - 1, day);
+  if (
+    date.getFullYear() !== year ||
+    date.getMonth() !== month - 1 ||
+    date.getDate() !== day
+  ) {
+    return "No se puede publicar en COR: la fecha de fin no es una fecha valida.";
+  }
+
+  const dateKey = `${match[1]}-${match[2]}-${match[3]}`;
+  if (dateKey < getTodayDateKey()) {
+    return "No se puede publicar en COR: la fecha de fin no puede ser una fecha pasada.";
+  }
+
+  return null;
+}
+
+function optionalStringFromExternal(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim().length > 0
+    ? value
+    : undefined;
+}
+
+function optionalNumberFromExternal(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value)
+    ? value
+    : undefined;
+}
+
 async function syncStrategicPriorityLabelInCOR(
   taskId: number,
   strategicPriority: StrategicPriority,
@@ -252,6 +322,7 @@ export const createTaskInternal = internalMutation({
     title: v.string(),
     description: v.optional(v.string()),
     deadline: v.optional(v.string()),
+    deliverablesCount: v.optional(v.number()),
     priority: v.optional(v.number()), // 0=Low, 1=Medium, 2=High, 3=Urgent
     threadId: v.string(),
     status: v.string(),
@@ -292,6 +363,7 @@ export const createTaskInternal = internalMutation({
       title: args.title,
       description: args.description,
       deadline: args.deadline,
+      deliverablesCount: args.deliverablesCount,
       priority: args.priority ?? 1,
       threadId: args.threadId,
       status: args.status,
@@ -448,7 +520,6 @@ export const getTaskCORSyncSnapshotInternal = internalQuery({
       status: task.status,
       corTaskId: task.corTaskId,
       corSyncStatus: task.corSyncStatus,
-      lastLocalEditAt: task.lastLocalEditAt,
     };
   },
 });
@@ -483,6 +554,284 @@ export const getUserIdFromThread = internalQuery({
   },
 });
 
+export const getExternalEditableTaskContext = internalQuery({
+  args: {
+    threadId: v.string(),
+    taskId: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const chatThread = await ctx.db
+      .query("chatThreads")
+      .withIndex("by_thread", (q) => q.eq("threadId", args.threadId))
+      .first();
+
+    if (!chatThread) {
+      return { ok: false, error: "No se pudo identificar la conversación." };
+    }
+
+    const approvedExternalUser = await ctx.db
+      .query("approvedExternalUsers")
+      .withIndex("by_user", (q) => q.eq("userId", chatThread.userId))
+      .unique();
+
+    if (!approvedExternalUser) {
+      return {
+        ok: false,
+        error: "Esta acción solo está disponible para usuarios externos aprobados.",
+      };
+    }
+
+    let task = null;
+    if (args.taskId) {
+      const normalizedTaskId = ctx.db.normalizeId("tasks", args.taskId);
+      if (!normalizedTaskId) {
+        return { ok: false, error: "No se encontró ese requerimiento." };
+      }
+      task = await ctx.db.get(normalizedTaskId);
+    } else {
+      task = await ctx.db
+        .query("tasks")
+        .withIndex("by_thread", (q) => q.eq("threadId", args.threadId))
+        .first();
+    }
+
+    if (!task || task.convexStatus === "deleted") {
+      return { ok: false, error: "No se encontró ese requerimiento." };
+    }
+
+    if (task.source !== "external") {
+      return {
+        ok: false,
+        error: "Este requerimiento no pertenece al flujo de clientes externos.",
+      };
+    }
+
+    if (String(task.createdBy || "") !== String(chatThread.userId)) {
+      return {
+        ok: false,
+        error: "Solo puedes editar requerimientos creados por tu usuario.",
+      };
+    }
+
+    if (task.clientId && task.clientBrandId) {
+      const assignments = await ctx.db
+        .query("clientUserAssignments")
+        .withIndex("by_client_and_user", (q) =>
+          q.eq("clientId", task.clientId!).eq("userId", chatThread.userId),
+        )
+        .collect();
+
+      const hasAccess = assignments.some(
+        (assignment) =>
+          !assignment.brandId ||
+          String(assignment.brandId) === String(task.clientBrandId),
+      );
+
+      if (!hasAccess) {
+        return {
+          ok: false,
+          error:
+            "Ya no tienes autorización para editar requerimientos de esta categoría.",
+        };
+      }
+    }
+
+    const clientBrand = task.clientBrandId
+      ? await ctx.db.get(task.clientBrandId)
+      : null;
+
+    return {
+      ok: true,
+      task,
+      userId: chatThread.userId,
+      approvedExternalUserId: approvedExternalUser._id,
+      trelloBoardId: clientBrand?.trelloBoardId,
+      trelloBoardUrl: clientBrand?.trelloBoardUrl,
+    };
+  },
+});
+
+export const applyExternalTaskEditInternal = internalMutation({
+  args: {
+    taskId: v.id("tasks"),
+    updates: v.object({
+      description: v.optional(v.string()),
+      deadline: v.optional(v.string()),
+    }),
+  },
+  handler: async (ctx, args) => {
+    const task = await ctx.db.get(args.taskId);
+    if (!task || task.convexStatus === "deleted") {
+      throw new Error("Task no encontrada.");
+    }
+
+    const updateData: Record<string, unknown> = {};
+    if (args.updates.description !== undefined) {
+      const descriptionError = validateDescriptionUpdate(
+        task.description,
+        args.updates.description,
+      );
+      if (descriptionError) throw new Error(descriptionError);
+      updateData.description = args.updates.description;
+    }
+    if (args.updates.deadline !== undefined) {
+      updateData.deadline = args.updates.deadline;
+    }
+
+    if (Object.keys(updateData).length === 0) return;
+    updateData.lastLocalEditAt = Date.now();
+
+    await ctx.db.patch(args.taskId, updateData);
+  },
+});
+
+export const createTaskMessageInternal = internalMutation({
+  args: {
+    taskId: v.id("tasks"),
+    userId: v.optional(v.id("users")),
+    source: v.union(
+      v.literal("external_agent"),
+      v.literal("trello"),
+      v.literal("cor"),
+      v.literal("internal"),
+    ),
+    message: v.string(),
+    trelloCardId: v.optional(v.string()),
+    trelloCommentId: v.optional(v.string()),
+    trelloSyncStatus: v.optional(v.string()),
+    corTaskId: v.optional(v.number()),
+    corMessageSyncStatus: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const now = Date.now();
+    return await ctx.db.insert("taskMessages", {
+      ...args,
+      trelloSyncedAt:
+        args.trelloSyncStatus === "synced" ? now : undefined,
+      corSyncedAt:
+        args.corMessageSyncStatus === "synced" ? now : undefined,
+      createdAt: now,
+      updatedAt: now,
+    });
+  },
+});
+
+export const getTaskMessageByTrelloCommentId = internalQuery({
+  args: {
+    trelloCommentId: v.string(),
+  },
+  handler: async (ctx, args) => {
+    return await ctx.db
+      .query("taskMessages")
+      .withIndex("by_trello_comment", (q) =>
+        q.eq("trelloCommentId", args.trelloCommentId),
+      )
+      .first();
+  },
+});
+
+export const updateTaskMessageSyncStatusInternal = internalMutation({
+  args: {
+    taskMessageId: v.id("taskMessages"),
+    trelloSyncStatus: v.optional(v.string()),
+    trelloSyncError: v.optional(v.string()),
+    trelloCommentId: v.optional(v.string()),
+    corTaskId: v.optional(v.number()),
+    corMessageSyncStatus: v.optional(v.string()),
+    corMessageSyncError: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const patch: Record<string, unknown> = {
+      updatedAt: Date.now(),
+    };
+    if (args.trelloSyncStatus !== undefined) {
+      patch.trelloSyncStatus = args.trelloSyncStatus;
+      patch.trelloSyncedAt =
+        args.trelloSyncStatus === "synced" ? Date.now() : undefined;
+    }
+    if (args.trelloSyncError !== undefined) {
+      patch.trelloSyncError = args.trelloSyncError;
+    }
+    if (args.trelloCommentId !== undefined) {
+      patch.trelloCommentId = args.trelloCommentId;
+    }
+    if (args.corTaskId !== undefined) {
+      patch.corTaskId = args.corTaskId;
+    }
+    if (args.corMessageSyncStatus !== undefined) {
+      patch.corMessageSyncStatus = args.corMessageSyncStatus;
+      patch.corSyncedAt =
+        args.corMessageSyncStatus === "synced" ? Date.now() : undefined;
+      if (args.corMessageSyncStatus === "synced") {
+        patch.corMessageSyncError = undefined;
+      }
+    }
+    if (args.corMessageSyncError !== undefined) {
+      patch.corMessageSyncError = args.corMessageSyncError;
+    }
+
+    await ctx.db.patch(args.taskMessageId, patch);
+  },
+});
+
+export const listPendingTaskMessagesForCORInternal = internalQuery({
+  args: {
+    taskId: v.id("tasks"),
+  },
+  handler: async (ctx, args) => {
+    const messages = await ctx.db
+      .query("taskMessages")
+      .withIndex("by_task", (q) => q.eq("taskId", args.taskId))
+      .collect();
+
+    return messages
+      .filter(
+        (message) =>
+          EXTERNAL_COMMENT_SOURCES.has(message.source) &&
+          PENDING_COR_MESSAGE_STATUSES.has(message.corMessageSyncStatus || ""),
+      )
+      .sort((a, b) => a.createdAt - b.createdAt);
+  },
+});
+
+export const listPendingExternalTaskMessages = query({
+  args: {
+    taskId: v.id("tasks"),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) throw new Error("No autenticado");
+    if (await isExternalUser(ctx, userId)) return [];
+
+    const task = await ctx.db.get(args.taskId);
+    if (!task || task.convexStatus === "deleted") return [];
+    if (!(await hasTaskAccess(ctx, task, userId))) return [];
+    if (task.corTaskId || task.corSyncStatus === "synced") return [];
+
+    const messages = await ctx.db
+      .query("taskMessages")
+      .withIndex("by_task", (q) => q.eq("taskId", args.taskId))
+      .collect();
+
+    return messages
+      .filter(
+        (message) =>
+          EXTERNAL_COMMENT_SOURCES.has(message.source) &&
+          PENDING_COR_MESSAGE_STATUSES.has(message.corMessageSyncStatus || ""),
+      )
+      .sort((a, b) => a.createdAt - b.createdAt)
+      .map((message) => ({
+        _id: message._id,
+        source: message.source,
+        message: message.message,
+        trelloCommentId: message.trelloCommentId,
+        trelloCardId: message.trelloCardId,
+        corMessageSyncStatus: message.corMessageSyncStatus,
+        createdAt: message.createdAt,
+      }));
+  },
+});
+
 // Mutation pública para actualizar campos de una task desde el frontend (Panel de Control)
 // Si la task está publicada en COR (synced), dispara sincronización automática.
 export const updateTaskFields = mutation({
@@ -492,6 +841,7 @@ export const updateTaskFields = mutation({
       title: v.optional(v.string()),
       description: v.optional(v.string()),
       deadline: v.optional(v.string()),
+      deliverablesCount: v.optional(v.number()),
       priority: v.optional(v.number()), // 0=Low, 1=Medium, 2=High, 3=Urgent
       status: v.optional(v.string()), // nueva, en_proceso, estancada, finalizada
       strategicPriority: v.optional(
@@ -546,6 +896,15 @@ export const updateTaskFields = mutation({
 
     if (Object.keys(updateData).length === 0) return args.taskId;
 
+    if (
+      updateData.deliverablesCount !== undefined &&
+      (task.corSyncStatus === "synced" || task.corTaskId)
+    ) {
+      throw new Error(
+        "La cantidad de entregables solo se puede editar antes de publicar la tarea en COR.",
+      );
+    }
+
     const updateKeys = Object.keys(updateData);
     if (updateKeys.includes("description")) {
       const descriptionError = validateDescriptionUpdate(
@@ -568,10 +927,19 @@ export const updateTaskFields = mutation({
     const changedFields = Object.keys(args.updates).filter(
       (k) => (args.updates as any)[k] !== undefined,
     );
-    await ctx.scheduler.runAfter(0, internal.data.tasks.scheduleTaskSyncToCOR, {
-      taskId: args.taskId,
-      changedFields,
-    });
+    const syncableChangedFields = changedFields.filter((field) =>
+      COR_SYNCABLE_FIELDS.has(field),
+    );
+    if (syncableChangedFields.length > 0) {
+      await ctx.scheduler.runAfter(
+        0,
+        internal.data.tasks.scheduleTaskSyncToCOR,
+        {
+          taskId: args.taskId,
+          changedFields: syncableChangedFields,
+        },
+      );
+    }
 
     return args.taskId;
   },
@@ -673,6 +1041,8 @@ export const createTaskAttachment = internalMutation({
     filename: v.string(),
     mimeType: v.string(),
     size: v.optional(v.number()),
+    trelloAttachmentId: v.optional(v.string()),
+    trelloAttachmentUrl: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     return await ctx.db.insert("taskAttachments", {
@@ -682,6 +1052,10 @@ export const createTaskAttachment = internalMutation({
       filename: args.filename,
       mimeType: args.mimeType,
       size: args.size,
+      trelloAttachmentId: args.trelloAttachmentId,
+      trelloAttachmentUrl: args.trelloAttachmentUrl,
+      trelloSyncStatus: args.trelloAttachmentId ? "synced" : undefined,
+      trelloSyncedAt: args.trelloAttachmentId ? Date.now() : undefined,
       createdAt: Date.now(),
     });
   },
@@ -784,6 +1158,21 @@ export const getTaskAttachments = internalQuery({
       .query("taskAttachments")
       .withIndex("by_task", (q) => q.eq("taskId", args.taskId))
       .collect();
+  },
+});
+
+export const getTaskAttachmentByTrelloId = internalQuery({
+  args: {
+    taskId: v.id("tasks"),
+    trelloAttachmentId: v.string(),
+  },
+  handler: async (ctx, args) => {
+    return await ctx.db
+      .query("taskAttachments")
+      .withIndex("by_task_and_trello", (q) =>
+        q.eq("taskId", args.taskId).eq("trelloAttachmentId", args.trelloAttachmentId),
+      )
+      .first();
   },
 });
 
@@ -1029,7 +1418,9 @@ export const validateAndPrepareTask = internalQuery({
 export const validateAndPrepareExternalTask = internalQuery({
   args: {
     threadId: v.string(),
-    clientBrandId: v.id("clientBrands"),
+    clientBrandId: v.optional(v.id("clientBrands")),
+    localClientId: v.optional(v.id("corClients")),
+    corClientId: v.optional(v.number()),
     subBrandId: v.optional(v.id("subBrands")),
   },
   handler: async (ctx, args) => {
@@ -1071,46 +1462,111 @@ export const validateAndPrepareExternalTask = internalQuery({
       };
     }
 
-    const brand = await ctx.db.get(args.clientBrandId);
-    if (!brand) {
+    let brand = args.clientBrandId ? await ctx.db.get(args.clientBrandId) : null;
+    if (args.clientBrandId && !brand) {
       return {
         ok: false as const,
         error: "❌ La categoría seleccionada no existe.",
       };
     }
-    if (!brand.clientId) {
-      return {
-        ok: false as const,
-        error:
-          "❌ La categoría no está vinculada a un cliente local. Contacta al administrador.",
-      };
+
+    let client = null as any;
+    if (brand) {
+      if (!brand.clientId) {
+        return {
+          ok: false as const,
+          error:
+            "❌ La categoría no está vinculada a un cliente local. Contacta al administrador.",
+        };
+      }
+      client = await ctx.db.get(brand.clientId);
+    } else if (args.localClientId) {
+      client = await ctx.db.get(args.localClientId);
+    } else if (args.corClientId !== undefined) {
+      client = await ctx.db
+        .query("corClients")
+        .withIndex("by_corClientId", (q) =>
+          q.eq("corClientId", args.corClientId!),
+        )
+        .unique();
     }
 
-    const client = await ctx.db.get(brand.clientId);
     if (!client) {
       return {
         ok: false as const,
-        error: "❌ El cliente asociado a esta categoría no existe localmente.",
+        error: "❌ El cliente seleccionado no existe localmente.",
       };
     }
 
     const assignments = await ctx.db
       .query("clientUserAssignments")
       .withIndex("by_client_and_user", (q) =>
-        q.eq("clientId", brand.clientId!).eq("userId", userId),
+        q.eq("clientId", client._id).eq("userId", userId),
       )
       .collect();
 
-    const hasAccess = assignments.some(
-      (assignment) =>
-        assignment.brandId === undefined ||
-        assignment.brandId === args.clientBrandId,
-    );
+    const hasAccess = brand
+      ? assignments.some(
+          (assignment) =>
+            assignment.brandId === undefined ||
+            assignment.brandId === args.clientBrandId,
+        )
+      : assignments.some((assignment) => assignment.brandId === undefined);
 
     if (!hasAccess) {
       return {
         ok: false as const,
-        error: `❌ No tienes autorización para crear briefs para la categoría "${brand.name}".`,
+        error: brand
+          ? `❌ No tienes autorización para crear briefs para la categoría "${brand.name}".`
+          : `❌ No tienes autorización para crear briefs para este cliente.`,
+      };
+    }
+
+    if (!brand) {
+      const clientBrands = await ctx.db
+        .query("clientBrands")
+        .withIndex("by_client", (q) => q.eq("clientId", client._id))
+        .collect();
+
+      if (clientBrands.length > 0) {
+        return {
+          ok: false as const,
+          error: "❌ Este cliente requiere seleccionar una categoría antes de crear el requerimiento.",
+          availableCategories: clientBrands.map((candidate) => ({
+            clientBrandId: String(candidate._id),
+            name: candidate.name,
+          })),
+        };
+      }
+
+      if (args.subBrandId) {
+        return {
+          ok: false as const,
+          error:
+            "❌ Este cliente no tiene marcas configuradas. No envíes una marca adicional para este requerimiento.",
+        };
+      }
+
+      const existingProject = await ctx.db
+        .query("projects")
+        .withIndex("by_threadId", (q) => q.eq("threadId", args.threadId))
+        .unique();
+
+      return {
+        ok: true as const,
+        userId: String(userId),
+        localClientId: client._id,
+        corClientId: client.corClientId,
+        corClientName: client.name,
+        clientBrandId: undefined,
+        corBrandId: undefined,
+        brandName: undefined,
+        trelloBoardId: undefined,
+        trelloBoardUrl: undefined,
+        subBrandId: undefined,
+        corProductId: undefined,
+        subBrandName: undefined,
+        existingProjectId: existingProject?._id || undefined,
       };
     }
 
@@ -1168,6 +1624,8 @@ export const validateAndPrepareExternalTask = internalQuery({
       clientBrandId: brand._id,
       corBrandId: brand.corBrandId,
       brandName: brand.name,
+      trelloBoardId: brand.trelloBoardId,
+      trelloBoardUrl: brand.trelloBoardUrl,
       subBrandId: subBrand?._id,
       corProductId: subBrand?.corProductId,
       subBrandName: subBrand?.name,
@@ -1205,6 +1663,7 @@ export const createProjectAndTask = internalMutation({
     taskTitle: v.string(),
     taskDescription: v.optional(v.string()),
     taskDeadline: v.optional(v.string()),
+    taskDeliverablesCount: v.optional(v.number()),
     taskPriority: v.optional(v.number()),
     taskStatus: v.string(),
     taskCreatedBy: v.optional(v.string()),
@@ -1228,7 +1687,13 @@ export const createProjectAndTask = internalMutation({
   handler: async (ctx, args) => {
     const isExternalCreation =
       args.taskSource === "external" || args.projectSource === "external";
-    if (isExternalCreation && !args.externalTrelloAccessVerified) {
+    const trelloRequired =
+      isExternalCreation &&
+      Boolean(args.taskClientBrandId ?? args.projectClientBrandId) &&
+      isTrelloEnabledForCorClientId(
+        args.taskCorClientId ?? args.projectCorClientId,
+      );
+    if (trelloRequired && !args.externalTrelloAccessVerified) {
       throw new Error(
         "❌ No se verificó el acceso del usuario externo al tablero de Trello.",
       );
@@ -1306,6 +1771,7 @@ export const createProjectAndTask = internalMutation({
       title: args.taskTitle,
       description: args.taskDescription,
       deadline: args.taskDeadline,
+      deliverablesCount: args.taskDeliverablesCount,
       priority: args.taskPriority ?? 1,
       threadId: args.threadId,
       status: args.taskStatus,
@@ -1451,6 +1917,87 @@ export const backfillTaskClientId = internalMutation({
       title: task.title,
       clientId,
       reason,
+    };
+  },
+});
+
+export const listTasksForDeliverablesCountBackfill = internalQuery({
+  args: {
+    limit: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const limit = args.limit ?? 500;
+    const tasks = await ctx.db.query("tasks").collect();
+
+    return tasks
+      .filter((task) => task.convexStatus !== "deleted")
+      .filter((task) => task.deliverablesCount === undefined)
+      .slice(0, limit)
+      .map((task) => ({
+        _id: task._id,
+        title: task.title,
+        projectId: task.projectId,
+      }));
+  },
+});
+
+export const backfillTaskDeliverablesCount = internalMutation({
+  args: {
+    taskId: v.id("tasks"),
+    dryRun: v.optional(v.boolean()),
+  },
+  handler: async (ctx, args) => {
+    const task = await ctx.db.get(args.taskId);
+    if (!task) return { status: "missing" as const };
+
+    if (typeof task.deliverablesCount === "number") {
+      return {
+        status: "already_set" as const,
+        taskId: task._id,
+        title: task.title,
+        deliverablesCount: task.deliverablesCount,
+      };
+    }
+
+    if (!task.projectId) {
+      return {
+        status: "unresolved" as const,
+        reason: "missing_project",
+        taskId: task._id,
+        title: task.title,
+      };
+    }
+
+    const project = await ctx.db.get(task.projectId as Id<"projects">);
+    const deliverablesCount =
+      project &&
+      project.convexStatus !== "deleted" &&
+      typeof project.deliverables === "number" &&
+      Number.isFinite(project.deliverables) &&
+      project.deliverables > 0
+        ? Math.trunc(project.deliverables)
+        : null;
+
+    if (!deliverablesCount) {
+      return {
+        status: "unresolved" as const,
+        reason: "missing_project_deliverables",
+        taskId: task._id,
+        title: task.title,
+        projectId: task.projectId,
+      };
+    }
+
+    if (!args.dryRun) {
+      await ctx.db.patch(task._id, { deliverablesCount });
+    }
+
+    return {
+      status: args.dryRun ? ("would_update" as const) : ("updated" as const),
+      taskId: task._id,
+      title: task.title,
+      projectId: task.projectId,
+      deliverablesCount,
     };
   },
 });
@@ -1876,6 +2423,106 @@ export const softDeleteTask = mutation({
   },
 });
 
+/**
+ * Soft delete seguro para borradores internos que aún no fueron publicados
+ * ni en COR ni en Trello. Si el proyecto propuesto ya no tiene otras tasks
+ * activas, también marca el proyecto como deleted.
+ */
+export const softDeleteUnpublishedDraftTask = mutation({
+  args: {
+    taskId: v.id("tasks"),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) throw new Error("No autenticado");
+    if (await isExternalUser(ctx, userId)) {
+      throw new Error("Los usuarios externos no pueden eliminar tareas desde el panel.");
+    }
+
+    const task = await ctx.db.get(args.taskId);
+    if (!task) throw new Error("Task no encontrada.");
+    if (task.convexStatus === "deleted") {
+      return {
+        success: true,
+        deletedProject: false,
+        message: "La tarea ya estaba eliminada.",
+      };
+    }
+
+    if (!(await hasTaskAccess(ctx, task, userId))) {
+      throw new Error("No tienes permisos para eliminar esta tarea.");
+    }
+
+    const isPublishedInCOR =
+      task.corSyncStatus === "synced" || Boolean(task.corTaskId);
+    if (isPublishedInCOR) {
+      throw new Error("No se puede eliminar una tarea que ya fue publicada en COR.");
+    }
+
+    const isPublishedInTrello =
+      task.trelloSyncStatus === "synced" ||
+      Boolean(task.trelloCardId || task.trelloCardUrl);
+    if (isPublishedInTrello) {
+      throw new Error("No se puede eliminar una tarea que ya fue publicada en Trello.");
+    }
+
+    if (task.source === "external") {
+      throw new Error("No se puede eliminar desde aquí una tarea creada por un cliente externo.");
+    }
+
+    await ctx.db.patch(args.taskId, {
+      convexStatus: "deleted",
+    });
+
+    let deletedProject = false;
+    if (task.projectId) {
+      const project = await ctx.db.get(task.projectId);
+      if (project && project.convexStatus !== "deleted") {
+        const isProjectPublishedExternally =
+          project.corSyncStatus === "synced" ||
+          Boolean(project.corProjectId) ||
+          project.trelloSyncStatus === "synced" ||
+          Boolean(project.trelloCardId || project.trelloCardUrl);
+        const activeProjectTasks = [
+          ...(await ctx.db
+            .query("tasks")
+            .withIndex("by_projectId_convexStatus", (q) =>
+              q.eq("projectId", task.projectId).eq("convexStatus", "active"),
+            )
+            .collect()),
+          ...(await ctx.db
+            .query("tasks")
+            .withIndex("by_projectId_convexStatus", (q) =>
+              q.eq("projectId", task.projectId).eq("convexStatus", undefined),
+            )
+            .collect()),
+        ];
+
+        const hasOtherActiveTasks = activeProjectTasks.some(
+          (projectTask) => projectTask._id !== args.taskId,
+        );
+
+        if (!hasOtherActiveTasks && !isProjectPublishedExternally) {
+          await ctx.db.patch(project._id, {
+            convexStatus: "deleted",
+          });
+          const deletedProjectDoc = await ctx.db.get(project._id);
+          await applyProjectDeliverablesDelta(ctx, project, deletedProjectDoc);
+          deletedProject = true;
+        }
+      }
+    }
+
+    return {
+      success: true,
+      deletedProject,
+      message: deletedProject
+        ? "Tarea y proyecto propuesto eliminados del panel."
+        : "Tarea eliminada del panel.",
+    };
+  },
+});
+
 // ==================== SYNC: CONVEX → COR (mapeo 1:1) ====================
 
 /**
@@ -1942,6 +2589,215 @@ async function hasTaskAccess(ctx: any, task: any, userId: any) {
 
   return task.createdBy === String(userId);
 }
+
+async function hasBrandAccess(ctx: any, clientBrandId: any, userId: any) {
+  const brand = await ctx.db.get(clientBrandId);
+  if (!brand?.clientId) return false;
+
+  const assignments = await ctx.db
+    .query("clientUserAssignments")
+    .withIndex("by_client_and_user", (q: any) =>
+      q.eq("clientId", brand.clientId).eq("userId", userId),
+    )
+    .collect();
+
+  return assignments.some(
+    (assignment: any) =>
+      assignment.brandId === undefined || assignment.brandId === clientBrandId,
+  );
+}
+
+export const listTaskTaxonomyOptions = query({
+  args: {
+    taskId: v.id("tasks"),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) throw new Error("No autenticado");
+    if (await isExternalUser(ctx, userId)) return null;
+
+    const task = await ctx.db.get(args.taskId);
+    if (!task || task.convexStatus === "deleted") return null;
+    if (!(await hasTaskAccess(ctx, task, userId))) return null;
+
+    let clientId = task.clientId;
+    if (!clientId && task.corClientId) {
+      const client = await ctx.db
+        .query("corClients")
+        .withIndex("by_corClientId", (q) =>
+          q.eq("corClientId", task.corClientId!),
+        )
+        .unique();
+      clientId = client?._id;
+    }
+
+    if (!clientId) return null;
+
+    const client = await ctx.db.get(clientId);
+    if (!client) return null;
+
+    const assignments = await ctx.db
+      .query("clientUserAssignments")
+      .withIndex("by_client_and_user", (q) =>
+        q.eq("clientId", clientId).eq("userId", userId),
+      )
+      .collect();
+    const hasFullAccess = assignments.some(
+      (assignment) => assignment.brandId === undefined,
+    );
+    const assignedBrandIds = new Set(
+      assignments
+        .map((assignment) => assignment.brandId)
+        .filter(Boolean)
+        .map(String),
+    );
+
+    const brands = await ctx.db
+      .query("clientBrands")
+      .withIndex("by_client", (q) => q.eq("clientId", clientId))
+      .collect();
+
+    const visibleBrands = brands.filter(
+      (brand) => hasFullAccess || assignedBrandIds.has(String(brand._id)),
+    );
+
+    const brandsWithSubBrands = [];
+    for (const brand of visibleBrands) {
+      const subBrands = await ctx.db
+        .query("subBrands")
+        .withIndex("by_brand", (q) => q.eq("clientBrandId", brand._id))
+        .collect();
+      brandsWithSubBrands.push({
+        _id: brand._id,
+        name: brand.name,
+        corBrandId: brand.corBrandId,
+        subBrands: subBrands
+          .sort((a, b) => a.name.localeCompare(b.name))
+          .map((subBrand) => ({
+            _id: subBrand._id,
+            name: subBrand.name,
+            corProductId: subBrand.corProductId,
+          })),
+      });
+    }
+
+    return {
+      client: {
+        _id: client._id,
+        name: client.name,
+        corClientId: client.corClientId,
+      },
+      brands: brandsWithSubBrands.sort((a, b) =>
+        a.name.localeCompare(b.name),
+      ),
+    };
+  },
+});
+
+export const updateTaskTaxonomy = mutation({
+  args: {
+    taskId: v.id("tasks"),
+    clientBrandId: v.id("clientBrands"),
+    subBrandId: v.optional(v.id("subBrands")),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) throw new Error("No autenticado");
+    if (await isExternalUser(ctx, userId)) {
+      throw new Error("Los usuarios externos no pueden cambiar esta asignación.");
+    }
+
+    const task = await ctx.db.get(args.taskId);
+    if (!task || task.convexStatus === "deleted") {
+      throw new Error("Task no encontrada.");
+    }
+    if (task.corTaskId || task.corSyncStatus === "synced") {
+      throw new Error("No se puede cambiar la marca de una task publicada en COR.");
+    }
+    if (task.corSyncStatus === "syncing" || task.corSyncStatus === "retrying") {
+      throw new Error(
+        "La task se está sincronizando. Espera a que termine antes de cambiar la marca.",
+      );
+    }
+    if (!(await hasTaskAccess(ctx, task, userId))) {
+      throw new Error("No tienes permisos para editar esta task.");
+    }
+
+    const brand = await ctx.db.get(args.clientBrandId);
+    if (!brand?.clientId) throw new Error("Marca no encontrada.");
+
+    let taskClientId = task.clientId;
+    if (!taskClientId && task.corClientId) {
+      const client = await ctx.db
+        .query("corClients")
+        .withIndex("by_corClientId", (q) =>
+          q.eq("corClientId", task.corClientId!),
+        )
+        .unique();
+      taskClientId = client?._id;
+    }
+
+    if (!taskClientId || brand.clientId !== taskClientId) {
+      throw new Error("La marca seleccionada no pertenece al cliente de la task.");
+    }
+
+    if (!(await hasBrandAccess(ctx, args.clientBrandId, userId))) {
+      throw new Error("No tienes permisos para usar esta marca.");
+    }
+
+    const subBrands = await ctx.db
+      .query("subBrands")
+      .withIndex("by_brand", (q) => q.eq("clientBrandId", brand._id))
+      .collect();
+
+    let subBrand = null as any;
+    if (subBrands.length > 0) {
+      if (!args.subBrandId) {
+        throw new Error("Esta marca requiere seleccionar un producto.");
+      }
+      subBrand = await ctx.db.get(args.subBrandId);
+      if (!subBrand || subBrand.clientBrandId !== brand._id) {
+        throw new Error("El producto seleccionado no pertenece a esta marca.");
+      }
+    } else if (args.subBrandId) {
+      throw new Error("Esta marca no tiene productos configurados.");
+    }
+
+    const taxonomyPatch = {
+      clientId: taskClientId,
+      clientBrandId: brand._id,
+      brandId: brand.corBrandId,
+      brandName: brand.name,
+      subBrandId: subBrand?._id,
+      productId: subBrand?.corProductId,
+      subBrandName: subBrand?.name,
+    };
+
+    await ctx.db.patch(args.taskId, taxonomyPatch);
+
+    if (task.projectId) {
+      const project = await ctx.db.get(task.projectId);
+      if (
+        project &&
+        project.convexStatus !== "deleted" &&
+        !project.corProjectId &&
+        project.corSyncStatus !== "synced" &&
+        project.corSyncStatus !== "syncing" &&
+        project.corSyncStatus !== "retrying"
+      ) {
+        await ctx.db.patch(task.projectId, taxonomyPatch);
+        const updatedProject = await ctx.db.get(task.projectId);
+        await applyProjectDeliverablesDelta(ctx, project, updatedProject);
+      }
+    }
+
+    return {
+      success: true,
+      brandName: brand.name,
+      subBrandName: subBrand?.name,
+    };
+  },
+});
 
 /**
  * Mutation interna: programa la sincronización de ediciones locales hacia COR.
@@ -2473,6 +3329,72 @@ async function uploadPendingAttachmentsToCOR(
   );
 }
 
+async function publishPendingTaskMessagesToCOR(
+  ctx: ActionCtx,
+  taskId: string,
+  corTaskId: number,
+  provider: ProjectManagementProvider,
+): Promise<void> {
+  const pendingMessages = await ctx.runQuery(
+    internal.data.tasks.listPendingTaskMessagesForCORInternal,
+    { taskId: taskId as any },
+  );
+
+  if (pendingMessages.length === 0) return;
+
+  console.log(
+    `[TaskMessages] Publicando ${pendingMessages.length} comentario(s) pendiente(s) en COR task ${corTaskId}...`,
+  );
+
+  for (const message of pendingMessages) {
+    try {
+      const corMessage =
+        message.source === "trello" ||
+        (message.source === "external_agent" &&
+          MARKDOWN_LINK_PATTERN.test(message.message))
+          ? formatTrelloCommentForCOR(message.message)
+          : message.message;
+
+      const result = await provider.postTaskMessage({
+        taskId: corTaskId,
+        message: corMessage,
+      });
+
+      await ctx.runMutation(
+        internal.data.tasks.updateTaskMessageSyncStatusInternal,
+        {
+          taskMessageId: message._id,
+          corTaskId,
+          corMessageSyncStatus: result.success ? "synced" : "error",
+          corMessageSyncError: result.success
+            ? undefined
+            : result.error || "No se pudo publicar el comentario en COR.",
+        },
+      );
+
+      if (!result.success) {
+        console.error(
+          `[TaskMessages] Error publicando comentario ${message._id} en COR: ${result.error}`,
+        );
+      }
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      await ctx.runMutation(
+        internal.data.tasks.updateTaskMessageSyncStatusInternal,
+        {
+          taskMessageId: message._id,
+          corTaskId,
+          corMessageSyncStatus: "error",
+          corMessageSyncError: errorMessage,
+        },
+      );
+      console.error(
+        `[TaskMessages] Error publicando comentario ${message._id} en COR: ${errorMessage}`,
+      );
+    }
+  }
+}
+
 /**
  * Mutation pública que inicia la publicación de una task en el sistema externo.
  *
@@ -2486,6 +3408,7 @@ async function uploadPendingAttachmentsToCOR(
 export const startPublishTaskToExternal = mutation({
   args: {
     taskId: v.id("tasks"),
+    existingCorProjectId: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     // Verificar autenticación usando getAuthUserId (consistente con el resto del codebase)
@@ -2525,6 +3448,19 @@ export const startPublishTaskToExternal = mutation({
       throw new Error(
         "No se puede publicar: no hay un cliente asociado a esta tarea.",
       );
+    }
+
+    const deadlineError = getPublishDeadlineError(task.deadline);
+    if (deadlineError) {
+      throw new Error(deadlineError);
+    }
+
+    if (
+      args.existingCorProjectId !== undefined &&
+      (!Number.isInteger(args.existingCorProjectId) ||
+        args.existingCorProjectId <= 0)
+    ) {
+      throw new Error("El proyecto seleccionado no es válido.");
     }
 
     const descriptionError = validatePublishableDescription(task.description);
@@ -2577,6 +3513,7 @@ export const startPublishTaskToExternal = mutation({
       internal.data.tasks.publishTaskToExternalAction,
       {
         taskId: args.taskId,
+        existingCorProjectId: args.existingCorProjectId,
       },
     );
 
@@ -2598,6 +3535,7 @@ export const startPublishTaskToExternal = mutation({
 export const publishTaskToExternalAction = internalAction({
   args: {
     taskId: v.id("tasks"),
+    existingCorProjectId: v.optional(v.number()),
     attempt: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
@@ -2620,6 +3558,17 @@ export const publishTaskToExternalAction = internalAction({
           taskId: args.taskId,
           corSyncStatus: "error",
           corSyncError: "Task no encontrada en la base de datos",
+        });
+        return;
+      }
+
+      const deadlineError = getPublishDeadlineError(task.deadline);
+      if (deadlineError) {
+        console.error(`[PublishTask] ❌ ${deadlineError}`);
+        await ctx.runMutation(internal.data.tasks.updatePublishStatus, {
+          taskId: args.taskId,
+          corSyncStatus: "error",
+          corSyncError: deadlineError,
         });
         return;
       }
@@ -2660,9 +3609,94 @@ export const publishTaskToExternalAction = internalAction({
       let localProjectPmId: number | undefined;
       let localProjectBrandId: number | undefined;
       let localProjectProductId: number | undefined;
+      let localProjectEstimatedTime: number | undefined;
+      let shouldUpdateProjectFields = true;
       const projectId = (task as any).projectId as string | undefined;
 
-      if (projectId) {
+      if (args.existingCorProjectId !== undefined) {
+        console.log(
+          `[PublishTask] 📁 Usando proyecto COR existente: ${args.existingCorProjectId}`,
+        );
+
+        const existingProject = await provider.getProject(
+          args.existingCorProjectId,
+        );
+        if (!existingProject) {
+          throw new Error(
+            "No se pudo encontrar el proyecto seleccionado en COR.",
+          );
+        }
+        if (existingProject.clientId !== clientId) {
+          throw new Error(
+            "El proyecto seleccionado no pertenece al cliente de esta tarea.",
+          );
+        }
+        const existingProjectEndDate = optionalStringFromExternal(
+          existingProject.endDate,
+        );
+        if (isDateBeforeToday(existingProjectEndDate)) {
+          throw new Error(
+            "El proyecto seleccionado ya está vencido. Selecciona otro proyecto activo.",
+          );
+        }
+
+        corProjectId = existingProject.id;
+        const localProject = projectId
+          ? await ctx.runQuery(internal.data.projects.getProjectInternal, {
+              projectId: projectId as any,
+            })
+          : null;
+        const taskDeliverablesCount =
+          typeof task.deliverablesCount === "number" &&
+          Number.isFinite(task.deliverablesCount) &&
+          task.deliverablesCount > 0
+            ? Math.trunc(task.deliverablesCount)
+            : undefined;
+        localProjectDeliverables =
+          taskDeliverablesCount !== undefined
+            ? Math.max(
+                0,
+                Math.trunc(
+                  optionalNumberFromExternal(existingProject.deliverables) ?? 0,
+                ),
+              ) +
+              taskDeliverablesCount
+            : optionalNumberFromExternal(existingProject.deliverables);
+        const proposedEstimatedTime =
+          typeof localProject?.estimatedTime === "number" &&
+          Number.isFinite(localProject.estimatedTime) &&
+          localProject.estimatedTime > 0
+            ? localProject.estimatedTime
+            : undefined;
+        localProjectEstimatedTime =
+          proposedEstimatedTime !== undefined
+            ? Math.max(
+                0,
+                optionalNumberFromExternal(existingProject.estimatedTime) ?? 0,
+              ) +
+              proposedEstimatedTime
+            : optionalNumberFromExternal(existingProject.estimatedTime);
+        localProjectPmId = undefined;
+        shouldUpdateProjectFields =
+          taskDeliverablesCount !== undefined ||
+          proposedEstimatedTime !== undefined;
+
+        await ctx.runMutation(
+          internal.data.projects.attachProjectToExistingCORProject,
+          {
+            projectId: projectId ? (projectId as any) : undefined,
+            taskId: args.taskId,
+            corProjectId: existingProject.id,
+            name: optionalStringFromExternal(existingProject.name),
+            brief: optionalStringFromExternal(existingProject.brief),
+            startDate: optionalStringFromExternal(existingProject.startDate),
+            endDate: existingProjectEndDate,
+            status: optionalStringFromExternal(existingProject.status),
+            deliverables: localProjectDeliverables,
+            estimatedTime: localProjectEstimatedTime,
+          },
+        );
+      } else if (projectId) {
         // Leer el proyecto local
         const localProject = await ctx.runQuery(
           internal.data.projects.getProjectInternal,
@@ -2742,16 +3776,19 @@ export const publishTaskToExternalAction = internalAction({
       // 3.5 Guardar campos soportados solo por update (deliverables, pm_id)
       if (
         corProjectId &&
+        shouldUpdateProjectFields &&
         (localProjectDeliverables !== undefined ||
-          localProjectPmId !== undefined)
+          localProjectPmId !== undefined ||
+          localProjectEstimatedTime !== undefined)
       ) {
         console.log(
-          `[PublishTask] 📝 Guardando deliverables/pm_id en proyecto COR ${corProjectId}...`,
+          `[PublishTask] 📝 Guardando deliverables/pm_id/estimated_time en proyecto COR ${corProjectId}...`,
         );
 
         const projectUpdate = await provider.updateProject(corProjectId, {
           deliverables: localProjectDeliverables,
           pmId: localProjectPmId,
+          estimatedTime: localProjectEstimatedTime,
         });
 
         if (!projectUpdate.success) {
@@ -2762,7 +3799,7 @@ export const publishTaskToExternalAction = internalAction({
         }
 
         console.log(
-          `[PublishTask] ✅ Deliverables/pm_id guardados en proyecto COR ${corProjectId}`,
+          `[PublishTask] ✅ Deliverables/pm_id/estimated_time guardados en proyecto COR ${corProjectId}`,
         );
       }
 
@@ -2818,7 +3855,22 @@ export const publishTaskToExternalAction = internalAction({
         `[PublishTask] ✅ IDs guardados — corTaskId: ${externalTask.id}, corProjectId: ${corProjectId}, clientId: ${clientId}, hash: ${descriptionHash}`,
       );
 
-      // 6. Subir archivos pendientes a COR (no-fatal: la task ya está publicada)
+      // 6. Publicar comentarios externos pendientes en COR (no-fatal: la task ya está publicada)
+      try {
+        await publishPendingTaskMessagesToCOR(
+          ctx,
+          args.taskId,
+          externalTask.id,
+          provider,
+        );
+      } catch (messageError) {
+        console.error(
+          "[PublishTask] ⚠️ Error publicando comentarios pendientes (task ya publicada):",
+          messageError,
+        );
+      }
+
+      // 7. Subir archivos pendientes a COR (no-fatal: la task ya está publicada)
       try {
         await uploadPendingAttachmentsToCOR(ctx, args.taskId, externalTask.id);
       } catch (fileError) {
@@ -2864,6 +3916,7 @@ export const publishTaskToExternalAction = internalAction({
           internal.data.tasks.publishTaskToExternalAction,
           {
             taskId: args.taskId,
+            existingCorProjectId: args.existingCorProjectId,
             attempt: attempt + 1,
           },
         );

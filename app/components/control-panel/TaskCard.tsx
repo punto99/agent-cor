@@ -8,6 +8,7 @@ import {
   getPriorityConfig,
 } from "../task/types";
 import { clientConfig } from "@/config/tenant.config";
+import { ArrowRight, CalendarDays } from "lucide-react";
 
 interface TaskCardTask {
   _id: Id<"tasks">;
@@ -17,11 +18,17 @@ interface TaskCardTask {
   deadline?: string;
   priority?: number;
   status: string;
+  source?: "internal" | "external";
+  createdByName?: string;
+  createdByEmail?: string;
   corSyncStatus?: string;
   corTaskId?: string;
   corClientName?: string;
   corTaskMissingInCOR?: boolean;
   corProjectMissingInCOR?: boolean;
+  trelloCardId?: string;
+  trelloCardUrl?: string;
+  trelloSyncStatus?: string;
 }
 
 interface TaskCardProps {
@@ -35,12 +42,19 @@ interface TaskCardProps {
  */
 export function TaskCard({ task, onClick }: TaskCardProps) {
   const priorityConfig = getPriorityConfig(task.priority);
-  const formattedDeadline = formatDeadline(task.deadline);
   const descriptionPreview = task.description
     ?.replace(/<br\s*\/?>/gi, "\n")
     .replace(/<[^>]*>/g, " ")
+    .replace(/Tipo de requerimiento\s*:/gi, "Tipo:")
     .replace(/\s+/g, " ")
     .trim();
+  const creatorName = getCreatorDisplayName(task);
+  const creatorInitials = getInitials(creatorName);
+  const sourceLabel = task.source === "external" ? "Externo" : "Interno";
+  const sourceBadgeClass =
+    task.source === "external"
+      ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300"
+      : "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300";
 
   // Determinar badge de sincronización
   const getSyncBadge = () => {
@@ -88,7 +102,7 @@ export function TaskCard({ task, onClick }: TaskCardProps) {
         };
       default:
         return {
-          label: "Pendiente",
+          label: "Pendiente en COR",
           className:
             "bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-400",
           icon: "🟡",
@@ -98,65 +112,104 @@ export function TaskCard({ task, onClick }: TaskCardProps) {
   };
 
   const syncBadge = getSyncBadge();
+  const isPublishedInTrello =
+    task.trelloSyncStatus === "synced" ||
+    Boolean(task.trelloCardId || task.trelloCardUrl);
 
   return (
     <button
       onClick={onClick}
-      className="w-full text-left bg-card border border-border rounded-xl p-4 hover:shadow-md hover:border-primary/30 transition-all duration-200 group cursor-pointer"
+      className="group flex h-full w-full cursor-pointer flex-col rounded-xl border border-border bg-card p-3.5 text-left shadow-sm transition-all duration-200 hover:border-primary/30 hover:shadow-md"
     >
-      {/* Header: Title + Priority */}
-      <div className="flex items-start justify-between gap-2 mb-2">
-        <h3 className="text-sm font-semibold text-foreground group-hover:text-primary transition-colors line-clamp-2">
-          {task.title}
-        </h3>
-        {priorityConfig && (
-          <span className={`text-xs flex-shrink-0 ${priorityConfig.color}`}>
-            {priorityConfig.icon}
-          </span>
-        )}
-      </div>
-
-      {/* Info: Description excerpt */}
-      <div className="space-y-1 mb-3">
-        {descriptionPreview && (
-          <p className="text-xs text-muted-foreground line-clamp-2">
-            {descriptionPreview}
-          </p>
-        )}
-        {formattedDeadline && (
-          <p className="text-xs text-muted-foreground">
-            <span className="font-medium">Fecha:</span> {formattedDeadline}
-          </p>
-        )}
-      </div>
-
-      {/* Footer: Status + Sync badge */}
-      <div className="flex items-center justify-between gap-2">
+      <div className="mb-1.5 flex items-center justify-between gap-3">
         <span
-          className={`text-xs px-2 py-0.5 rounded-full border ${getStatusColor(task.status)}`}
+          className={`inline-flex rounded-full border px-2 py-0.5 text-[11px] font-medium ${getStatusColor(task.status)}`}
         >
           {getStatusDisplay(task.status)}
         </span>
+        <ArrowRight className="h-4 w-4 flex-shrink-0 text-primary transition-transform group-hover:translate-x-0.5" />
+      </div>
+
+      <div className="mb-2">
+        <h3 className="line-clamp-2 text-sm font-semibold leading-snug text-foreground transition-colors group-hover:text-primary">
+          {task.title}
+        </h3>
+      </div>
+
+      <div className="mb-2.5 min-h-[2rem]">
+        {descriptionPreview && (
+          <p className="line-clamp-2 text-xs leading-relaxed text-muted-foreground">
+            {descriptionPreview}
+          </p>
+        )}
+      </div>
+
+      <div className="mb-1.5 flex flex-wrap items-center gap-2">
         <span
-          className={`text-xs px-2 py-0.5 rounded-full ${syncBadge.className}`}
+          className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${syncBadge.className}`}
           title={syncBadge.tooltip}
         >
           {syncBadge.icon} {syncBadge.label}
         </span>
+        {isPublishedInTrello && (
+          <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[11px] font-medium text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300">
+            ✅ En Trello
+          </span>
+        )}
       </div>
 
-      {/* Date */}
-      <p className="text-xs text-muted-foreground mt-2">
-        {formatDate(task._creationTime)}
-      </p>
+      {priorityConfig && (
+        <div className="mb-2.5">
+          <span
+            className={`inline-flex rounded-full bg-muted px-2 py-0.5 text-[11px] font-medium ${priorityConfig.color}`}
+            title={priorityConfig.label}
+          >
+            {priorityConfig.icon} {priorityConfig.label}
+          </span>
+        </div>
+      )}
+
+      <div className="mt-auto space-y-2 text-xs text-muted-foreground">
+        <span className="flex w-full min-w-0 items-center gap-1.5 pr-1 text-[10px] font-medium leading-4">
+          <CalendarDays className="h-3 w-3 flex-shrink-0" />
+          <span className="whitespace-nowrap">
+            {formatDate(task._creationTime)}
+          </span>
+        </span>
+
+        <div className="flex min-w-0 items-center justify-between gap-2">
+          <span className="inline-flex min-w-0 flex-1 items-center gap-2">
+            <span className="inline-flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-full border border-primary text-[11px] font-semibold text-primary">
+              {creatorInitials}
+            </span>
+            <span className="min-w-0 truncate font-medium text-foreground">
+              {creatorName}
+            </span>
+          </span>
+          <span
+            className={`flex-shrink-0 rounded-full px-2 py-0.5 text-[11px] font-medium ${sourceBadgeClass}`}
+          >
+            {sourceLabel}
+          </span>
+        </div>
+      </div>
     </button>
   );
 }
 
-function formatDeadline(deadline?: string) {
-  if (!deadline) return null;
-  const normalized = deadline.slice(0, 10);
-  const [year, month, day] = normalized.split("-");
-  if (!year || !month || !day) return deadline;
-  return `${day}/${month}/${year}`;
+function getCreatorDisplayName(task: TaskCardTask) {
+  return task.createdByName || task.createdByEmail || "Usuario";
+}
+
+function getInitials(value: string) {
+  const parts = value
+    .replace(/@.*/, "")
+    .split(/\s+/)
+    .filter(Boolean);
+  if (parts.length === 0) return "U";
+  return parts
+    .slice(0, 2)
+    .map((part) => part[0])
+    .join("")
+    .toUpperCase();
 }

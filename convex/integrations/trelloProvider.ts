@@ -15,6 +15,12 @@ type TrelloCard = {
   idList: string;
 };
 
+type TrelloComment = {
+  id: string;
+  type?: string;
+  date?: string;
+};
+
 type TrelloCustomField = {
   id: string;
   type: string;
@@ -34,6 +40,14 @@ type TrelloLabel = {
 type TrelloAttachment = {
   id: string;
   name: string;
+  url: string;
+};
+
+type TrelloDownloadedAttachment = {
+  blob: Blob;
+  filename: string;
+  mimeType: string;
+  size?: number;
   url: string;
 };
 
@@ -100,6 +114,59 @@ async function trelloFetch<T>(
   }
 
   return (await response.json()) as T;
+}
+
+async function trelloFetchBlob(
+  urlOrPath: string,
+): Promise<{
+  blob: Blob;
+  mimeType: string;
+  size?: number;
+  url: string;
+}> {
+  const { key, token } = getCredentials();
+  const url = urlOrPath.startsWith("http")
+    ? new URL(urlOrPath)
+    : new URL(`${TRELLO_API_BASE_URL}${urlOrPath}`);
+
+  const headers = new Headers();
+  headers.set("X-Trello-Client-Identifier", TRELLO_CLIENT_IDENTIFIER);
+  const isTrelloDownloadUrl =
+    (url.hostname === "api.trello.com" || url.hostname === "trello.com") &&
+    url.pathname.includes("/attachments/") &&
+    url.pathname.includes("/download/");
+
+  if (isTrelloDownloadUrl) {
+    if (url.hostname === "trello.com") {
+      url.hostname = "api.trello.com";
+    }
+    headers.set(
+      "Authorization",
+      `OAuth oauth_consumer_key="${key}", oauth_token="${token}"`,
+    );
+  }
+
+  const response = await fetch(url, { headers });
+  if (!response.ok) {
+    const body = await response.text();
+    throw new Error(`Trello API error: ${response.status} ${body}`);
+  }
+
+  const blob = await response.blob();
+  const contentLength = response.headers.get("content-length");
+  const parsedSize = contentLength ? Number(contentLength) : undefined;
+  return {
+    blob,
+    mimeType:
+      response.headers.get("content-type") ||
+      blob.type ||
+      "application/octet-stream",
+    size:
+      typeof parsedSize === "number" && Number.isFinite(parsedSize)
+        ? parsedSize
+        : blob.size,
+    url: url.toString(),
+  };
 }
 
 export const trelloProvider = {
@@ -207,6 +274,36 @@ export const trelloProvider = {
     );
   },
 
+  async updateCardFields(args: {
+    cardId: string;
+    name?: string;
+    desc?: string;
+    due?: string;
+  }): Promise<TrelloCard> {
+    return await trelloFetch<TrelloCard>(
+      `/cards/${args.cardId}`,
+      { method: "PUT" },
+      {
+        name: args.name,
+        desc: args.desc,
+        due: args.due,
+      },
+    );
+  },
+
+  async addCommentToCard(args: {
+    cardId: string;
+    text: string;
+  }): Promise<TrelloComment> {
+    return await trelloFetch<TrelloComment>(
+      `/cards/${args.cardId}/actions/comments`,
+      { method: "POST" },
+      {
+        text: args.text,
+      },
+    );
+  },
+
   async addMemberToCard(args: {
     cardId: string;
     memberId: string;
@@ -262,6 +359,24 @@ export const trelloProvider = {
         setCover: false,
       },
     );
+  },
+
+  async downloadAttachment(args: {
+    cardId: string;
+    attachmentId: string;
+    name?: string;
+    url?: string;
+  }): Promise<TrelloDownloadedAttachment> {
+    const downloadUrl =
+      args.url ||
+      `/cards/${args.cardId}/attachments/${args.attachmentId}/download/${encodeURIComponent(
+        args.name || args.attachmentId,
+      )}`;
+    const result = await trelloFetchBlob(downloadUrl);
+    return {
+      ...result,
+      filename: args.name || args.attachmentId,
+    };
   },
 
   async createWebhook(args: {

@@ -12,6 +12,7 @@ import type {
   ProjectManagementProvider,
   ExternalUser,
   ExternalClient,
+  ClientSearchResult,
   ExternalBrand,
   ExternalProduct,
   ExternalProject,
@@ -23,7 +24,10 @@ import type {
   SetTaskLabelInput,
   UpdateProjectInput,
   UploadTaskAttachmentInput,
+  PostTaskMessageInput,
   ExternalAttachmentResult,
+  ListProjectsInput,
+  ListProjectsResult,
 } from "./types";
 
 // ==================== CONFIGURACIÓN ====================
@@ -116,6 +120,67 @@ function parseDateFlexible(dateStr: string): Date | null {
   return null;
 }
 
+function normalizeClientName(name: string): string {
+  return name
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .trim()
+    .replace(/\s+/g, " ")
+    .toLowerCase();
+}
+
+function mapCORClient(client: Record<string, unknown>): ExternalClient {
+  return {
+    id: client.id as number,
+    name: (client.name as string) || "",
+    businessName: (client.business_name as string) ?? undefined,
+    email: (client.email_contact as string) ?? undefined,
+  };
+}
+
+async function searchCORClientsByName(name: string): Promise<ClientSearchResult> {
+  console.log(`[COR Provider] 🔍 Buscando cliente: "${name}"`);
+
+  try {
+    const encodedName = encodeURIComponent(name);
+    const response = await corApiFetch(
+      `/clients/search-by-name/${encodedName}`,
+    );
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error(
+        `[COR Provider] ❌ Error buscando cliente: ${response.status} - ${errorText}`,
+      );
+      return { clients: [] };
+    }
+
+    const result = await response.json();
+
+    // La API puede retornar un array directo o un objeto con propiedad "data"
+    const rawClients = Array.isArray(result) ? result : result.data || [];
+    const clients = rawClients.map((client: Record<string, unknown>) =>
+      mapCORClient(client),
+    );
+
+    if (clients.length === 0) {
+      console.log(
+        `[COR Provider] ⚠️ No se encontró cliente con nombre "${name}"`,
+      );
+      return { clients: [] };
+    }
+
+    console.log(
+      `[COR Provider] ✅ Encontrados ${clients.length} clientes para "${name}"`,
+    );
+
+    return { clients };
+  } catch (error) {
+    console.error(`[COR Provider] ❌ Error en searchClientsByName:`, error);
+    return { clients: [] };
+  }
+}
+
 /**
  * Mapea prioridades internas al formato numérico de COR.
  * Acepta texto ("baja", "media", "alta", "urgente") o número (0-3).
@@ -190,6 +255,29 @@ function parsePositiveInteger(value: unknown): number | undefined {
     }
   }
   return undefined;
+}
+
+function parseOptionalNumber(value: unknown): number | undefined {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+function mapProjectFromCOR(project: Record<string, unknown>): ExternalProject {
+  return {
+    id: Number(project.id),
+    name: String(project.name || ""),
+    clientId: Number(project.client_id ?? (project.client as any)?.id),
+    brandId: parsePositiveInteger(project.brand_id ?? (project.brand as any)?.id),
+    productId: parsePositiveInteger(
+      project.product_id ?? (project.product as any)?.id,
+    ),
+    brief: project.brief as string | undefined,
+    startDate: project.start as string | undefined,
+    endDate: project.end as string | undefined,
+    deliverables: parseDeliverablesFromCOR(project.deliverables),
+    status: project.status as string | undefined,
+    estimatedTime: project.estimated_time as number | undefined,
+  };
 }
 
 /**
@@ -337,51 +425,26 @@ export function createCORProvider(): ProjectManagementProvider {
 
     // ==================== SEARCH CLIENT ====================
 
+    async searchClientsByName(name: string): Promise<ClientSearchResult> {
+      return searchCORClientsByName(name);
+    },
+
     async searchClient(name: string): Promise<ExternalClient | null> {
-      console.log(`[COR Provider] 🔍 Buscando cliente: "${name}"`);
+      const { clients } = await searchCORClientsByName(name);
 
-      try {
-        const encodedName = encodeURIComponent(name);
-        const response = await corApiFetch(
-          `/clients/search-by-name/${encodedName}`,
-        );
+      if (clients.length === 0) return null;
 
-        if (!response.ok) {
-          const errorText = await response.text();
-          console.error(
-            `[COR Provider] ❌ Error buscando cliente: ${response.status} - ${errorText}`,
-          );
-          return null;
-        }
+      const normalizedSearch = normalizeClientName(name);
+      const exactClient = clients.find(
+        (client) => normalizeClientName(client.name) === normalizedSearch,
+      );
+      const client = exactClient ?? clients[0];
 
-        const result = await response.json();
+      console.log(
+        `[COR Provider] ✅ Cliente encontrado: ${client.name} (ID: ${client.id})`,
+      );
 
-        // La API puede retornar un array directo o un objeto con propiedad "data"
-        const clients = Array.isArray(result) ? result : result.data || [];
-
-        if (clients.length === 0) {
-          console.log(
-            `[COR Provider] ⚠️ No se encontró cliente con nombre "${name}"`,
-          );
-          return null;
-        }
-
-        // Tomar el primer resultado (más relevante)
-        const client = clients[0];
-        console.log(
-          `[COR Provider] ✅ Cliente encontrado: ${client.name} (ID: ${client.id})`,
-        );
-
-        return {
-          id: client.id,
-          name: client.name,
-          businessName: (client.business_name as string) ?? undefined,
-          email: (client.email_contact as string) ?? undefined,
-        };
-      } catch (error) {
-        console.error(`[COR Provider] ❌ Error en searchClient:`, error);
-        return null;
-      }
+      return client;
     },
 
     // ==================== CREATE PROJECT ====================
@@ -660,25 +723,88 @@ export function createCORProvider(): ProjectManagementProvider {
 
         const project = JSON.parse(rawProject);
 
-        return {
-          id: project.id,
-          name: project.name,
-          clientId: project.client_id,
-          brandId: parsePositiveInteger(project.brand_id ?? project.brand?.id),
-          productId: parsePositiveInteger(
-            project.product_id ?? project.product?.id,
-          ),
-          brief: project.brief,
-          startDate: project.start,
-          endDate: project.end,
-          deliverables: parseDeliverablesFromCOR(project.deliverables),
-          status: project.status,
-          estimatedTime: project.estimated_time,
-        };
+        return mapProjectFromCOR(project);
       } catch (error) {
         if (error instanceof CORNotFoundError) throw error;
         console.error(`[COR Provider] ❌ Error en getProject:`, error);
         return null;
+      }
+    },
+
+    // ==================== LIST PROJECTS ====================
+
+    async listProjects(data: ListProjectsInput): Promise<ListProjectsResult> {
+      const page = data.page ?? 1;
+      const perPage = data.perPage ?? 20;
+      const filters: Record<string, unknown> = {
+        client_id: data.clientId,
+        archived: data.archived ?? 2,
+      };
+
+      if (data.dateEnd) {
+        filters.dateEnd = data.dateEnd;
+      }
+      const brandId = parsePositiveInteger(data.brandId);
+      if (brandId !== undefined) {
+        filters.brand_id = brandId;
+
+        const productId = parsePositiveInteger(data.productId);
+        if (productId !== undefined) {
+          filters.product_id = productId;
+        }
+      }
+
+      const params = new URLSearchParams({
+        page: String(page),
+        perPage: String(perPage),
+        filters: JSON.stringify(filters),
+      });
+
+      console.log(
+        `[COR Provider] 📋 Listando proyectos COR: ${params.toString()}`,
+      );
+
+      try {
+        const response = await corApiFetch(`/projects?${params.toString()}`);
+
+        if (!response.ok) {
+          const errorText = await response.text();
+          throw new Error(
+            `Error listando proyectos en COR: ${response.status} - ${errorText}`,
+          );
+        }
+
+        const result = (await response.json()) as
+          | CORPaginatedResponse<Record<string, unknown>>
+          | Record<string, unknown>[];
+        const rawProjects = Array.isArray(result) ? result : result.data || [];
+        const projects = rawProjects
+          .map(mapProjectFromCOR)
+          .filter(
+            (project) =>
+              Number.isFinite(project.id) &&
+              Number.isFinite(project.clientId) &&
+              project.name.trim().length > 0,
+          );
+
+        return {
+          projects,
+          page: Array.isArray(result)
+            ? page
+            : parseOptionalNumber(result.page) ?? page,
+          perPage: Array.isArray(result)
+            ? perPage
+            : parseOptionalNumber(result.perPage) ?? perPage,
+          total: Array.isArray(result)
+            ? undefined
+            : parseOptionalNumber(result.total),
+          lastPage: Array.isArray(result)
+            ? undefined
+            : parseOptionalNumber(result.lastPage),
+        };
+      } catch (error) {
+        console.error("[COR Provider] ❌ Error en listProjects:", error);
+        throw error;
       }
     },
 
@@ -965,6 +1091,49 @@ export function createCORProvider(): ProjectManagementProvider {
             size: uploadedFile.size || data.fileBuffer.byteLength,
           },
         };
+      } catch (error) {
+        return {
+          success: false,
+          error: error instanceof Error ? error.message : String(error),
+        };
+      }
+    },
+
+    // ==================== POST TASK MESSAGE ====================
+
+    async postTaskMessage(
+      data: PostTaskMessageInput,
+    ): Promise<{ success: boolean; error?: string }> {
+      console.log(`[COR Provider] 💬 Publicando mensaje en task: ${data.taskId}`);
+
+      try {
+        const response = await corApiFetch(`/tasks/${data.taskId}/messages`, {
+          method: "POST",
+          body: JSON.stringify({
+            message: data.message,
+            attachments: data.attachments?.map((attachment) => ({
+              id: attachment.id,
+              name: attachment.name,
+              url: attachment.url,
+              type: attachment.type,
+              source: attachment.source,
+            })),
+          }),
+        });
+
+        if (!response.ok) {
+          const errorText = await response.text();
+          console.error(
+            `[COR Provider] ❌ Error publicando mensaje: ${response.status} - ${errorText}`,
+          );
+          return {
+            success: false,
+            error: `COR API error: ${response.status} - ${errorText}`,
+          };
+        }
+
+        console.log(`[COR Provider] ✅ Mensaje publicado en task ${data.taskId}`);
+        return { success: true };
       } catch (error) {
         return {
           success: false,

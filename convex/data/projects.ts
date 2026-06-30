@@ -39,6 +39,17 @@ async function hasFullClientAccess(ctx: any, clientId: any, userId: any) {
   return assignments.some((assignment: any) => assignment.brandId === undefined);
 }
 
+async function hasAnyClientAccess(ctx: any, clientId: any, userId: any) {
+  const assignments = await ctx.db
+    .query("clientUserAssignments")
+    .withIndex("by_client_and_user", (q: any) =>
+      q.eq("clientId", clientId).eq("userId", userId)
+    )
+    .collect();
+
+  return assignments.length > 0;
+}
+
 async function hasProjectAccess(ctx: any, project: any, userId: any) {
   if (project.clientBrandId) {
     const brand = await ctx.db.get(project.clientBrandId);
@@ -67,6 +78,29 @@ async function hasProjectAccess(ctx: any, project: any, userId: any) {
   }
 
   return project.createdBy === String(userId);
+}
+
+function normalizePage(value: number | undefined, fallback: number) {
+  if (typeof value !== "number" || !Number.isFinite(value)) return fallback;
+  return Math.max(1, Math.trunc(value));
+}
+
+function normalizePerPage(value: number | undefined, fallback: number) {
+  if (typeof value !== "number" || !Number.isFinite(value)) return fallback;
+  return Math.min(50, Math.max(1, Math.trunc(value)));
+}
+
+function normalizeOptionalCorId(value: number | undefined) {
+  if (typeof value !== "number" || !Number.isFinite(value)) return undefined;
+  const normalized = Math.trunc(value);
+  return normalized > 0 ? normalized : undefined;
+}
+
+function projectEndsBefore(projectEndDate: string | undefined, dateEnd: string) {
+  if (!projectEndDate) return false;
+  const normalizedEndDate = projectEndDate.slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(normalizedEndDate)) return false;
+  return normalizedEndDate < dateEnd;
 }
 
 // ==================== QUERIES ====================
@@ -162,6 +196,113 @@ export const getProjectInternal = internalQuery({
     const project = await ctx.db.get(args.projectId);
     if (project?.convexStatus === "deleted") return null;
     return project;
+  },
+});
+
+export const listPublishedLocalProjectsForClient = query({
+  args: {
+    clientId: v.id("corClients"),
+    brandId: v.optional(v.number()),
+    productId: v.optional(v.number()),
+    page: v.optional(v.number()),
+    perPage: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) throw new Error("No autenticado");
+    if (await isExternalUser(ctx, userId)) {
+      throw new Error("Esta búsqueda está disponible solo para usuarios internos.");
+    }
+
+    const client = await ctx.db.get(args.clientId);
+    if (!client) {
+      throw new Error("Cliente no encontrado.");
+    }
+
+    const hasAccess = await hasAnyClientAccess(ctx, args.clientId, userId);
+    if (!hasAccess) {
+      throw new Error("No tienes permisos para consultar proyectos de este cliente.");
+    }
+
+    const page = normalizePage(args.page, 1);
+    const perPage = normalizePerPage(args.perPage, 20);
+    const brandId = normalizeOptionalCorId(args.brandId);
+    const productId = brandId
+      ? normalizeOptionalCorId(args.productId)
+      : undefined;
+    const today = new Date().toISOString().slice(0, 10);
+    const projectsById = new Map<string, any>();
+
+    const byClientId = await ctx.db
+      .query("projects")
+      .withIndex("by_clientId", (q) => q.eq("clientId", args.clientId))
+      .collect();
+    for (const project of byClientId) {
+      projectsById.set(String(project._id), project);
+    }
+
+    const byCorClientId = await ctx.db
+      .query("projects")
+      .withIndex("by_corClientId", (q) => q.eq("corClientId", client.corClientId))
+      .collect();
+    for (const project of byCorClientId) {
+      projectsById.set(String(project._id), project);
+    }
+
+    const clientBrands = await ctx.db
+      .query("clientBrands")
+      .withIndex("by_client", (q) => q.eq("clientId", args.clientId))
+      .collect();
+    for (const brand of clientBrands) {
+      const brandProjects = await ctx.db
+        .query("projects")
+        .withIndex("by_clientBrandId", (q) => q.eq("clientBrandId", brand._id))
+        .collect();
+      for (const project of brandProjects) {
+        projectsById.set(String(project._id), project);
+      }
+    }
+
+    const projects = Array.from(projectsById.values())
+      .filter((project) => {
+        if (project.convexStatus === "deleted") return false;
+        if (!project.corProjectId) return false;
+        if (project.corSyncStatus !== "synced") return false;
+        if (projectEndsBefore(project.endDate, today)) return false;
+        if (brandId !== undefined && project.brandId !== brandId) return false;
+        if (productId !== undefined && project.productId !== productId) return false;
+        return true;
+      })
+      .sort((a, b) => {
+        const aEnd = a.endDate || "9999-12-31";
+        const bEnd = b.endDate || "9999-12-31";
+        if (aEnd !== bEnd) return aEnd.localeCompare(bEnd);
+        return a.name.localeCompare(b.name, "es", { sensitivity: "base" });
+      });
+
+    const total = projects.length;
+    const lastPage = Math.max(1, Math.ceil(total / perPage));
+    const start = (page - 1) * perPage;
+
+    return {
+      client: {
+        clientId: client._id,
+        name: client.name,
+        corClientId: client.corClientId,
+      },
+      projects: projects.slice(start, start + perPage).map((project) => ({
+        id: project.corProjectId as number,
+        localProjectId: project._id,
+        name: project.name,
+        endDate: project.endDate,
+        status: project.status,
+        deliverables: project.deliverables,
+      })),
+      page,
+      perPage,
+      total,
+      lastPage,
+    };
   },
 });
 
@@ -595,6 +736,116 @@ export const updateProjectPublishStatus = internalMutation({
 
     await ctx.db.patch(args.projectId, updates);
     console.log(`[projects] 🔄 Proyecto ${args.projectId} → ${args.corSyncStatus}`);
+  },
+});
+
+export const attachProjectToExistingCORProject = internalMutation({
+  args: {
+    projectId: v.optional(v.id("projects")),
+    taskId: v.optional(v.id("tasks")),
+    corProjectId: v.number(),
+    name: v.optional(v.string()),
+    brief: v.optional(v.string()),
+    startDate: v.optional(v.string()),
+    endDate: v.optional(v.string()),
+    status: v.optional(v.string()),
+    deliverables: v.optional(v.number()),
+    estimatedTime: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const previousProject = args.projectId
+      ? await ctx.db.get(args.projectId)
+      : null;
+
+    const existingProjects = await ctx.db
+      .query("projects")
+      .withIndex("by_corProjectId", (q) => q.eq("corProjectId", args.corProjectId))
+      .collect();
+    const canonicalProject = existingProjects
+      .filter(
+        (project) =>
+          project._id !== args.projectId && project.convexStatus !== "deleted",
+      )
+      .sort((a, b) => a._creationTime - b._creationTime)[0];
+
+    const updates: Record<string, unknown> = {
+      corProjectId: args.corProjectId,
+      corSyncStatus: "synced",
+      corSyncError: undefined,
+      corSyncedAt: Date.now(),
+      corSyncAttempt: 0,
+      corMissingInCOR: undefined,
+    };
+
+    if (args.name !== undefined) updates.name = args.name;
+    if (args.brief !== undefined) updates.brief = args.brief;
+    if (args.startDate !== undefined) updates.startDate = args.startDate;
+    if (args.endDate !== undefined) updates.endDate = args.endDate;
+    if (args.status !== undefined) updates.status = args.status;
+    if (args.deliverables !== undefined) updates.deliverables = args.deliverables;
+    if (args.estimatedTime !== undefined) {
+      updates.estimatedTime = args.estimatedTime;
+    }
+
+    if (canonicalProject) {
+      await ctx.db.patch(canonicalProject._id, updates);
+      const updatedCanonicalProject = await ctx.db.get(canonicalProject._id);
+      await applyProjectDeliverablesDelta(
+        ctx,
+        canonicalProject,
+        updatedCanonicalProject,
+      );
+
+      if (args.taskId) {
+        await ctx.db.patch(args.taskId, {
+          projectId: canonicalProject._id,
+        });
+      }
+
+      let deletedUnusedProject = false;
+      if (args.projectId && previousProject) {
+        const remainingTasksForPreviousProject = await ctx.db
+          .query("tasks")
+          .withIndex("by_projectId", (q) => q.eq("projectId", args.projectId!))
+          .collect();
+        const hasOtherActiveTasks = remainingTasksForPreviousProject.some(
+          (task) =>
+            task._id !== args.taskId && task.convexStatus !== "deleted",
+        );
+
+        if (!hasOtherActiveTasks) {
+          await applyProjectDeliverablesDelta(ctx, previousProject, null);
+          await ctx.db.delete(args.projectId);
+          deletedUnusedProject = true;
+        }
+      }
+
+      return {
+        projectId: canonicalProject._id,
+        reusedExistingProject: true,
+        deletedUnusedProject,
+      };
+    }
+
+    if (!args.projectId || !previousProject) {
+      throw new Error("Proyecto seleccionado no encontrado en Convex.");
+    }
+
+    await ctx.db.patch(args.projectId, updates);
+    const updatedProject = await ctx.db.get(args.projectId);
+    await applyProjectDeliverablesDelta(ctx, previousProject, updatedProject);
+
+    if (args.taskId) {
+      await ctx.db.patch(args.taskId, {
+        projectId: args.projectId,
+      });
+    }
+
+    return {
+      projectId: args.projectId,
+      reusedExistingProject: false,
+      deletedUnusedProject: false,
+    };
   },
 });
 

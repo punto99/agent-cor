@@ -3,6 +3,7 @@ import { v } from "convex/values";
 import { mutation, query } from "../_generated/server";
 import { canUserAccessAnalytics } from "../lib/analyticsAccess";
 import { applyProjectDeliverablesDelta } from "../lib/deliverableAnalytics";
+import { isExcludedUserId } from "../lib/excludedUsers";
 
 const TASK_STATUSES = [
   "nueva",
@@ -114,11 +115,25 @@ export const getDashboard = query({
       .order("desc")
       .take(MAX_ANALYTICS_EVALUATIONS);
 
+    const excludedTaskIds = new Set(
+      recentTasks
+        .filter((task) => isExcludedUserId(task.createdBy))
+        .map((task) => String(task._id)),
+    );
+
     const activeTasks = recentTasks.filter(
-      (task) => task.convexStatus !== "deleted",
+      (task) =>
+        task.convexStatus !== "deleted" && !isExcludedUserId(task.createdBy),
     );
     const activeProjects = allProjects.filter(
-      (project) => project.convexStatus !== "deleted",
+      (project) =>
+        project.convexStatus !== "deleted" &&
+        !isExcludedUserId(project.createdBy),
+    );
+    const activeEvaluations = recentEvaluations.filter(
+      (evaluation) =>
+        !isExcludedUserId(evaluation.requestedBy) &&
+        !excludedTaskIds.has(String(evaluation.taskId)),
     );
 
     const clientNameById = new Map<string, string>();
@@ -145,7 +160,7 @@ export const getDashboard = query({
     );
     const evaluationUserCounts = new Map<string, number>();
 
-    for (const evaluation of recentEvaluations) {
+    for (const evaluation of activeEvaluations) {
       if (!evaluation.requestedBy) continue;
       const createdBy = String(evaluation.requestedBy);
       evaluationUserCounts.set(
@@ -258,12 +273,12 @@ export const getDashboard = query({
     const evaluationStatusCounts = EVALUATION_STATUSES.map((status) => ({
       key: status,
       label: getEvaluationStatusLabel(status),
-      count: recentEvaluations.filter(
+      count: activeEvaluations.filter(
         (evaluation) => evaluation.status === status,
       ).length,
     }));
     const evaluatedTaskIds = new Set(
-      recentEvaluations
+      activeEvaluations
         .filter((evaluation) => evaluation.status === "completed")
         .map((evaluation) => String(evaluation.taskId)),
     );
@@ -275,7 +290,7 @@ export const getDashboard = query({
         maxTasksRead: MAX_ANALYTICS_TASKS,
         maxEvaluationsRead: MAX_ANALYTICS_EVALUATIONS,
         taskSampleSize: activeTasks.length,
-        evaluationSampleSize: recentEvaluations.length,
+        evaluationSampleSize: activeEvaluations.length,
       },
       summary: {
         tasks: activeTasks.length,
@@ -307,10 +322,10 @@ export const getDashboard = query({
       weeklyTrend,
       deliverables: deliverableAnalytics,
       evaluations: {
-        total: recentEvaluations.length,
+        total: activeEvaluations.length,
         evaluatedTasks: evaluatedTaskIds.size,
         statusCounts: evaluationStatusCounts,
-        recent: recentEvaluations.slice(0, 8).map((evaluation) => ({
+        recent: activeEvaluations.slice(0, 8).map((evaluation) => ({
           taskId: evaluation.taskId,
           status: evaluation.status,
           createdAt: evaluation.createdAt,

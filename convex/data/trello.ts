@@ -7,10 +7,16 @@ import {
   internalQuery,
 } from "../_generated/server";
 import { getAuthUserId } from "@convex-dev/auth/server";
-import { internal } from "../_generated/api";
+import { listMessages, storeFile } from "@convex-dev/agent";
+import { components, internal } from "../_generated/api";
 import { trelloProvider } from "../integrations/trelloProvider";
+import { getProjectManagementProvider } from "../integrations/registry";
 import { TASK_STATUS_OPTIONS, getTaskStatusName } from "../lib/taskStatuses";
-import { clientConfig } from "../../config/tenant.config";
+import {
+  getTrelloDisabledReason,
+  isTrelloEnabledForCorClientId,
+} from "../lib/trelloPolicy";
+import { formatTrelloCommentForCOR } from "../lib/trelloCommentFormat";
 
 const CUSTOM_FIELDS = [
   { key: "requestType", name: "Tipo de requerimiento", type: "text" as const },
@@ -34,6 +40,93 @@ const LABEL_SYNC_STALE_MS = 60_000;
 const LABEL_SYNC_RETRY_DELAYS_MS = [1000, 2000, 4000, 8000];
 const CONVEX_TRELLO_CLIENT_IDENTIFIER = "agent-core-convex-trello-sync";
 const BUSINESS_TIME_ZONE = "America/Guayaquil";
+
+function uniqueStrings(values: string[]): string[] {
+  return Array.from(new Set(values.filter(Boolean)));
+}
+
+function extractFileIdsFromMessage(msg: any): string[] {
+  const ids: string[] = [];
+
+  if (Array.isArray(msg.fileIds)) ids.push(...msg.fileIds);
+  if (Array.isArray(msg.metadata?.fileIds)) ids.push(...msg.metadata.fileIds);
+  if (Array.isArray(msg.message?.metadata?.fileIds)) {
+    ids.push(...msg.message.metadata.fileIds);
+  }
+
+  return uniqueStrings(ids);
+}
+
+function messageCreationTime(msg: any): number {
+  return typeof msg._creationTime === "number" ? msg._creationTime : 0;
+}
+
+function markdownLinkLabel(value: string): string {
+  return value.replace(/[\r\n]+/g, " ").replace(/\[/g, "(").replace(/\]/g, ")");
+}
+
+function markdownFileLink(filename: string, url: string): string {
+  return `[${markdownLinkLabel(filename)}](${url})`;
+}
+
+function getTrelloBoardUrl(value: {
+  trelloBoardUrl?: string;
+  trelloBoardId?: string;
+}) {
+  if (value.trelloBoardUrl) return value.trelloBoardUrl;
+  if (value.trelloBoardId) return `https://trello.com/b/${value.trelloBoardId}`;
+  return undefined;
+}
+
+async function getLatestExternalCommentFileLinks(
+  ctx: any,
+  args: {
+    threadId: string;
+    taskCreatedAt?: number;
+  },
+): Promise<Array<{ filename: string; url: string }>> {
+  const messagesResult = await listMessages(ctx, components.agent, {
+    threadId: args.threadId,
+    paginationOpts: { cursor: null, numItems: 20 },
+  });
+
+  const userMessagesWithFiles = messagesResult.page
+    .filter((msg: any) => msg.message?.role === "user")
+    .map((msg: any) => ({
+      msg,
+      fileIds: extractFileIdsFromMessage(msg),
+      createdAt: messageCreationTime(msg),
+    }))
+    .filter((entry) => entry.fileIds.length > 0)
+    .filter(
+      (entry) =>
+        typeof args.taskCreatedAt !== "number" ||
+        entry.createdAt >= args.taskCreatedAt,
+    )
+    .sort((a, b) => b.createdAt - a.createdAt);
+  const latestUserMessageWithFiles = userMessagesWithFiles[0];
+
+  if (!latestUserMessageWithFiles) return [];
+
+  const links: Array<{ filename: string; url: string }> = [];
+  for (const fileId of latestUserMessageWithFiles.fileIds) {
+    try {
+      const fileInfo = await ctx.runQuery(internal.data.tasks.getFileInfoInternal, {
+        fileId,
+      });
+      if (fileInfo?.url && fileInfo.filename) {
+        links.push({ filename: fileInfo.filename, url: fileInfo.url });
+      }
+    } catch (error) {
+      console.error("[ExternalTaskComment] No se pudo resolver archivo:", {
+        fileId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  return links;
+}
 
 function normalizeTrelloLabelName(value: string) {
   return value
@@ -247,6 +340,15 @@ export const getTaskProjectForTrello = internalQuery({
       return { ok: false as const, error: "Marca no encontrada." };
     }
 
+    if (!isTrelloEnabledForCorClientId(brand.corClientId)) {
+      return {
+        ok: false as const,
+        skip: true as const,
+        trelloDisabled: true as const,
+        error: getTrelloDisabledReason(brand.corClientId),
+      };
+    }
+
     if (!brand.trelloBoardId) {
       return {
         ok: false as const,
@@ -314,6 +416,17 @@ export const getTaskStatusFromCORTrelloContext = internalQuery({
       return { ok: false as const, skip: true as const, error: "Task no encontrada." };
     }
 
+    if (!isTrelloEnabledForCorClientId(task.corClientId)) {
+      return {
+        ok: false as const,
+        skip: true as const,
+        trelloDisabled: true as const,
+        taskId: task._id,
+        projectId: task.projectId,
+        error: getTrelloDisabledReason(task.corClientId),
+      };
+    }
+
     if (!task.clientBrandId) {
       return {
         ok: false as const,
@@ -378,6 +491,55 @@ export const getTaskStatusFromCORTrelloContext = internalQuery({
   },
 });
 
+export const getTaskFieldsFromCORTrelloContext = internalQuery({
+  args: {
+    taskId: v.id("tasks"),
+  },
+  handler: async (ctx, args) => {
+    const task = await ctx.db.get(args.taskId);
+    if (!task || task.convexStatus === "deleted") {
+      return { ok: false as const, skip: true as const, error: "Task no encontrada." };
+    }
+
+    if (!isTrelloEnabledForCorClientId(task.corClientId)) {
+      return {
+        ok: false as const,
+        skip: true as const,
+        trelloDisabled: true as const,
+        taskId: task._id,
+        projectId: task.projectId,
+        error: getTrelloDisabledReason(task.corClientId),
+      };
+    }
+
+    const trelloCard = await ctx.db
+      .query("trelloCards")
+      .withIndex("by_task", (q) => q.eq("taskId", task._id))
+      .first();
+
+    const trelloCardId = trelloCard?.trelloCardId || task.trelloCardId;
+    if (!trelloCardId) {
+      return {
+        ok: false as const,
+        skip: true as const,
+        taskId: task._id,
+        projectId: task.projectId,
+        error: "La task no tiene card Trello creada.",
+      };
+    }
+
+    return {
+      ok: true as const,
+      taskId: task._id,
+      projectId: task.projectId,
+      trelloCardId,
+      title: task.title,
+      description: task.description,
+      deadline: task.deadline,
+    };
+  },
+});
+
 export const listBoardMembers: any = action({
   args: {
     clientBrandId: v.optional(v.id("clientBrands")),
@@ -392,6 +554,9 @@ export const listBoardMembers: any = action({
         clientBrandId: args.clientBrandId,
       });
       if (!brand) throw new Error("Categoría no encontrada.");
+      if (!isTrelloEnabledForCorClientId(brand.corClientId)) {
+        throw new Error(getTrelloDisabledReason(brand.corClientId));
+      }
       if (!brand.trelloBoardId) {
         throw new Error(`La categoría "${brand.name}" no tiene trelloBoardId configurado.`);
       }
@@ -428,6 +593,22 @@ export const validateExternalUserBoardMembership: any = internalAction({
     clientBrandId: v.id("clientBrands"),
   },
   handler: async (ctx, args) => {
+    const brand = await ctx.runQuery(internal.data.clientBrands.getById, {
+      clientBrandId: args.clientBrandId,
+    });
+
+    if (!brand) {
+      return { ok: false as const, error: "La categoría seleccionada no existe." };
+    }
+
+    if (!isTrelloEnabledForCorClientId(brand.corClientId)) {
+      return {
+        ok: false as const,
+        trelloDisabled: true as const,
+        error: getTrelloDisabledReason(brand.corClientId),
+      };
+    }
+
     const approvedExternalUser = await ctx.runQuery(
       internal.data.approvedExternalUsers.getApprovedExternalUserByUserId,
       { userId: args.userId },
@@ -446,14 +627,6 @@ export const validateExternalUserBoardMembership: any = internalAction({
         error:
           "No tienes un usuario de Trello vinculado. Pide a un administrador que configure tu acceso antes de crear este requerimiento.",
       };
-    }
-
-    const brand = await ctx.runQuery(internal.data.clientBrands.getById, {
-      clientBrandId: args.clientBrandId,
-    });
-
-    if (!brand) {
-      return { ok: false as const, error: "La categoría seleccionada no existe." };
     }
 
     if (!brand.trelloBoardId) {
@@ -832,6 +1005,113 @@ export const applySafeInboundCardUpdate = internalMutation({
   },
 });
 
+export const syncInboundTrelloAttachmentToTask: any = internalAction({
+  args: {
+    taskId: v.id("tasks"),
+    trelloCardId: v.string(),
+    trelloAttachmentId: v.string(),
+    trelloAttachmentUrl: v.optional(v.string()),
+    filename: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const existingAttachment = await ctx.runQuery(
+      internal.data.tasks.getTaskAttachmentByTrelloId,
+      {
+        taskId: args.taskId,
+        trelloAttachmentId: args.trelloAttachmentId,
+      },
+    );
+
+    const task = await ctx.runQuery(internal.data.tasks.getTaskByIdInternal, {
+      taskId: args.taskId as string,
+    });
+    if (!task) {
+      throw new Error("Task no encontrada para attachment de Trello.");
+    }
+
+    let attachmentId = existingAttachment?._id;
+    let storageId = existingAttachment?.storageId;
+    let filename =
+      existingAttachment?.filename ||
+      args.filename ||
+      `trello-attachment-${args.trelloAttachmentId}`;
+    let mimeType = existingAttachment?.mimeType || "application/octet-stream";
+    let fileSize = existingAttachment?.size;
+    let blobForCOR: Blob | null = null;
+
+    if (!existingAttachment) {
+      const downloaded = await trelloProvider.downloadAttachment({
+        cardId: args.trelloCardId,
+        attachmentId: args.trelloAttachmentId,
+        name: filename,
+        url: args.trelloAttachmentUrl,
+      });
+      filename = downloaded.filename;
+      mimeType = downloaded.mimeType;
+      fileSize = downloaded.size;
+      blobForCOR = downloaded.blob;
+
+      const { file } = await storeFile(ctx, components.agent, downloaded.blob, {
+        filename,
+      });
+
+      attachmentId = await ctx.runMutation(internal.data.tasks.createTaskAttachment, {
+        taskId: args.taskId,
+        fileId: file.fileId,
+        storageId: file.storageId,
+        filename,
+        mimeType,
+        size: fileSize,
+        trelloAttachmentId: args.trelloAttachmentId,
+        trelloAttachmentUrl: args.trelloAttachmentUrl || downloaded.url,
+      });
+      storageId = file.storageId;
+    }
+
+    if (task.corTaskId && attachmentId && !existingAttachment?.corAttachmentId) {
+      const corTaskId = Number(task.corTaskId);
+      if (!Number.isFinite(corTaskId)) {
+        throw new Error(`corTaskId inválido para subir attachment: ${task.corTaskId}`);
+      }
+
+      const blob =
+        blobForCOR || (storageId ? await ctx.storage.get(storageId as any) : null);
+      if (!blob) {
+        throw new Error("No se encontró el archivo guardado para subirlo a COR.");
+      }
+
+      const provider = getProjectManagementProvider();
+      const result = await provider.uploadTaskAttachment({
+        taskId: corTaskId,
+        fileBuffer: await blob.arrayBuffer(),
+        filename,
+        mimeType,
+      });
+
+      if (!result.success || !result.attachment) {
+        throw new Error(
+          result.error || "No se pudo subir el attachment de Trello a COR.",
+        );
+      }
+
+      await ctx.runMutation(internal.data.tasks.updateAttachmentCORSync, {
+        attachmentId,
+        corAttachmentId: result.attachment.id,
+        corUrl: result.attachment.url || "",
+      });
+    }
+
+    return {
+      attachmentId,
+      filename,
+      mimeType,
+      size: fileSize,
+      alreadyExisted: Boolean(existingAttachment),
+      uploadedToCOR: Boolean(task.corTaskId && !existingAttachment?.corAttachmentId),
+    };
+  },
+});
+
 export const markTaskInboundReviewNeeded = internalMutation({
   args: {
     taskId: v.id("tasks"),
@@ -843,6 +1123,172 @@ export const markTaskInboundReviewNeeded = internalMutation({
       trelloInboundSyncError: args.error,
       trelloLastInboundAt: Date.now(),
     });
+  },
+});
+
+export const markTaskInboundSyncError = internalMutation({
+  args: {
+    taskId: v.id("tasks"),
+    error: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    await ctx.db.patch(args.taskId, {
+      trelloInboundSyncStatus: "error",
+      trelloInboundSyncError: args.error,
+      trelloLastInboundAt: Date.now(),
+    });
+  },
+});
+
+export const editExternalTaskFromAgent: any = internalAction({
+  args: {
+    threadId: v.string(),
+    taskId: v.optional(v.string()),
+    description: v.optional(v.string()),
+    deadline: v.optional(v.string()),
+    comment: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const description =
+      typeof args.description === "string" ? args.description.trim() : undefined;
+    const deadline =
+      typeof args.deadline === "string" ? args.deadline.trim() : undefined;
+    const comment =
+      typeof args.comment === "string" ? args.comment.trim() : undefined;
+
+    if (description !== undefined || deadline !== undefined) {
+      return {
+        ok: false,
+        error:
+          "El agente externo solo puede dejar comentarios. Los cambios de campos deben quedar como comentario para revisión del equipo interno.",
+      };
+    }
+
+    const context = await ctx.runQuery(
+      (internal as any).data.tasks.getExternalEditableTaskContext,
+      {
+        threadId: args.threadId,
+        taskId: args.taskId,
+      },
+    );
+
+    if (!context?.ok) {
+      return {
+        ok: false,
+        error: context?.error || "No se pudo validar el requerimiento.",
+      };
+    }
+
+    const task = context.task;
+    if (!isTrelloEnabledForCorClientId(task.corClientId)) {
+      return {
+        ok: false,
+        error: "Este requerimiento no está habilitado para operaciones en Trello.",
+      };
+    }
+
+    const trelloCardId = task.trelloCardId;
+    if (!trelloCardId) {
+      return {
+        ok: false,
+        error:
+          "El requerimiento todavía no está listo para editarse. Intenta nuevamente en unos minutos.",
+      };
+    }
+
+    const applied: string[] = [];
+    const warnings: string[] = [];
+    const fileLinks = await getLatestExternalCommentFileLinks(ctx, {
+      threadId: args.threadId,
+      taskCreatedAt: task.createdAt,
+    });
+    const commentParts: string[] = [];
+
+    if (comment && comment.length > 0) {
+      commentParts.push(comment);
+    }
+
+    if (fileLinks.length > 0) {
+      commentParts.push(
+        [
+          "Archivos adjuntos:",
+          ...fileLinks.map((file) => `- ${markdownFileLink(file.filename, file.url)}`),
+        ].join("\n"),
+      );
+    }
+
+    const finalComment = commentParts.join("\n\n").trim();
+
+    if (!finalComment) {
+      return {
+        ok: false,
+        error:
+          "Indica el comentario o sube un archivo para agregar al requerimiento.",
+      };
+    }
+
+    const trelloComment = await trelloProvider.addCommentToCard({
+      cardId: trelloCardId,
+      text: finalComment,
+    });
+
+    const corTaskId = task.corTaskId ? Number(task.corTaskId) : undefined;
+    const shouldSyncToCOR =
+      typeof corTaskId === "number" && Number.isFinite(corTaskId);
+
+    const taskMessageId = await ctx.runMutation(
+      (internal as any).data.tasks.createTaskMessageInternal,
+      {
+        taskId: task._id,
+        userId: context.userId,
+        source: "external_agent",
+        message: finalComment,
+        trelloCardId,
+        trelloCommentId: trelloComment.id,
+        trelloSyncStatus: "synced",
+        corTaskId: shouldSyncToCOR ? corTaskId : undefined,
+        corMessageSyncStatus: shouldSyncToCOR ? "pending" : "pending_cor_task",
+      },
+    );
+
+    if (shouldSyncToCOR) {
+      const provider = getProjectManagementProvider();
+      const result = await provider.postTaskMessage({
+        taskId: corTaskId!,
+        message:
+          fileLinks.length > 0
+            ? formatTrelloCommentForCOR(finalComment)
+            : finalComment,
+      });
+
+      await ctx.runMutation(
+        (internal as any).data.tasks.updateTaskMessageSyncStatusInternal,
+        {
+          taskMessageId,
+          corMessageSyncStatus: result.success ? "synced" : "error",
+          corMessageSyncError: result.success
+            ? undefined
+            : result.error || "No se pudo publicar el comentario en COR.",
+        },
+      );
+
+      if (!result.success) {
+        warnings.push(
+          "El comentario se publicó en Trello, pero quedó pendiente de sincronizar con el equipo interno.",
+        );
+      }
+    }
+
+    applied.push("comment");
+
+    return {
+      ok: true,
+      applied,
+      warnings,
+      taskId: String(task._id),
+      trelloBoardUrl: getTrelloBoardUrl(context),
+      corSyncScheduled: false,
+    };
   },
 });
 
@@ -1104,6 +1550,36 @@ export const markTrelloCardListSyncedFromCOR = internalMutation({
   },
 });
 
+export const markTrelloCardFieldsSyncedFromCOR = internalMutation({
+  args: {
+    taskId: v.id("tasks"),
+    projectId: v.optional(v.id("projects")),
+  },
+  handler: async (ctx, args) => {
+    const now = Date.now();
+    const existing = await ctx.db
+      .query("trelloCards")
+      .withIndex("by_task", (q) => q.eq("taskId", args.taskId))
+      .first();
+
+    if (existing) {
+      await ctx.db.patch(existing._id, {
+        syncedAt: now,
+      });
+    }
+
+    await ctx.db.patch(args.taskId, {
+      trelloSyncedAt: now,
+    });
+
+    if (args.projectId) {
+      await ctx.db.patch(args.projectId, {
+        trelloSyncedAt: now,
+      });
+    }
+  },
+});
+
 export const markTrelloCardError = internalMutation({
   args: {
     taskId: v.id("tasks"),
@@ -1328,10 +1804,27 @@ export const scheduleCreateCardForExternalTask = internalMutation({
     deliverablesCount: v.number(),
   },
   handler: async (ctx, args) => {
+    const task = await ctx.db.get(args.taskId);
+    if (!task || task.convexStatus === "deleted") {
+      console.warn(
+        `[TrelloSync] No se programa card para task ${args.taskId}: task no encontrada.`
+      );
+      return { scheduled: false, skipped: true, error: "Task no encontrada." };
+    }
+
+    if (!isTrelloEnabledForCorClientId(task.corClientId)) {
+      const reason = getTrelloDisabledReason(task.corClientId);
+      console.log(
+        `[TrelloSync] No se programa card para task ${args.taskId}: ${reason}`
+      );
+      return { scheduled: false, skipped: true, trelloDisabled: true, reason };
+    }
+
     console.log(
       `[TrelloSync] Programando creación de card para task ${args.taskId} (tipo: ${args.requestType}, entregables: ${args.deliverablesCount})`
     );
     await ctx.scheduler.runAfter(0, internalTrello.createCardForExternalTask, args);
+    return { scheduled: true };
   },
 });
 
@@ -1356,10 +1849,7 @@ export const startPublishTaskToTrello = mutation({
       throw new Error("Task no encontrada.");
     }
 
-    if (
-      typeof task.corClientId !== "number" ||
-      !clientConfig.ui.trelloPublishCorClientIds.includes(task.corClientId)
-    ) {
+    if (!isTrelloEnabledForCorClientId(task.corClientId)) {
       throw new Error("Esta task no está habilitada para publicación en Trello.");
     }
 
@@ -1385,15 +1875,23 @@ export const startPublishTaskToTrello = mutation({
       throw new Error("Proyecto no encontrado.");
     }
 
-    const deliverablesCount =
+    const taskDeliverablesCount =
+      typeof task.deliverablesCount === "number" &&
+      Number.isFinite(task.deliverablesCount) &&
+      task.deliverablesCount > 0
+        ? Math.trunc(task.deliverablesCount)
+        : undefined;
+    const projectDeliverablesCount =
       typeof project.deliverables === "number" &&
       Number.isFinite(project.deliverables) &&
       project.deliverables > 0
         ? Math.trunc(project.deliverables)
         : undefined;
+    const deliverablesCount = taskDeliverablesCount ?? projectDeliverablesCount;
+
     if (!deliverablesCount) {
       throw new Error(
-        "El proyecto no tiene una cantidad de entregables válida para publicar en Trello.",
+        "La task no tiene una cantidad de entregables válida para publicar en Trello.",
       );
     }
 
@@ -1437,6 +1935,14 @@ export const createCardForExternalTask: any = internalAction({
 
     if (!data.ok) {
       console.warn(`[TrelloSync] No se puede crear card para task ${args.taskId}: ${data.error}`);
+      if (data.trelloDisabled) {
+        return {
+          success: true,
+          skipped: true,
+          trelloDisabled: true,
+          reason: data.error,
+        };
+      }
       await ctx.runMutation(internalTrello.markTrelloCardError, {
         taskId: args.taskId,
         error: data.error,
@@ -1625,6 +2131,62 @@ export const syncTaskStatusFromCORToTrello: any = internalAction({
   },
 });
 
+export const syncTaskFieldsFromCORToTrello: any = internalAction({
+  args: {
+    taskId: v.id("tasks"),
+  },
+  handler: async (ctx, args) => {
+    const context = await ctx.runQuery(
+      internalTrello.getTaskFieldsFromCORTrelloContext,
+      { taskId: args.taskId },
+    );
+
+    if (!context.ok) {
+      console.log(
+        `[TrelloSync][COR] No se actualizan campos de card para task ${args.taskId}: ${context.error}`,
+      );
+      if (!context.skip && context.taskId) {
+        await ctx.runMutation(internalTrello.markTrelloCardError, {
+          taskId: context.taskId,
+          projectId: context.projectId,
+          error: context.error,
+        });
+      }
+      return { success: false, skipped: context.skip, error: context.error };
+    }
+
+    try {
+      console.log(
+        `[TrelloSync][COR] Actualizando campos de card ${context.trelloCardId} desde COR para task ${args.taskId}`,
+      );
+      await trelloProvider.updateCardFields({
+        cardId: context.trelloCardId,
+        name: context.title,
+        desc: htmlToTrelloMarkdown(context.description),
+        due: formatDeadlineForTrelloDue(context.deadline),
+      });
+
+      await ctx.runMutation(internalTrello.markTrelloCardFieldsSyncedFromCOR, {
+        taskId: context.taskId,
+        projectId: context.projectId,
+      });
+
+      return { success: true };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.error(
+        `[TrelloSync][COR] Error actualizando campos Trello para task ${args.taskId}: ${message}`,
+      );
+      await ctx.runMutation(internalTrello.markTrelloCardError, {
+        taskId: context.taskId,
+        projectId: context.projectId,
+        error: message,
+      });
+      return { success: false, error: message };
+    }
+  },
+});
+
 export const processWebhookEvent: any = internalAction({
   args: {
     eventId: v.id("trelloWebhookEvents"),
@@ -1666,6 +2228,12 @@ export const processWebhookEvent: any = internalAction({
       payload?.action?.data?.card?.id ||
       payload?.action?.data?.card?.idShort;
     if (!cardId) {
+      if (event.actionType === "commentCard") {
+        console.log("[TrelloWebhook][commentCard] ignored_missing_card", {
+          eventId: args.eventId,
+          trelloActionId: event.trelloActionId,
+        });
+      }
       await ctx.runMutation(internalTrello.markWebhookEventStatus, {
         eventId: args.eventId,
         status: "ignored",
@@ -1677,7 +2245,25 @@ export const processWebhookEvent: any = internalAction({
     const context = await ctx.runQuery(internalTrello.getTrelloCardContextByCardId, {
       trelloCardId: cardId,
     });
-    if (!context?.task || !context.project) {
+    const contextCorTaskId = context?.task?.corTaskId
+      ? Number(context.task.corTaskId)
+      : undefined;
+    const isPublishedTaskComment =
+      event.actionType === "commentCard" &&
+      typeof contextCorTaskId === "number" &&
+      Number.isFinite(contextCorTaskId);
+
+    if (!context?.task || (!context.project && !isPublishedTaskComment)) {
+      if (event.actionType === "commentCard") {
+        console.log("[TrelloWebhook][commentCard] ignored_missing_mapping", {
+          eventId: args.eventId,
+          trelloActionId: event.trelloActionId,
+          trelloCardId: cardId,
+          hasTask: Boolean(context?.task),
+          hasProject: Boolean(context?.project),
+          hasCorTaskId: Boolean(context?.task?.corTaskId),
+        });
+      }
       await ctx.runMutation(internalTrello.markWebhookEventStatus, {
         eventId: args.eventId,
         status: "ignored",
@@ -1702,142 +2288,20 @@ export const processWebhookEvent: any = internalAction({
 
     try {
       if (event.actionType === "updateCard") {
-        if (Object.prototype.hasOwnProperty.call(oldValues, "name")) {
-          safeUpdates.title = String(card.name ?? "");
-          await ctx.runMutation(internalTrello.recordInboundChange, {
-            eventId: args.eventId,
-            taskId: context.task._id,
-            projectId: context.project._id,
-            trelloCardId: cardId,
-            actionType: event.actionType,
-            field: "title",
-            oldValueJson: jsonValue(oldValues.name),
-            newValueJson: jsonValue(card.name),
-            applied: true,
-            requiresReview: false,
-            note: "Título actualizado desde Trello en Convex. No se publicó en COR.",
-          });
-          appliedCount += 1;
-        }
-
-        if (Object.prototype.hasOwnProperty.call(oldValues, "due")) {
-          if (typeof card.due === "string" && card.due.length > 0) {
-            const businessDeadline = formatDateInBusinessTimeZone(card.due);
-            if (!businessDeadline) {
-              await ctx.runMutation(internalTrello.recordInboundChange, {
-                eventId: args.eventId,
-                taskId: context.task._id,
-                projectId: context.project._id,
-                trelloCardId: cardId,
-                actionType: event.actionType,
-                field: "deadline",
-                oldValueJson: jsonValue(oldValues.due),
-                newValueJson: jsonValue(card.due),
-                applied: false,
-                requiresReview: true,
-                reviewStatus: "pending",
-                note: "Trello envió una fecha inválida; requiere revisión interna.",
-              });
-              reviewCount += 1;
-            } else {
-              safeUpdates.deadline = businessDeadline;
-              await ctx.runMutation(internalTrello.recordInboundChange, {
-                eventId: args.eventId,
-                taskId: context.task._id,
-                projectId: context.project._id,
-                trelloCardId: cardId,
-                actionType: event.actionType,
-                field: "deadline",
-                oldValueJson: jsonValue(oldValues.due),
-                newValueJson: jsonValue({
-                  trelloDue: card.due,
-                  businessDate: businessDeadline,
-                  timeZone: BUSINESS_TIME_ZONE,
-                }),
-                applied: true,
-                requiresReview: false,
-                note: "Deadline actualizado desde Trello como fecha calendario de Ecuador. No se publicó en COR.",
-              });
-              appliedCount += 1;
-            }
-          } else {
-            await ctx.runMutation(internalTrello.recordInboundChange, {
-              eventId: args.eventId,
-              taskId: context.task._id,
-              projectId: context.project._id,
-              trelloCardId: cardId,
-              actionType: event.actionType,
-              field: "deadline",
-              oldValueJson: jsonValue(oldValues.due),
-              newValueJson: jsonValue(card.due),
-              applied: false,
-              requiresReview: true,
-              reviewStatus: "pending",
-              note: "Remover deadline desde Trello requiere revisión interna.",
-            });
-            reviewCount += 1;
-          }
-        }
-
         if (Object.prototype.hasOwnProperty.call(oldValues, "idList")) {
-          const mapping = card.idList
-            ? await ctx.runQuery(internalTrello.getStatusByTrelloListId, {
-                trelloListId: card.idList,
-              })
-            : null;
-
-          if (mapping?.status) {
-            safeUpdates.status = mapping.status;
-            safeUpdates.trelloListId = card.idList;
-            await ctx.runMutation(internalTrello.recordInboundChange, {
-              eventId: args.eventId,
-              taskId: context.task._id,
-              projectId: context.project._id,
-              trelloCardId: cardId,
-              actionType: event.actionType,
-              field: "status",
-              oldValueJson: jsonValue(oldValues.idList),
-              newValueJson: jsonValue(card.idList),
-              applied: true,
-              requiresReview: false,
-              note: "Status actualizado desde lista Trello en Convex. No se publicó en COR.",
-            });
-            appliedCount += 1;
-          } else {
-            await ctx.runMutation(internalTrello.recordInboundChange, {
-              eventId: args.eventId,
-              taskId: context.task._id,
-              projectId: context.project._id,
-              trelloCardId: cardId,
-              actionType: event.actionType,
-              field: "status",
-              oldValueJson: jsonValue(oldValues.idList),
-              newValueJson: jsonValue(card.idList),
-              applied: false,
-              requiresReview: true,
-              reviewStatus: "pending",
-              note: "La lista Trello no tiene mapping local de status.",
-            });
-            reviewCount += 1;
-          }
-        }
-
-        if (Object.prototype.hasOwnProperty.call(oldValues, "desc")) {
-          safeUpdates.description = trelloMarkdownToConvexHtml(String(card.desc ?? ""));
           await ctx.runMutation(internalTrello.recordInboundChange, {
             eventId: args.eventId,
             taskId: context.task._id,
             projectId: context.project._id,
             trelloCardId: cardId,
             actionType: event.actionType,
-            field: "description",
-            oldValueJson: jsonValue(oldValues.desc),
-            newValueJson: jsonValue(card.desc),
-            applied: true,
+            field: "status",
+            oldValueJson: jsonValue(oldValues.idList),
+            newValueJson: jsonValue(card.idList),
+            applied: false,
             requiresReview: false,
-            note: "Descripción completa actualizada desde Trello en Convex como HTML. No se publicó en COR.",
+            note: "Cambio de lista recibido desde Trello. No se actualizó el status en Convex.",
           });
-          appliedCount += 1;
         }
 
         if (Object.prototype.hasOwnProperty.call(oldValues, "closed")) {
@@ -1865,17 +2329,128 @@ export const processWebhookEvent: any = internalAction({
             updates: safeUpdates,
           });
         }
-      } else if (
-        event.actionType === "addAttachmentToCard" ||
-        event.actionType === "deleteAttachmentFromCard" ||
-        event.actionType === "addLabelToCard" ||
-        event.actionType === "removeLabelFromCard"
-      ) {
+      } else if (event.actionType === "commentCard") {
+        const trelloCommentId = action?.id;
+        const commentText = typeof data.text === "string" ? data.text.trim() : "";
+
+        if (!trelloCommentId) {
+          console.log("[TrelloWebhook][commentCard] failed_missing_comment_id", {
+            eventId: args.eventId,
+            trelloActionId: event.trelloActionId,
+            trelloCardId: cardId,
+            taskId: context.task._id,
+          });
+          throw new Error("Evento commentCard sin action.id.");
+        }
+
+        if (!commentText) {
+          await ctx.runMutation(internalTrello.markWebhookEventStatus, {
+            eventId: args.eventId,
+            status: "ignored",
+            taskId: context.task._id,
+            reason: "Comentario de Trello vacío.",
+          });
+          return { success: true, ignored: true };
+        }
+
+        const existingMessage = await ctx.runQuery(
+          (internal as any).data.tasks.getTaskMessageByTrelloCommentId,
+          { trelloCommentId },
+        );
+
+        if (existingMessage) {
+          await ctx.runMutation(internalTrello.markWebhookEventStatus, {
+            eventId: args.eventId,
+            status: "processed",
+            taskId: context.task._id,
+            reason: "Comentario de Trello ya importado.",
+          });
+          return { success: true, duplicate: true };
+        }
+
+        const corTaskId = context.task.corTaskId
+          ? Number(context.task.corTaskId)
+          : undefined;
+        const shouldSyncToCOR =
+          typeof corTaskId === "number" && Number.isFinite(corTaskId);
+
+        const taskMessageId = await ctx.runMutation(
+          (internal as any).data.tasks.createTaskMessageInternal,
+          {
+            taskId: context.task._id,
+            source: "trello",
+            message: commentText,
+            trelloCardId: cardId,
+            trelloCommentId,
+            trelloSyncStatus: "synced",
+            corTaskId: shouldSyncToCOR ? corTaskId : undefined,
+            corMessageSyncStatus: shouldSyncToCOR ? "pending" : "pending_cor_task",
+          },
+        );
+
+        let corSyncStatus = shouldSyncToCOR ? "pending" : "pending_cor_task";
+        let corSyncError: string | undefined;
+
+        if (shouldSyncToCOR) {
+          const provider = getProjectManagementProvider();
+          const result = await provider.postTaskMessage({
+            taskId: corTaskId!,
+            message: formatTrelloCommentForCOR(commentText),
+          });
+
+          corSyncStatus = result.success ? "synced" : "error";
+          corSyncError = result.success
+            ? undefined
+            : result.error || "No se pudo publicar el comentario en COR.";
+
+          await ctx.runMutation(
+            (internal as any).data.tasks.updateTaskMessageSyncStatusInternal,
+            {
+              taskMessageId,
+              corMessageSyncStatus: corSyncStatus,
+              corMessageSyncError: corSyncError,
+            },
+          );
+
+          if (!result.success) {
+            console.error("[TrelloWebhook][commentCard] cor_post_failed", {
+              eventId: args.eventId,
+              trelloCommentId,
+              taskMessageId,
+              corTaskId,
+              error: result.error,
+            });
+          }
+        }
+
+        await ctx.runMutation(internalTrello.recordInboundChange, {
+          eventId: args.eventId,
+          taskId: context.task._id,
+          projectId: context.project?._id,
+          trelloCardId: cardId,
+          actionType: event.actionType,
+          field: "comment_added",
+          oldValueJson: undefined,
+          newValueJson: jsonValue({
+            trelloCommentId,
+            taskMessageId,
+            corTaskId: shouldSyncToCOR ? corTaskId : undefined,
+            corSyncStatus,
+            corSyncError,
+          }),
+          applied: true,
+          requiresReview: false,
+          note:
+            corSyncStatus === "synced"
+              ? "Comentario importado desde Trello y publicado en COR."
+              : shouldSyncToCOR
+                ? "Comentario importado desde Trello; falló la publicación en COR."
+                : "Comentario importado desde Trello; la task aún no está publicada en COR.",
+        });
+        appliedCount += 1;
+      } else if (event.actionType === "deleteAttachmentFromCard") {
         const fieldMap: Record<string, string> = {
-          addAttachmentToCard: "attachment_added",
           deleteAttachmentFromCard: "attachment_removed",
-          addLabelToCard: "label_added",
-          removeLabelFromCard: "label_removed",
         };
         await ctx.runMutation(internalTrello.recordInboundChange, {
           eventId: args.eventId,
@@ -1925,10 +2500,17 @@ export const processWebhookEvent: any = internalAction({
         taskId: context.task._id,
         error: message,
       });
-      await ctx.runMutation(internalTrello.markTaskInboundReviewNeeded, {
-        taskId: context.task._id,
-        error: message,
-      });
+      if (event.actionType === "addAttachmentToCard") {
+        await ctx.runMutation(internalTrello.markTaskInboundSyncError, {
+          taskId: context.task._id,
+          error: message,
+        });
+      } else {
+        await ctx.runMutation(internalTrello.markTaskInboundReviewNeeded, {
+          taskId: context.task._id,
+          error: message,
+        });
+      }
       return { success: false, error: message };
     }
   },
@@ -1950,6 +2532,9 @@ export const syncTrelloWebhookForBrand: any = action({
       clientBrandId: args.clientBrandId,
     });
     if (!brand) throw new Error("Categoría no encontrada.");
+    if (!isTrelloEnabledForCorClientId(brand.corClientId)) {
+      throw new Error(getTrelloDisabledReason(brand.corClientId));
+    }
     if (!brand.trelloBoardId) {
       throw new Error(`La categoría "${brand.name}" no tiene trelloBoardId configurado.`);
     }
@@ -2000,6 +2585,10 @@ export const syncTrelloBoardConfigForBrand: any = action({
 
     if (!brand) {
       throw new Error("Marca no encontrada.");
+    }
+
+    if (!isTrelloEnabledForCorClientId(brand.corClientId)) {
+      throw new Error(getTrelloDisabledReason(brand.corClientId));
     }
 
     if (!brand.trelloBoardId) {

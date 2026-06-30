@@ -7,6 +7,7 @@ import {
   ClipboardEvent,
   FormEvent,
   KeyboardEvent,
+  useCallback,
   useEffect,
   useRef,
   useState,
@@ -38,9 +39,41 @@ export default function LoginPage() {
   const [resendSeconds, setResendSeconds] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const codeRefs = useRef<Array<HTMLInputElement | null>>([]);
+  const lastSubmittedCodeRef = useRef("");
 
   const code = codeValues.join("");
   const canVerify = code.length === CODE_LENGTH && !verifyingCode;
+
+  const getOtpRequestErrorMessage = (error: unknown, fallback: string) => {
+    if (String(error).includes("OTP_RESEND_RATE_LIMITED")) {
+      return "Se alcanzó el límite de reenvíos. Intenta nuevamente en unos minutos.";
+    }
+    return fallback;
+  };
+
+  const verifyCode = useCallback(
+    async (codeToVerify: string) => {
+      if (!otpEmail || codeToVerify.length !== CODE_LENGTH || verifyingCode) {
+        return;
+      }
+
+      lastSubmittedCodeRef.current = codeToVerify;
+
+      try {
+        setError(null);
+        setVerifyingCode(true);
+        await signIn(EXTERNAL_EMAIL_OTP_PROVIDER_ID, {
+          email: otpEmail,
+          code: codeToVerify,
+        });
+      } catch (error) {
+        console.error("Error verifying OTP:", error);
+        setError("El código no es válido o ya expiró.");
+        setVerifyingCode(false);
+      }
+    },
+    [otpEmail, signIn, verifyingCode],
+  );
 
   useEffect(() => {
     if (!isLoading && isAuthenticated) {
@@ -63,6 +96,19 @@ export default function LoginPage() {
     }
   }, [otpEmail]);
 
+  useEffect(() => {
+    if (code.length < CODE_LENGTH) {
+      lastSubmittedCodeRef.current = "";
+      return;
+    }
+
+    if (!otpEmail || verifyingCode || lastSubmittedCodeRef.current === code) {
+      return;
+    }
+
+    void verifyCode(code);
+  }, [code, otpEmail, verifyingCode, verifyCode]);
+
   const requestCode = async (targetEmail: string) => {
     const normalizedEmail = normalizeEmail(targetEmail);
     if (!normalizedEmail) {
@@ -83,6 +129,7 @@ export default function LoginPage() {
     await signIn(EXTERNAL_EMAIL_OTP_PROVIDER_ID, { email: normalizedEmail });
     setOtpEmail(normalizedEmail);
     setCodeValues(Array(CODE_LENGTH).fill(""));
+    lastSubmittedCodeRef.current = "";
     setResendSeconds(30);
     return true;
   };
@@ -95,7 +142,12 @@ export default function LoginPage() {
       await requestCode(email);
     } catch (error) {
       console.error("Error requesting OTP:", error);
-      setError("No se pudo enviar el código. Intenta nuevamente.");
+      setError(
+        getOtpRequestErrorMessage(
+          error,
+          "No se pudo enviar el código. Intenta nuevamente.",
+        ),
+      );
     } finally {
       setRequestingCode(false);
     }
@@ -105,18 +157,7 @@ export default function LoginPage() {
     event.preventDefault();
     if (!canVerify) return;
 
-    try {
-      setError(null);
-      setVerifyingCode(true);
-      await signIn(EXTERNAL_EMAIL_OTP_PROVIDER_ID, {
-        email: otpEmail,
-        code,
-      });
-    } catch (error) {
-      console.error("Error verifying OTP:", error);
-      setError("El código no es válido o ya expiró.");
-      setVerifyingCode(false);
-    }
+    await verifyCode(code);
   };
 
   const handleCodeChange = (index: number, value: string) => {
@@ -158,7 +199,12 @@ export default function LoginPage() {
   };
 
   const handleResendCode = async () => {
-    if (!otpEmail || resendSeconds > 0) return;
+    if (!otpEmail) return;
+
+    if (resendSeconds > 0) {
+      setError("Espera un momento antes de reenviar otro código.");
+      return;
+    }
 
     try {
       setError(null);
@@ -166,7 +212,12 @@ export default function LoginPage() {
       await requestCode(otpEmail);
     } catch (error) {
       console.error("Error resending OTP:", error);
-      setError("No se pudo reenviar el código. Intenta nuevamente.");
+      setError(
+        getOtpRequestErrorMessage(
+          error,
+          "No se pudo reenviar el código. Intenta nuevamente.",
+        ),
+      );
     } finally {
       setResendingCode(false);
     }
@@ -175,6 +226,8 @@ export default function LoginPage() {
   const handleBackToEmail = () => {
     setOtpEmail("");
     setCodeValues(Array(CODE_LENGTH).fill(""));
+    lastSubmittedCodeRef.current = "";
+    setResendSeconds(0);
     setError(null);
   };
 
@@ -285,18 +338,17 @@ export default function LoginPage() {
                     {verifyingCode ? "Verificando..." : "Entrar"}
                   </button>
 
-                  <button
-                    type="button"
-                    onClick={handleResendCode}
-                    disabled={resendingCode || resendSeconds > 0}
-                    className="w-full text-sm font-medium text-slate-300 transition hover:text-white disabled:cursor-not-allowed disabled:opacity-50 cursor-pointer"
-                  >
-                    {resendSeconds > 0
-                      ? `Reenviar código en ${resendSeconds}s`
-                      : resendingCode
-                        ? "Reenviando..."
-                        : "Reenviar código"}
-                  </button>
+                  <p className="text-center text-sm text-slate-400">
+                    ¿No recibiste el código?{" "}
+                    <button
+                      type="button"
+                      onClick={handleResendCode}
+                      disabled={resendingCode}
+                      className="font-medium text-white underline underline-offset-4 transition hover:text-slate-200 disabled:cursor-not-allowed disabled:opacity-50 cursor-pointer"
+                    >
+                      {resendingCode ? "Reenviando..." : "Reenviar código"}
+                    </button>
+                  </p>
                 </form>
               )}
             </section>

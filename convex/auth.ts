@@ -41,12 +41,17 @@ export const { auth, signIn, signOut, store, isAuthenticated } = convexAuth({
           throw new Error("Usuario no autorizado");
         }
 
+        await ctx.runMutation(
+          internal.data.approvedExternalUsers.recordExternalOtpRequest,
+          { email },
+        );
+
         const apiKey = process.env.RESEND_API_KEY;
         if (!apiKey) {
           throw new Error("RESEND_API_KEY no está configurada en Convex.");
         }
 
-        const from = process.env.RESEND_FROM_EMAIL ?? "digital@pto99.com";
+        const from = process.env.RESEND_FROM_EMAIL ?? "Punto99 <digital@pto99.com>";
         const response = await fetch("https://api.resend.com/emails", {
           method: "POST",
           headers: {

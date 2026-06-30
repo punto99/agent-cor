@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useRef, useEffect } from "react";
+import type { ReactNode } from "react";
 import type { Task } from "./types";
 import { formatDate, getStatusColor } from "./types";
 import { useMutation, useQuery } from "convex/react";
@@ -22,8 +23,23 @@ interface EditableInfoItemProps {
   value: string;
   fieldKey: string;
   multiline?: boolean;
+  inputType?: "text" | "number" | "date";
   editable?: boolean;
+  highlightMissing?: boolean;
   onSave?: (fieldKey: string, newValue: string) => Promise<void>;
+}
+
+function toDateInputValue(value: string) {
+  const match = value.match(/^(\d{4})-(\d{2})-(\d{2})(?:$|[ T])/);
+  return match ? `${match[1]}-${match[2]}-${match[3]}` : "";
+}
+
+function getTodayDateInputValue() {
+  const today = new Date();
+  const year = today.getFullYear();
+  const month = String(today.getMonth() + 1).padStart(2, "0");
+  const day = String(today.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
 }
 
 /**
@@ -36,7 +52,9 @@ function EditableInfoItem({
   value,
   fieldKey,
   multiline = false,
+  inputType = "text",
   editable = false,
+  highlightMissing = false,
   onSave,
 }: EditableInfoItemProps) {
   const [isEditing, setIsEditing] = useState(false);
@@ -57,22 +75,29 @@ function EditableInfoItem({
 
   // Sync editValue when external value changes (e.g., after another save)
   useEffect(() => {
-    if (!isEditing) setEditValue(value);
-  }, [value, isEditing]);
+    if (!isEditing) {
+      setEditValue(inputType === "date" ? toDateInputValue(value) : value);
+    }
+  }, [value, isEditing, inputType]);
 
   const handleStartEdit = () => {
-    setEditValue(value);
+    setEditValue(inputType === "date" ? toDateInputValue(value) : value);
     setIsEditing(true);
   };
 
   const handleCancel = () => {
-    setEditValue(value);
+    setEditValue(inputType === "date" ? toDateInputValue(value) : value);
     setIsEditing(false);
   };
 
   const handleSave = async () => {
     if (!onSave) return;
     const trimmed = editValue.trim();
+    if (inputType === "date" && !trimmed) return;
+    if (inputType === "date" && trimmed === toDateInputValue(value)) {
+      setIsEditing(false);
+      return;
+    }
     if (trimmed === value) {
       setIsEditing(false);
       return;
@@ -102,8 +127,19 @@ function EditableInfoItem({
     }
   };
 
+  const showMissingHighlight =
+    highlightMissing && (!isEditing || editValue.trim().length === 0);
+  const borderClass = showMissingHighlight
+    ? "border-red-400 dark:border-red-500"
+    : "border-border";
+  const inputBorderClass = showMissingHighlight
+    ? "border-red-400 focus:ring-red-400/40 dark:border-red-500"
+    : "border-primary/40 focus:ring-primary/50";
+
   return (
-    <div className="bg-card rounded-lg p-3 border border-border shadow-sm group/item">
+    <div
+      className={`bg-card rounded-lg p-3 border ${borderClass} shadow-sm group/item transition-colors`}
+    >
       <div className="flex items-start gap-2">
         <span className="text-lg">{icon}</span>
         <div className="flex-1 min-w-0">
@@ -119,22 +155,30 @@ function EditableInfoItem({
                   onChange={(e) => setEditValue(e.target.value)}
                   onKeyDown={handleKeyDown}
                   rows={3}
-                  className="w-full text-sm text-foreground bg-background border border-primary/40 rounded-md px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-primary/50 resize-none"
+                  className={`w-full text-sm text-foreground bg-background border ${inputBorderClass} rounded-md px-2 py-1.5 focus:outline-none focus:ring-2 resize-none`}
                 />
               ) : (
                 <input
                   ref={inputRef as React.RefObject<HTMLInputElement>}
-                  type="text"
+                  type={inputType}
                   value={editValue}
                   onChange={(e) => setEditValue(e.target.value)}
                   onKeyDown={handleKeyDown}
-                  className="w-full text-sm text-foreground bg-background border border-primary/40 rounded-md px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-primary/50"
+                  min={
+                    inputType === "date" ? getTodayDateInputValue() : undefined
+                  }
+                  className={`w-full text-sm text-foreground bg-background border ${inputBorderClass} rounded-md px-2 py-1.5 focus:outline-none focus:ring-2`}
                 />
+              )}
+              {inputType === "date" && (
+                <p className="mt-1 text-xs text-muted-foreground">
+                  Selecciona una fecha desde el calendario.
+                </p>
               )}
               <div className="flex items-center gap-1.5 mt-1.5">
                 <button
                   onClick={handleSave}
-                  disabled={isSaving}
+                  disabled={isSaving || (inputType === "date" && !editValue)}
                   className="flex items-center gap-1 text-xs px-2 py-1 rounded-md bg-primary text-primary-foreground hover:bg-primary/90 transition-colors disabled:opacity-50 cursor-pointer"
                 >
                   <Check className="h-3 w-3" />
@@ -372,6 +416,10 @@ interface TaskBriefContentProps {
   editable?: boolean;
   /** Estado de sincronización con COR */
   syncStatus?: string;
+  /** Campos adicionales que deben aparecer luego del nombre. */
+  afterTitleItems?: ReactNode;
+  /** Resalta la fecha de fin cuando falta. */
+  highlightMissingDeadline?: boolean;
 }
 
 // Opciones de prioridad para COR (0=Baja, 1=Media, 2=Alta, 3=Urgente)
@@ -589,6 +637,8 @@ export function TaskBriefContent({
   task,
   editable = false,
   syncStatus,
+  afterTitleItems,
+  highlightMissingDeadline = false,
 }: TaskBriefContentProps) {
   const updateTask = useMutation(api.data.tasks.updateTaskFields);
   const attachments = useQuery(api.data.tasks.getTaskAttachmentsPublic, {
@@ -624,6 +674,18 @@ export function TaskBriefContent({
         taskId: task._id,
         updates: {
           strategicPriority: newValue as "I_U" | "I_NU" | "NI_U" | "NI_NU",
+        },
+      });
+      showSyncFeedback();
+      return;
+    }
+    if (fieldKey === "deliverablesCount") {
+      const numValue = parseInt(newValue, 10);
+      await updateTask({
+        taskId: task._id,
+        updates: {
+          deliverablesCount:
+            Number.isFinite(numValue) && numValue > 0 ? numValue : undefined,
         },
       });
       showSyncFeedback();
@@ -723,16 +785,37 @@ export function TaskBriefContent({
           onSave={handleSaveField}
         />
 
+        {afterTitleItems}
+
         {(task.deadline || editable) && (
           <EditableInfoItem
             icon="📅"
             label="Fecha de Fin"
             value={task.deadline || "No especificado"}
             fieldKey="deadline"
+            inputType="date"
+            editable={editable}
+            highlightMissing={highlightMissingDeadline && !task.deadline?.trim()}
+            onSave={handleSaveField}
+          />
+        )}
+
+        {(task.deliverablesCount !== undefined || editable) && (
+          <EditableInfoItem
+            icon="📦"
+            label="Cantidad de Entregables"
+            value={
+              task.deliverablesCount !== undefined
+                ? String(task.deliverablesCount)
+                : ""
+            }
+            fieldKey="deliverablesCount"
+            inputType="number"
             editable={editable}
             onSave={handleSaveField}
           />
         )}
+
         {(task.priority !== undefined || editable) && (
           <EditableSelectItem
             icon="⚡"

@@ -9,6 +9,15 @@ import {
   isProjectManagementEnabled,
 } from "../integrations/registry";
 
+function normalizeClientName(name: string): string {
+  return name
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .trim()
+    .replace(/\s+/g, " ")
+    .toLowerCase();
+}
+
 export const validateUserForClientTool = createTool({
   description: `Validar que el usuario actual existe en el sistema de gestión (COR) y está autorizado para trabajar con un cliente específico.
   Usar INMEDIATAMENTE cuando el usuario indique para qué cliente quiere crear un brief.
@@ -21,6 +30,7 @@ export const validateUserForClientTool = createTool({
   3. El usuario está autorizado para ese cliente
   
   Si alguna falla, devuelve un mensaje de error explicativo. NO continúes con el brief si falla.
+  Si devuelve ambiguousClient: true, pregunta al usuario cuál cliente quiere usar y vuelve a llamar esta herramienta con el nombre exacto elegido.
   Si todo pasa, devuelve los IDs necesarios para crear la task.`,
   args: z.object({
     clientName: z
@@ -126,7 +136,49 @@ export const validateUserForClientTool = createTool({
     let corClient;
 
     try {
-      corClient = await provider.searchClient(args.clientName);
+      if (provider.searchClientsByName) {
+        const { clients } = await provider.searchClientsByName(args.clientName);
+        const normalizedSearch = normalizeClientName(args.clientName);
+        const exactMatches = clients.filter(
+          (client) => normalizeClientName(client.name) === normalizedSearch,
+        );
+
+        if (exactMatches.length === 1) {
+          corClient = exactMatches[0];
+        } else if (exactMatches.length > 1) {
+          const options = exactMatches.map((client) => ({
+            id: client.id,
+            name: client.name,
+          }));
+          const optionText = options
+            .map((client) => `${client.name} (ID: ${client.id})`)
+            .join(", ");
+          return JSON.stringify({
+            authorized: false,
+            ambiguousClient: true,
+            clientOptions: options,
+            error: `Encontré varios clientes que coinciden exactamente con "${args.clientName}": ${optionText}. ¿Cuál quieres usar?`,
+          });
+        } else if (clients.length > 1) {
+          const options = clients.map((client) => ({
+            id: client.id,
+            name: client.name,
+          }));
+          const optionText = options
+            .map((client) => `${client.name} (ID: ${client.id})`)
+            .join(", ");
+          return JSON.stringify({
+            authorized: false,
+            ambiguousClient: true,
+            clientOptions: options,
+            error: `Encontré varios clientes parecidos a "${args.clientName}": ${optionText}. ¿Cuál quieres usar?`,
+          });
+        } else {
+          corClient = clients[0] ?? null;
+        }
+      } else {
+        corClient = await provider.searchClient(args.clientName);
+      }
     } catch (err) {
       console.error(
         "[ValidateUserForClient] Error buscando cliente en COR:",

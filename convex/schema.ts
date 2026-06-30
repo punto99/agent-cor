@@ -43,6 +43,12 @@ export default defineSchema({
     .index("by_email", ["email"])
     .index("by_user", ["userId"]),
 
+  externalOtpRequestLimits: defineTable({
+    email: v.string(),
+    requestTimestamps: v.array(v.number()),
+    updatedAt: v.number(),
+  }).index("by_email", ["email"]),
+
   // Registro de threads de chat del usuario (para diferenciar de threads de evaluación)
   // Esta tabla complementa la tabla threads del agent component para lógica de negocio
   chatThreads: defineTable({
@@ -70,6 +76,7 @@ export default defineSchema({
     title: v.string(),
     description: v.optional(v.string()), // Contiene todos los datos del brief formateados
     deadline: v.optional(v.string()),
+    deliverablesCount: v.optional(v.number()), // Entregables propios de la task (local; no existe en COR)
     priority: v.optional(v.number()), // 0=Low, 1=Medium, 2=High, 3=Urgent
     strategicPriority: v.optional(
       v.union(
@@ -128,10 +135,23 @@ export default defineSchema({
     .index("by_status", ["status"])
     .index("by_createdBy", ["createdBy"])
     .index("by_projectId", ["projectId"])
+    .index("by_projectId_convexStatus", ["projectId", "convexStatus"])
     .index("by_source", ["source"])
     .index("by_clientId", ["clientId"])
     .index("by_clientId_source_status", ["clientId", "source", "status"])
+    .index("by_clientId_source_convexStatus_status", [
+      "clientId",
+      "source",
+      "convexStatus",
+      "status",
+    ])
     .index("by_createdBy_clientId_status", ["createdBy", "clientId", "status"])
+    .index("by_createdBy_clientId_convexStatus_status", [
+      "createdBy",
+      "clientId",
+      "convexStatus",
+      "status",
+    ])
     .index("by_strategicPriority", ["strategicPriority"])
     .index("by_clientBrandId", ["clientBrandId"])
     .index("by_subBrandId", ["subBrandId"])
@@ -140,13 +160,32 @@ export default defineSchema({
       "clientBrandId",
       "status",
     ])
+    .index("by_createdBy_clientBrandId_convexStatus_status", [
+      "createdBy",
+      "clientBrandId",
+      "convexStatus",
+      "status",
+    ])
     .index("by_clientBrandId_source_status", [
       "clientBrandId",
       "source",
       "status",
     ])
+    .index("by_clientBrandId_source_convexStatus_status", [
+      "clientBrandId",
+      "source",
+      "convexStatus",
+      "status",
+    ])
     .index("by_corClientId", ["corClientId"])
     .index("by_corTaskId", ["corTaskId"])
+    .index("by_convexStatus_corTaskId", ["convexStatus", "corTaskId"])
+    .index("by_convexStatus_deadline", ["convexStatus", "deadline"])
+    .index("by_convexStatus_corTaskId_deadline", [
+      "convexStatus",
+      "corTaskId",
+      "deadline",
+    ])
     .index("by_corSyncStatus", ["corSyncStatus"])
     .index("by_trelloCardId", ["trelloCardId"])
     .index("by_trelloSyncStatus", ["trelloSyncStatus"])
@@ -179,6 +218,33 @@ export default defineSchema({
     .index("by_task_and_cor", ["taskId", "corAttachmentId"])
     .index("by_task_and_trello", ["taskId", "trelloAttachmentId"])
     .index("by_trelloSyncStatus", ["trelloSyncStatus"]),
+
+  taskMessages: defineTable({
+    taskId: v.id("tasks"),
+    userId: v.optional(v.id("users")),
+    source: v.union(
+      v.literal("external_agent"),
+      v.literal("trello"),
+      v.literal("cor"),
+      v.literal("internal"),
+    ),
+    message: v.string(),
+    trelloCardId: v.optional(v.string()),
+    trelloCommentId: v.optional(v.string()),
+    trelloSyncStatus: v.optional(v.string()),
+    trelloSyncError: v.optional(v.string()),
+    trelloSyncedAt: v.optional(v.number()),
+    corTaskId: v.optional(v.number()),
+    corMessageSyncStatus: v.optional(v.string()),
+    corMessageSyncError: v.optional(v.string()),
+    corSyncedAt: v.optional(v.number()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_task", ["taskId"])
+    .index("by_user", ["userId"])
+    .index("by_trello_comment", ["trelloCommentId"])
+    .index("by_cor_status", ["corMessageSyncStatus"]),
 
   corInboundSyncState: defineTable({
     key: v.string(),
@@ -273,6 +339,26 @@ export default defineSchema({
     updatedAt: v.number(),
     updatedBy: v.optional(v.string()),
   }).index("by_provider", ["provider"]),
+
+  // Cache temporal de archivos subidos a Google Files API para Gemini.
+  // Convex Storage sigue siendo la fuente de verdad; estos registros expiran.
+  googleFileUploads: defineTable({
+    fileId: v.string(), // ID del archivo en el agent component
+    storageId: v.string(), // ID del blob en Convex storage
+    source: v.literal("chat_user_upload"),
+    filename: v.optional(v.string()),
+    mimeType: v.string(),
+    sizeBytes: v.optional(v.number()),
+    googleFileName: v.string(), // ej: files/abc123
+    googleFileUri: v.string(), // URL/URI que Gemini soporta nativamente
+    state: v.string(), // "ACTIVE" | "PROCESSING" | "FAILED" | etc.
+    uploadedAt: v.number(),
+    expiresAt: v.number(),
+    updatedAt: v.number(),
+    lastError: v.optional(v.string()),
+  })
+    .index("by_file", ["fileId"])
+    .index("by_expiration", ["expiresAt"]),
 
   // =====================================================
   // RAG - Tablas para búsqueda en documentos
@@ -483,6 +569,7 @@ export default defineSchema({
     .index("by_subBrandId", ["subBrandId"])
     .index("by_corClientId", ["corClientId"])
     .index("by_corProjectId", ["corProjectId"])
+    .index("by_convexStatus_endDate", ["convexStatus", "endDate"])
     .index("by_createdBy", ["createdBy"])
     .index("by_threadId", ["threadId"])
     .index("by_corSyncStatus", ["corSyncStatus"])

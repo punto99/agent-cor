@@ -1,6 +1,9 @@
 import { v } from "convex/values";
 import { internalMutation, internalQuery, query } from "../_generated/server";
 
+const OTP_REQUEST_LIMIT = 6;
+const OTP_REQUEST_WINDOW_MS = 15 * 60 * 1000;
+
 function normalizeEmail(email: string) {
   return email.trim().toLowerCase();
 }
@@ -62,6 +65,46 @@ export const linkApprovedExternalUser = internalMutation({
 
     await ctx.db.patch(approvedUser._id, {
       userId: args.userId,
+    });
+  },
+});
+
+export const recordExternalOtpRequest = internalMutation({
+  args: { email: v.string() },
+  handler: async (ctx, args) => {
+    const email = normalizeEmail(args.email);
+    if (!email) {
+      throw new Error("OTP_RESEND_RATE_LIMITED");
+    }
+
+    const now = Date.now();
+    const windowStart = now - OTP_REQUEST_WINDOW_MS;
+    const existing = await (ctx.db as any)
+      .query("externalOtpRequestLimits")
+      .withIndex("by_email", (q: any) => q.eq("email", email))
+      .unique();
+
+    const recentRequests = (existing?.requestTimestamps ?? []).filter(
+      (timestamp: number) => timestamp > windowStart,
+    );
+
+    if (recentRequests.length >= OTP_REQUEST_LIMIT) {
+      throw new Error("OTP_RESEND_RATE_LIMITED");
+    }
+
+    const requestTimestamps = [...recentRequests, now];
+    if (existing) {
+      await (ctx.db as any).patch(existing._id, {
+        requestTimestamps,
+        updatedAt: now,
+      });
+      return;
+    }
+
+    await (ctx.db as any).insert("externalOtpRequestLimits", {
+      email,
+      requestTimestamps,
+      updatedAt: now,
     });
   },
 });

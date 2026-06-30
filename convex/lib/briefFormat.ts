@@ -64,6 +64,7 @@ export function isStrategicPriority(value: string): value is StrategicPriority {
  *
  * IMPORTANTE: Solo incluye campos que NO tienen field dedicado en la task.
  * - deadline → se guarda en task.deadline (NO en description)
+ * - launchDate → se guarda en description para el flujo de usuarios externos
  * - deliverables (texto) → se guarda en description
  * - priority → se guarda en task.priority (NO en description)
  * - title → se guarda en task.title (NO en description)
@@ -77,6 +78,7 @@ export function buildBriefDescription(fields: {
   keyMessage?: string;
   kpis?: string;
   deadline?: string; // Ignorado — se guarda en task.deadline
+  launchDate?: string; // Incluido como texto en description para usuarios externos
   deliverables?: string; // Incluido como texto en description
   budget?: string;
   approvers?: string;
@@ -89,6 +91,11 @@ export function buildBriefDescription(fields: {
   );
   // Marca NO se incluye — se guarda en task.corClientName (field dedicado)
   // deadline NO se incluye — tiene field dedicado
+  if (fields.launchDate) {
+    lines.push(
+      `<strong>Fecha de lanzamiento:</strong> ${formatDescriptionValue(fields.launchDate)}`,
+    );
+  }
   if (fields.deliverables) {
     lines.push(
       `<strong>Entregables:</strong> ${formatDescriptionValue(fields.deliverables, true)}`,

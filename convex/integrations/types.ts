@@ -32,6 +32,10 @@ export interface ExternalClient {
   condition?: string;
 }
 
+export interface ClientSearchResult {
+  clients: ExternalClient[];
+}
+
 /** Marca tal como existe en COR */
 export interface ExternalBrand {
   id: number;
@@ -146,6 +150,24 @@ export interface UpdateProjectInput {
   productId?: number;
 }
 
+export interface ListProjectsInput {
+  clientId: number;
+  dateEnd?: string;
+  brandId?: number;
+  productId?: number;
+  page?: number;
+  perPage?: number;
+  archived?: 1 | 2;
+}
+
+export interface ListProjectsResult {
+  projects: ExternalProject[];
+  page: number;
+  perPage: number;
+  total?: number;
+  lastPage?: number;
+}
+
 export interface UploadTaskAttachmentInput {
   /** ID de la task en el sistema externo */
   taskId: number;
@@ -163,6 +185,22 @@ export interface ExternalAttachmentResult {
   url: string;
   name: string;
   size: number;
+  type?: string;
+  source?: string;
+}
+
+export interface TaskMessageAttachmentInput {
+  id: number;
+  name: string;
+  url: string;
+  type?: string;
+  source?: string;
+}
+
+export interface PostTaskMessageInput {
+  taskId: number;
+  message: string;
+  attachments?: TaskMessageAttachmentInput[];
 }
 
 // ==================== INTERFACE PRINCIPAL ====================
@@ -195,6 +233,12 @@ export interface ProjectManagementProvider {
   searchClient(name: string): Promise<ExternalClient | null>;
 
   /**
+   * Buscar clientes/marcas por nombre en el sistema externo.
+   * Retorna todos los candidatos disponibles para permitir desambiguación.
+   */
+  searchClientsByName?(name: string): Promise<ClientSearchResult>;
+
+  /**
    * Crear un proyecto en el sistema externo.
    * En COR: POST /projects
    * El proyecto agrupa tasks y está asociado a un cliente.
@@ -218,6 +262,12 @@ export interface ProjectManagementProvider {
    * Retorna null si no se encuentra.
    */
   getProject(projectId: number): Promise<ExternalProject | null>;
+
+  /**
+   * Listar proyectos del sistema externo con filtros.
+   * En COR: GET /projects?filters={...}
+   */
+  listProjects(data: ListProjectsInput): Promise<ListProjectsResult>;
 
   /**
    * Actualizar una task existente en el sistema externo.
@@ -258,6 +308,14 @@ export interface ProjectManagementProvider {
     attachment?: ExternalAttachmentResult;
     error?: string;
   }>;
+
+  /**
+   * Publicar un mensaje/comentario en una task.
+   * En COR: POST /tasks/{task_id}/messages
+   */
+  postTaskMessage(
+    data: PostTaskMessageInput,
+  ): Promise<{ success: boolean; error?: string }>;
 
   /**
    * Listar TODOS los usuarios del sistema externo.

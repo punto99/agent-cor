@@ -7,6 +7,7 @@ import {
   query,
 } from "../_generated/server";
 import { canUserAccessInternalUserAdmin } from "../lib/internalUserAdminAccess";
+import { isTrelloEnabledForCorClientId } from "../lib/trelloPolicy";
 
 function normalizeEmail(email: string) {
   return email.trim().toLowerCase();
@@ -35,12 +36,14 @@ async function requireExternalUserAdmin(ctx: any) {
 function getExternalStatus(args: {
   hasUser: boolean;
   assignedBrandCount: number;
+  trelloRequired: boolean;
   trelloMemberId?: string;
   trelloMemberSyncStatus?: string;
   missingBoardCount: number;
 }) {
   if (!args.hasUser) return "pending_registration" as const;
   if (args.assignedBrandCount === 0) return "missing_categories" as const;
+  if (!args.trelloRequired) return "ready" as const;
   if (!args.trelloMemberId) return "missing_trello" as const;
   if (args.missingBoardCount > 0) return "missing_boards" as const;
   if (args.trelloMemberSyncStatus === "verified") return "ready" as const;
@@ -138,12 +141,17 @@ export const getDashboard = query({
             brandId: assignment.brandId,
             assignedAt: assignment.assignedAt,
             brandName: brand?.name,
+            corClientId: brand?.corClientId,
             trelloBoardId: brand?.trelloBoardId,
+            trelloEnabled: isTrelloEnabledForCorClientId(brand?.corClientId),
           };
         });
       const missingBoardCount = brandAssignments.filter(
-        (assignment) => !assignment.trelloBoardId,
+        (assignment) => assignment.trelloEnabled && !assignment.trelloBoardId,
       ).length;
+      const trelloRequired = brandAssignments.some(
+        (assignment) => assignment.trelloEnabled,
+      );
 
       users.push({
         _id: approvedUser._id,
@@ -165,6 +173,7 @@ export const getDashboard = query({
         status: getExternalStatus({
           hasUser: Boolean(approvedUser.userId),
           assignedBrandCount: brandAssignments.length,
+          trelloRequired,
           trelloMemberId: approvedUser.trelloMemberId,
           trelloMemberSyncStatus: approvedUser.trelloMemberSyncStatus,
           missingBoardCount,
@@ -352,7 +361,9 @@ export const getExternalTrelloContext = internalQuery({
         _id: brand._id,
         name: brand.name,
         clientId: brand.clientId,
+        corClientId: brand.corClientId,
         trelloBoardId: brand.trelloBoardId,
+        trelloEnabled: isTrelloEnabledForCorClientId(brand.corClientId),
       });
     }
 
@@ -403,6 +414,9 @@ export const setClientBrandTrelloBoard = internalMutation({
   handler: async (ctx, args) => {
     const brand = await ctx.db.get(args.clientBrandId);
     if (!brand) throw new Error("No encontramos esta categoría.");
+    if (!isTrelloEnabledForCorClientId(brand.corClientId)) {
+      throw new Error("Esta categoría no está habilitada para Trello.");
+    }
 
     await ctx.db.patch(args.clientBrandId, {
       trelloBoardId: args.trelloBoardId,

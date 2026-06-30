@@ -2,7 +2,7 @@
 // Sistema de fallback para LLMs: Gemini -> OpenAI GPT
 // Si Gemini falla, automáticamente usa GPT-5.5 como respaldo
 
-import { google } from "@ai-sdk/google";
+import { createGoogleGenerativeAI } from "@ai-sdk/google";
 import { openai } from "@ai-sdk/openai";
 import type { LanguageModel } from "ai";
 
@@ -41,10 +41,59 @@ export interface LLMHealthCheckResult {
  */
 export const LLM_CALL_TIMEOUT_MS = 180_000;
 
+function getBodySizeBytes(body: BodyInit | null | undefined): number | undefined {
+  if (!body) return undefined;
+  if (typeof body === "string") return new TextEncoder().encode(body).byteLength;
+  if (body instanceof Uint8Array) return body.byteLength;
+  if (body instanceof ArrayBuffer) return body.byteLength;
+  if (body instanceof Blob) return body.size;
+  return undefined;
+}
+
+function getFetchTarget(input: RequestInfo | URL): string {
+  if (typeof input === "string") return input;
+  if (input instanceof URL) return input.toString();
+  return input.url;
+}
+
+function getFetchPath(input: RequestInfo | URL): string {
+  try {
+    const url = new URL(getFetchTarget(input));
+    return `${url.origin}${url.pathname}`;
+  } catch {
+    return "unknown";
+  }
+}
+
+const googleWithDiagnostics = createGoogleGenerativeAI({
+  fetch: async (input, init) => {
+    const startedAt = Date.now();
+    const target = getFetchPath(input);
+    const bodySize = getBodySizeBytes(init?.body);
+    console.log(
+      `[GeminiFetch] -> ${init?.method || "GET"} ${target} bodyBytes=${bodySize ?? "unknown"}`
+    );
+
+    try {
+      const response = await fetch(input, init);
+      console.log(
+        `[GeminiFetch] <- status=${response.status} ok=${response.ok} durationMs=${Date.now() - startedAt}`
+      );
+      return response;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.error(
+        `[GeminiFetch] !! failed durationMs=${Date.now() - startedAt} error=${message}`
+      );
+      throw error;
+    }
+  },
+});
+
 // Modelo principal: Gemini 3.5 Flash
 export const geminiConfig: LLMConfig = {
   provider: "gemini",
-  model: google("gemini-3.5-flash"),
+  model: googleWithDiagnostics("gemini-3.5-flash"),
   modelId: "gemini-3.5-flash",
   providerOptions: {
     google: {

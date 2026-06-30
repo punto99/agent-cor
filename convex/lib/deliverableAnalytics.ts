@@ -1,3 +1,5 @@
+import { isExcludedUserId } from "./excludedUsers";
+
 const ROLLUP_SHARDS = 16;
 
 type RollupScope = "global" | "client" | "brand" | "subBrand";
@@ -5,6 +7,7 @@ type RollupScope = "global" | "client" | "brand" | "subBrand";
 type ProjectSnapshot = {
   _id?: unknown;
   convexStatus?: "active" | "deleted";
+  createdBy?: unknown;
   deliverables?: number;
   clientId?: unknown;
   corClientId?: number;
@@ -102,6 +105,7 @@ function getDimensions(project: ProjectSnapshot): RollupDimensions[] {
 
 function getContributions(project?: ProjectSnapshot | null): RollupContribution[] {
   if (!project || project.convexStatus === "deleted") return [];
+  if (isExcludedUserId(project.createdBy)) return [];
 
   const deliverables = positiveDeliverables(project.deliverables);
   if (deliverables === 0) return [];
