@@ -499,6 +499,7 @@ export function TaskDetailDialog({
     syncStatus === "synced" ||
     Boolean((liveTask as any)?.corTaskId ?? task.corTaskId);
   const liveTaskDeadline = (liveTask as any)?.deadline ?? task.deadline;
+  const isDeadlineMissing = !liveTaskDeadline?.trim();
   const publishDeadlineError = getPublishDeadlineError(liveTaskDeadline);
   const pendingExternalMessages = useQuery(
     api.data.tasks.listPendingExternalTaskMessages,
@@ -1181,6 +1182,9 @@ export function TaskDetailDialog({
                     editable={canEditFromDialog}
                     syncStatus={syncStatus}
                     afterTitleItems={taxonomyItems}
+                    highlightMissingDeadline={
+                      !isPublishedInCOR && !liveCorTaskId && isDeadlineMissing
+                    }
                   />
                 </>
               )}

@@ -1416,7 +1416,9 @@ export const validateAndPrepareTask = internalQuery({
 export const validateAndPrepareExternalTask = internalQuery({
   args: {
     threadId: v.string(),
-    clientBrandId: v.id("clientBrands"),
+    clientBrandId: v.optional(v.id("clientBrands")),
+    localClientId: v.optional(v.id("corClients")),
+    corClientId: v.optional(v.number()),
     subBrandId: v.optional(v.id("subBrands")),
   },
   handler: async (ctx, args) => {
@@ -1458,46 +1460,111 @@ export const validateAndPrepareExternalTask = internalQuery({
       };
     }
 
-    const brand = await ctx.db.get(args.clientBrandId);
-    if (!brand) {
+    let brand = args.clientBrandId ? await ctx.db.get(args.clientBrandId) : null;
+    if (args.clientBrandId && !brand) {
       return {
         ok: false as const,
         error: "❌ La categoría seleccionada no existe.",
       };
     }
-    if (!brand.clientId) {
-      return {
-        ok: false as const,
-        error:
-          "❌ La categoría no está vinculada a un cliente local. Contacta al administrador.",
-      };
+
+    let client = null as any;
+    if (brand) {
+      if (!brand.clientId) {
+        return {
+          ok: false as const,
+          error:
+            "❌ La categoría no está vinculada a un cliente local. Contacta al administrador.",
+        };
+      }
+      client = await ctx.db.get(brand.clientId);
+    } else if (args.localClientId) {
+      client = await ctx.db.get(args.localClientId);
+    } else if (args.corClientId !== undefined) {
+      client = await ctx.db
+        .query("corClients")
+        .withIndex("by_corClientId", (q) =>
+          q.eq("corClientId", args.corClientId!),
+        )
+        .unique();
     }
 
-    const client = await ctx.db.get(brand.clientId);
     if (!client) {
       return {
         ok: false as const,
-        error: "❌ El cliente asociado a esta categoría no existe localmente.",
+        error: "❌ El cliente seleccionado no existe localmente.",
       };
     }
 
     const assignments = await ctx.db
       .query("clientUserAssignments")
       .withIndex("by_client_and_user", (q) =>
-        q.eq("clientId", brand.clientId!).eq("userId", userId),
+        q.eq("clientId", client._id).eq("userId", userId),
       )
       .collect();
 
-    const hasAccess = assignments.some(
-      (assignment) =>
-        assignment.brandId === undefined ||
-        assignment.brandId === args.clientBrandId,
-    );
+    const hasAccess = brand
+      ? assignments.some(
+          (assignment) =>
+            assignment.brandId === undefined ||
+            assignment.brandId === args.clientBrandId,
+        )
+      : assignments.some((assignment) => assignment.brandId === undefined);
 
     if (!hasAccess) {
       return {
         ok: false as const,
-        error: `❌ No tienes autorización para crear briefs para la categoría "${brand.name}".`,
+        error: brand
+          ? `❌ No tienes autorización para crear briefs para la categoría "${brand.name}".`
+          : `❌ No tienes autorización para crear briefs para este cliente.`,
+      };
+    }
+
+    if (!brand) {
+      const clientBrands = await ctx.db
+        .query("clientBrands")
+        .withIndex("by_client", (q) => q.eq("clientId", client._id))
+        .collect();
+
+      if (clientBrands.length > 0) {
+        return {
+          ok: false as const,
+          error: "❌ Este cliente requiere seleccionar una categoría antes de crear el requerimiento.",
+          availableCategories: clientBrands.map((candidate) => ({
+            clientBrandId: String(candidate._id),
+            name: candidate.name,
+          })),
+        };
+      }
+
+      if (args.subBrandId) {
+        return {
+          ok: false as const,
+          error:
+            "❌ Este cliente no tiene marcas configuradas. No envíes una marca adicional para este requerimiento.",
+        };
+      }
+
+      const existingProject = await ctx.db
+        .query("projects")
+        .withIndex("by_threadId", (q) => q.eq("threadId", args.threadId))
+        .unique();
+
+      return {
+        ok: true as const,
+        userId: String(userId),
+        localClientId: client._id,
+        corClientId: client.corClientId,
+        corClientName: client.name,
+        clientBrandId: undefined,
+        corBrandId: undefined,
+        brandName: undefined,
+        trelloBoardId: undefined,
+        trelloBoardUrl: undefined,
+        subBrandId: undefined,
+        corProductId: undefined,
+        subBrandName: undefined,
+        existingProjectId: existingProject?._id || undefined,
       };
     }
 
@@ -1620,6 +1687,7 @@ export const createProjectAndTask = internalMutation({
       args.taskSource === "external" || args.projectSource === "external";
     const trelloRequired =
       isExternalCreation &&
+      Boolean(args.taskClientBrandId ?? args.projectClientBrandId) &&
       isTrelloEnabledForCorClientId(
         args.taskCorClientId ?? args.projectCorClientId,
       );

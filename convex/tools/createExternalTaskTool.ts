@@ -54,10 +54,28 @@ export const createExternalTaskTool = createTool({
     requestType: z.string().describe("Tipo de requerimiento - OBLIGATORIO"),
     clientBrandId: z
       .string()
+      .optional()
       .describe(
-        "ID local de clientBrands validado con validateExternalUserForBrand. De cara al usuario esto es la categoría - OBLIGATORIO",
+        "ID local de clientBrands validado con validateExternalUserForBrand. De cara al usuario esto es la categoría. Obligatorio solo cuando el cliente tiene categorías.",
       ),
-    brand: z.string().describe("Categoría validada - OBLIGATORIO"),
+    localClientId: z
+      .string()
+      .optional()
+      .describe(
+        "ID local de corClients validado con validateExternalUserForBrand cuando el cliente no tiene categorías.",
+      ),
+    corClientId: z
+      .number()
+      .optional()
+      .describe(
+        "ID COR del cliente validado con validateExternalUserForBrand cuando el cliente no tiene categorías.",
+      ),
+    brand: z
+      .string()
+      .optional()
+      .describe(
+        "Categoría validada si existe; si el cliente no tiene categorías, puede omitirse.",
+      ),
     subBrandId: z
       .string()
       .optional()
@@ -122,8 +140,8 @@ export const createExternalTaskTool = createTool({
       return "No se puede crear el requerimiento sin una fecha de lanzamiento exacta o aproximada. Pregunta al cliente por una fecha o referencia aproximada.";
     }
 
-    if (!args.clientBrandId) {
-      return `No se puede crear el requerimiento sin una categoría validada. Usa primero "validateExternalUserForBrand".`;
+    if (!args.clientBrandId && !args.localClientId && args.corClientId === undefined) {
+      return `No se puede crear el requerimiento sin un cliente o categoría validada. Usa primero "validateExternalUserForBrand".`;
     }
 
     const preparation = await ctx.runQuery(
@@ -131,6 +149,8 @@ export const createExternalTaskTool = createTool({
       {
         threadId,
         clientBrandId: args.clientBrandId as any,
+        localClientId: args.localClientId as any,
+        corClientId: args.corClientId,
         subBrandId: args.subBrandId as any,
       },
     );
@@ -139,9 +159,9 @@ export const createExternalTaskTool = createTool({
       return preparation.error;
     }
 
-    const trelloEnabled = isTrelloEnabledForCorClientId(
-      preparation.corClientId,
-    );
+    const trelloEnabled =
+      Boolean(preparation.clientBrandId) &&
+      isTrelloEnabledForCorClientId(preparation.corClientId);
     if (trelloEnabled) {
       const trelloAccess = await ctx.runAction(
         (internal as any).data.trello.validateExternalUserBoardMembership,
@@ -156,10 +176,13 @@ export const createExternalTaskTool = createTool({
       }
     }
 
-    const fullTitle = `${preparation.brandName} - ${args.title}`;
+    const titlePrefix = preparation.brandName || preparation.corClientName;
+    const fullTitle = titlePrefix
+      ? `${titlePrefix} - ${args.title}`
+      : args.title;
     const description = buildBriefDescription({
       requestType: args.requestType,
-      brand: preparation.brandName,
+      brand: preparation.brandName || preparation.corClientName,
       launchDate: args.launchDate,
       deliverables: args.deliverables,
       objective: args.objective,
@@ -254,7 +277,7 @@ export const createExternalTaskTool = createTool({
           taskId: result.taskId as any,
           title: args.title,
           requestType: args.requestType,
-          brand: preparation.brandName,
+          brand: preparation.brandName || preparation.corClientName,
           objective: args.objective,
           keyMessage: args.keyMessage,
           kpis: args.kpis,

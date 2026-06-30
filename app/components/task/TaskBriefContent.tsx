@@ -25,6 +25,7 @@ interface EditableInfoItemProps {
   multiline?: boolean;
   inputType?: "text" | "number" | "date";
   editable?: boolean;
+  highlightMissing?: boolean;
   onSave?: (fieldKey: string, newValue: string) => Promise<void>;
 }
 
@@ -53,6 +54,7 @@ function EditableInfoItem({
   multiline = false,
   inputType = "text",
   editable = false,
+  highlightMissing = false,
   onSave,
 }: EditableInfoItemProps) {
   const [isEditing, setIsEditing] = useState(false);
@@ -125,8 +127,19 @@ function EditableInfoItem({
     }
   };
 
+  const showMissingHighlight =
+    highlightMissing && (!isEditing || editValue.trim().length === 0);
+  const borderClass = showMissingHighlight
+    ? "border-red-400 dark:border-red-500"
+    : "border-border";
+  const inputBorderClass = showMissingHighlight
+    ? "border-red-400 focus:ring-red-400/40 dark:border-red-500"
+    : "border-primary/40 focus:ring-primary/50";
+
   return (
-    <div className="bg-card rounded-lg p-3 border border-border shadow-sm group/item">
+    <div
+      className={`bg-card rounded-lg p-3 border ${borderClass} shadow-sm group/item transition-colors`}
+    >
       <div className="flex items-start gap-2">
         <span className="text-lg">{icon}</span>
         <div className="flex-1 min-w-0">
@@ -142,7 +155,7 @@ function EditableInfoItem({
                   onChange={(e) => setEditValue(e.target.value)}
                   onKeyDown={handleKeyDown}
                   rows={3}
-                  className="w-full text-sm text-foreground bg-background border border-primary/40 rounded-md px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-primary/50 resize-none"
+                  className={`w-full text-sm text-foreground bg-background border ${inputBorderClass} rounded-md px-2 py-1.5 focus:outline-none focus:ring-2 resize-none`}
                 />
               ) : (
                 <input
@@ -154,7 +167,7 @@ function EditableInfoItem({
                   min={
                     inputType === "date" ? getTodayDateInputValue() : undefined
                   }
-                  className="w-full text-sm text-foreground bg-background border border-primary/40 rounded-md px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-primary/50"
+                  className={`w-full text-sm text-foreground bg-background border ${inputBorderClass} rounded-md px-2 py-1.5 focus:outline-none focus:ring-2`}
                 />
               )}
               {inputType === "date" && (
@@ -405,6 +418,8 @@ interface TaskBriefContentProps {
   syncStatus?: string;
   /** Campos adicionales que deben aparecer luego del nombre. */
   afterTitleItems?: ReactNode;
+  /** Resalta la fecha de fin cuando falta. */
+  highlightMissingDeadline?: boolean;
 }
 
 // Opciones de prioridad para COR (0=Baja, 1=Media, 2=Alta, 3=Urgente)
@@ -623,6 +638,7 @@ export function TaskBriefContent({
   editable = false,
   syncStatus,
   afterTitleItems,
+  highlightMissingDeadline = false,
 }: TaskBriefContentProps) {
   const updateTask = useMutation(api.data.tasks.updateTaskFields);
   const attachments = useQuery(api.data.tasks.getTaskAttachmentsPublic, {
@@ -779,6 +795,7 @@ export function TaskBriefContent({
             fieldKey="deadline"
             inputType="date"
             editable={editable}
+            highlightMissing={highlightMissingDeadline && !task.deadline?.trim()}
             onSave={handleSaveField}
           />
         )}
