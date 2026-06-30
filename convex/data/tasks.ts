@@ -1284,10 +1284,12 @@ export const validateAndPrepareTask = internalQuery({
     threadId: v.string(),
     corClientId: v.optional(v.number()),
     corUserId: v.optional(v.number()),
-    clientBrandId: v.optional(v.id("clientBrands")),
+    clientBrandId: v.optional(v.string()),
     requireIntegration: v.boolean(),
   },
   handler: async (ctx, args) => {
+    const clientBrandId = normalizeClientBrandId(ctx, args.clientBrandId);
+
     // 1. userId del thread
     const chatThread = await ctx.db
       .query("chatThreads")
@@ -1361,9 +1363,9 @@ export const validateAndPrepareTask = internalQuery({
           (assignment) => assignment.brandId === undefined,
         );
         const hasBrandAccess =
-          args.clientBrandId !== undefined &&
+          clientBrandId !== undefined &&
           assignments.some(
-            (assignment) => assignment.brandId === args.clientBrandId,
+            (assignment) => assignment.brandId === clientBrandId,
           );
         if (!hasFullAccess && !hasBrandAccess) {
           return {
@@ -2002,6 +2004,15 @@ export const backfillTaskDeliverablesCount = internalMutation({
 
 function normalizeClientName(name: string) {
   return name.trim().toLowerCase().replace(/\s+/g, " ");
+}
+
+function normalizeClientBrandId(
+  ctx: any,
+  value: string | undefined,
+): Id<"clientBrands"> | undefined {
+  const trimmed = value?.trim();
+  if (!trimmed) return undefined;
+  return ctx.db.normalizeId("clientBrands", trimmed) ?? undefined;
 }
 
 /**

@@ -76,7 +76,7 @@ export const createTaskTool = createTool({
       .string()
       .optional()
       .describe(
-        "ID local de clientBrands si validateUserForClient devolvio categorías para el cliente.",
+        "ID local de clientBrands solo si validateUserForClient lo devolvio literalmente. Si no tienes un ID real, omite este campo; no envies string vacio ni inventes IDs.",
       ),
     subBrand: z
       .string()
@@ -88,7 +88,7 @@ export const createTaskTool = createTool({
       .string()
       .optional()
       .describe(
-        "ID local de subBrands si validateUserForClient devolvio marcas para la categoría.",
+        "ID local de subBrands solo si validateUserForClient lo devolvio literalmente. Si no tienes un ID real, omite este campo; no envies string vacio ni inventes IDs.",
       ),
     deadline: z
       .string()
@@ -204,7 +204,7 @@ export const createTaskTool = createTool({
         threadId,
         corClientId: args.corClientId,
         corUserId: args.corUserId,
-        clientBrandId: args.clientBrandId as any,
+        clientBrandId: args.clientBrandId,
         requireIntegration: integrationEnabled,
       },
     );
@@ -224,9 +224,9 @@ export const createTaskTool = createTool({
           {
             clientId: localClientId as any,
             brandName: args.brand,
-            clientBrandId: args.clientBrandId as any,
+            clientBrandId: args.clientBrandId,
             subBrandName: args.subBrand,
-            subBrandId: args.subBrandId as any,
+            subBrandId: args.subBrandId,
           },
         )
       : { ok: true as const, requiresBrand: false };
