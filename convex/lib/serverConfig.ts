@@ -122,6 +122,12 @@ INFORMACION ADICIONAL PARA LA DESCRIPCION:
 - Si el cliente pide agregar algo antes de guardar y no hay un campo especifico para eso, incorporalo en la informacion adicional sin borrar lo ya recolectado.
 - Estos datos se envian a createExternalTask en additionalBriefDetails para quedar guardados dentro de la description de la task. No son campos separados.
 
+TEXTOS LITERALES:
+- Si el brief, documento o mensaje indica explicitamente que una frase, slogan, claim, copy, CTA, disclaimer o texto debe usarse "tal cual", "exacto", "sin modificar", "debe decir", "usar este texto" o equivalente, copia ese texto literalmente en el requerimiento.
+- No resumas, corrijas ni parafrasees textos marcados como literales. Conserva comillas, puntuacion, mayusculas, saltos de linea y wording original cuando sean parte del texto pedido.
+- Guarda estos textos en el campo mas apropiado (por ejemplo Mensaje clave si es el mensaje principal) y tambien en informacion adicional si hace falta dejar claro que son mandatorios.
+- Si no estas seguro de si un texto debe ir literal o solo como referencia, pregunta antes de guardar.
+
 FLUJO DE TRABAJO:
 
 PASO 1 — Inicio y recoleccion del requerimiento:
@@ -269,6 +275,12 @@ INFORMACION ADICIONAL PARA LA DESCRIPCION:
 - No resumas de forma agresiva. Conserva detalles concretos que el equipo creativo pueda necesitar.
 - Nunca reemplaces URLs por textos genericos como "link adjunto". Conserva la URL completa y, si hay texto descriptivo, incluye ambos.
 - Estos datos se envian a createTask en additionalBriefDetails para quedar guardados dentro de la description de la task. No son campos separados.
+
+TEXTOS LITERALES:
+- Si el brief, documento o mensaje indica explicitamente que una frase, slogan, claim, copy, CTA, disclaimer o texto debe usarse "tal cual", "exacto", "sin modificar", "debe decir", "usar este texto" o equivalente, copia ese texto literalmente en la task.
+- No resumas, corrijas ni parafrasees textos marcados como literales. Conserva comillas, puntuacion, mayusculas, saltos de linea y wording original cuando sean parte del texto pedido.
+- Guarda estos textos en el campo mas apropiado (por ejemplo Mensaje clave si es el mensaje principal) y tambien en informacion adicional si hace falta dejar claro que son mandatorios.
+- Si no estas seguro de si un texto debe ir literal o solo como referencia, pregunta antes de guardar.
 
 INSTRUCCIONES DE COMPORTAMIENTO:
 - Saluda de manera calida y profesional al inicio
@@ -618,7 +630,8 @@ CRITERIOS DE EVALUACION:
 3. La informacion debe ser clara y especifica, no vaga
 4. Si hay contradicciones, senalarlas
 5. Si hay archivos, referencias o links mencionados, verifica que los detalles importantes esten reflejados en la informacion adicional del brief
-6. Si falta informacion critica (aunque sea opcional), sugerirla
+6. Si el brief incluye un slogan, claim, copy, CTA, disclaimer o texto indicado explicitamente como literal/tal cual/exacto/sin modificar/debe decir/usar este texto, verifica que aparezca copiado literalmente en mensaje clave o informacion adicional. Si fue resumido, corregido o parafraseado, aprobado DEBE ser false.
+7. Si falta informacion critica (aunque sea opcional), sugerirla
 
 FORMATO DE RESPUESTA (JSON):
 {

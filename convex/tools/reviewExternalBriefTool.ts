@@ -37,6 +37,7 @@ CRITERIOS:
 3. La informacion debe ser clara y especifica, no vaga.
 4. Si hay contradicciones, senalalas.
 5. Si hay archivos, referencias o links mencionados, verifica que los detalles importantes esten reflejados en la informacion adicional.
+6. Si el brief incluye un slogan, claim, copy, CTA, disclaimer o texto indicado explicitamente como literal/tal cual/exacto/sin modificar/debe decir/usar este texto, verifica que aparezca copiado literalmente en mensaje clave o informacion adicional. Si fue resumido, corregido o parafraseado, aprobado DEBE ser false.
 
 Responde solo JSON con este formato:
 {
