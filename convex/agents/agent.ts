@@ -3,7 +3,7 @@
 import { Agent } from "@convex-dev/agent";
 import { components } from "../_generated/api";
 import { google } from "@ai-sdk/google";
-import { createTaskTool, reviewBriefTool, editTaskTool, attachFileToTaskTool, getTaskTool, getProjectTool, editProjectTool, nowTool, validateUserForClientTool } from "../tools";
+import { createTaskTool, reviewBriefTool, editTaskTool, attachFileToTaskTool, getTaskTool, getProjectTool, editProjectTool, nowTool, validateUserForClientTool, getClientKnowledgeTool } from "../tools";
 import { agentConfig, getBriefAgentInstructions } from "../lib/serverConfig";
 import { isProjectManagementEnabled } from "../integrations/registry";
 
@@ -24,6 +24,7 @@ const agentTools: Record<string, any> = {
   getProject: getProjectTool,
   editProject: editProjectTool,
   now: nowTool,
+  getClientKnowledge: getClientKnowledgeTool,
 };
 
 // Conditionally add integration-specific tools

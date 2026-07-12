@@ -33,9 +33,13 @@ import { applyProjectDeliverablesDelta } from "../lib/deliverableAnalytics";
 const SCHEDULED_SYNC_STATE_KEY = "scheduled-cor-inbound-sync";
 const SCHEDULED_EXPIRED_SYNC_STATE_KEY = "scheduled-expired-cor-inbound-sync";
 const SCHEDULED_SYNC_LEASE_MS = 8 * 60 * 1000;
-const SCHEDULED_TASKS_PER_RUN = 20;
-const SCHEDULED_PROJECTS_PER_RUN = 10;
-const SCHEDULED_WORKER_STAGGER_MS = 750;
+const SCHEDULED_TASKS_PER_PAGE = 100;
+const SCHEDULED_PROJECTS_PER_PAGE = 100;
+const SCHEDULED_MAX_WORKERS_PER_DISPATCH = 800;
+const SCHEDULED_MAX_PAGES_PER_DISPATCH = 50;
+const SCHEDULED_WORKERS_PER_DELAY_BATCH = 100;
+const SCHEDULED_WORKER_BATCH_STAGGER_MS = 250;
+const SCHEDULED_DISPATCHER_CONTINUE_DELAY_MS = 1_000;
 const SCHEDULED_ATTACHMENT_DELAY_MS = 30_000;
 const MAX_COR_ATTACHMENT_BYTES = 25 * 1024 * 1024;
 const MAX_COR_ATTACHMENTS_PER_TASK = 5;
@@ -451,18 +455,16 @@ export const pullFromCORAction = internalAction({
         );
 
         if (taskUpdateResult?.statusChanged) {
-          await ctx.scheduler.runAfter(
-            0,
-            (internal as any).data.trello.syncTaskStatusFromCORToTrello,
-            { taskId: args.taskId },
+          await ctx.runMutation(
+            (internal as any).data.trello.enqueueTrelloOutboundSyncFromCOR,
+            { taskId: args.taskId, kind: "status" },
           );
         }
 
         if (taskUpdateResult?.trelloFieldsChanged) {
-          await ctx.scheduler.runAfter(
-            0,
-            (internal as any).data.trello.syncTaskFieldsFromCORToTrello,
-            { taskId: args.taskId },
+          await ctx.runMutation(
+            (internal as any).data.trello.enqueueTrelloOutboundSyncFromCOR,
+            { taskId: args.taskId, kind: "fields" },
           );
         }
 
@@ -536,81 +538,163 @@ export const pullFromCORAction = internalAction({
   },
 });
 
+export const emergencyCancelInboundSchedules = mutation({
+  args: {},
+  handler: async (ctx) => {
+    const scheduled = await ctx.db.system
+      .query("_scheduled_functions")
+      .collect();
+
+    let cancelled = 0;
+    for (const item of scheduled) {
+      const serialized = JSON.stringify(item);
+      if (
+        serialized.includes("corInboundSync") ||
+        serialized.includes("processTrelloOutboundSyncQueue") ||
+        serialized.includes("syncTaskFieldsFromCORToTrello") ||
+        serialized.includes("syncTaskStatusFromCORToTrello")
+      ) {
+        await ctx.scheduler.cancel(item._id);
+        cancelled += 1;
+      }
+    }
+
+    return { cancelled };
+  },
+});
+
 // ==================== SCHEDULED INBOUND SYNC (cron) ====================
 
-function normalizeScheduledIndex(index: number, length: number) {
-  return ((index % length) + length) % length;
+type ScheduledCursorMap = Record<string, string>;
+type ScheduledEntity = "tasks" | "projects";
+
+function parseScheduledCursorMap(raw: unknown): ScheduledCursorMap {
+  if (typeof raw !== "string" || raw.trim() === "") return {};
+  try {
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return {};
+    }
+
+    const cursors: ScheduledCursorMap = {};
+    for (const [key, value] of Object.entries(parsed)) {
+      if (typeof value === "string" && value !== "") {
+        cursors[key] = value;
+      }
+    }
+    return cursors;
+  } catch {
+    return {};
+  }
+}
+
+function stringifyScheduledCursorMap(cursors: ScheduledCursorMap): string {
+  return JSON.stringify(cursors);
+}
+
+function getScheduledCursorKey(
+  entity: ScheduledEntity,
+  dateMode: ScheduledDateMode,
+  bucketKey: string,
+) {
+  return `v2|${entity}|${dateMode}|${bucketKey}`;
+}
+
+function isInvalidCursorError(error: unknown) {
+  return (
+    error instanceof Error &&
+    (error.message.includes("InvalidCursor") ||
+      error.message.includes("cursor is from a different query"))
+  );
 }
 
 async function getNextScheduledTaskPage(
   ctx: any,
   args: {
     bucketIndex: number;
-    cursor: string;
+    cursorMap: ScheduledCursorMap;
     numItems: number;
     dateMode: ScheduledDateMode;
     dateKey: string;
   },
 ) {
-  let bucketIndex = normalizeScheduledIndex(
-    args.bucketIndex,
-    SCHEDULED_TASK_BUCKETS.length,
-  );
-  let cursor: string | null = args.cursor || null;
+  let bucketIndex = Math.max(0, args.bucketIndex);
+  const cursorMap = { ...args.cursorMap };
 
-  for (
-    let attempt = 0;
-    attempt < SCHEDULED_TASK_BUCKETS.length;
-    attempt += 1
-  ) {
+  while (bucketIndex < SCHEDULED_TASK_BUCKETS.length) {
     const bucket = SCHEDULED_TASK_BUCKETS[bucketIndex];
     if (args.dateMode === "expired" && bucket.includeUndated) {
-      bucketIndex = normalizeScheduledIndex(
-        bucketIndex + 1,
-        SCHEDULED_TASK_BUCKETS.length,
-      );
-      cursor = null;
+      bucketIndex += 1;
       continue;
     }
 
-    const page = await ctx.runQuery(
-      internal.data.corInboundSync.listTasksForScheduledPull,
-      {
-        convexStatus: bucket.convexStatus,
-        dateMode: args.dateMode,
-        dateKey: args.dateKey,
-        includeUndated: bucket.includeUndated,
-        paginationOpts: {
-          cursor,
-          numItems: args.numItems,
-        },
-      },
+    const cursorKey = getScheduledCursorKey(
+      "tasks",
+      args.dateMode,
+      bucket.key,
     );
+    const runQueryArgs = {
+      convexStatus: bucket.convexStatus,
+      dateMode: args.dateMode,
+      dateKey: args.dateKey,
+      includeUndated: bucket.includeUndated,
+    };
+    let page;
+    try {
+      page = await ctx.runQuery(
+        internal.data.corInboundSync.listTasksForScheduledPull,
+        {
+          ...runQueryArgs,
+          paginationOpts: {
+            cursor: cursorMap[cursorKey] || null,
+            numItems: args.numItems,
+          },
+        },
+      );
+    } catch (error) {
+      if (!isInvalidCursorError(error)) throw error;
+      console.warn(
+        `[InboundSync][Cron] Cursor inválido para tasks ${cursorKey}; se reintenta desde el inicio del bucket.`,
+      );
+      delete cursorMap[cursorKey];
+      page = await ctx.runQuery(
+        internal.data.corInboundSync.listTasksForScheduledPull,
+        {
+          ...runQueryArgs,
+          paginationOpts: {
+            cursor: null,
+            numItems: args.numItems,
+          },
+        },
+      );
+    }
 
-    const nextBucketIndex = page.isDone
-      ? normalizeScheduledIndex(bucketIndex + 1, SCHEDULED_TASK_BUCKETS.length)
-      : bucketIndex;
-    const nextCursor = page.isDone ? "" : page.continueCursor;
+    const nextBucketIndex = page.isDone ? bucketIndex + 1 : bucketIndex;
+    if (page.isDone) {
+      delete cursorMap[cursorKey];
+    } else {
+      cursorMap[cursorKey] = page.continueCursor;
+    }
 
     if (page.page.length > 0 || !page.isDone) {
       return {
         bucket: bucket.key,
         page: page.page,
         nextBucketIndex,
-        nextCursor,
+        nextCursorMap: cursorMap,
+        exhausted: false,
       };
     }
 
     bucketIndex = nextBucketIndex;
-    cursor = null;
   }
 
-  const bucket = SCHEDULED_TASK_BUCKETS[bucketIndex];
   return {
-    bucket: bucket.key,
+    bucket: "",
     page: [],
-    nextBucketIndex: bucketIndex,
-    nextCursor: "",
+    nextBucketIndex: SCHEDULED_TASK_BUCKETS.length,
+    nextCursorMap: cursorMap,
+    exhausted: true,
   };
 }
 
@@ -618,74 +702,89 @@ async function getNextScheduledProjectPage(
   ctx: any,
   args: {
     bucketIndex: number;
-    cursor: string;
+    cursorMap: ScheduledCursorMap;
     numItems: number;
     dateMode: ScheduledDateMode;
     dateKey: string;
   },
 ) {
-  let bucketIndex = normalizeScheduledIndex(
-    args.bucketIndex,
-    SCHEDULED_PROJECT_BUCKETS.length,
-  );
-  let cursor: string | null = args.cursor || null;
+  let bucketIndex = Math.max(0, args.bucketIndex);
+  const cursorMap = { ...args.cursorMap };
 
-  for (
-    let attempt = 0;
-    attempt < SCHEDULED_PROJECT_BUCKETS.length;
-    attempt += 1
-  ) {
+  while (bucketIndex < SCHEDULED_PROJECT_BUCKETS.length) {
     const bucket = SCHEDULED_PROJECT_BUCKETS[bucketIndex];
     if (args.dateMode === "expired" && bucket.includeUndated) {
-      bucketIndex = normalizeScheduledIndex(
-        bucketIndex + 1,
-        SCHEDULED_PROJECT_BUCKETS.length,
-      );
-      cursor = null;
+      bucketIndex += 1;
       continue;
     }
 
-    const page = await ctx.runQuery(
-      internal.data.corInboundSync.listProjectsForScheduledPull,
-      {
-        convexStatus: bucket.convexStatus,
-        dateMode: args.dateMode,
-        dateKey: args.dateKey,
-        includeUndated: bucket.includeUndated,
-        paginationOpts: {
-          cursor,
-          numItems: args.numItems,
-        },
-      },
+    const cursorKey = getScheduledCursorKey(
+      "projects",
+      args.dateMode,
+      bucket.key,
     );
+    const runQueryArgs = {
+      convexStatus: bucket.convexStatus,
+      dateMode: args.dateMode,
+      dateKey: args.dateKey,
+      includeUndated: bucket.includeUndated,
+    };
+    let page;
+    try {
+      page = await ctx.runQuery(
+        internal.data.corInboundSync.listProjectsForScheduledPull,
+        {
+          ...runQueryArgs,
+          paginationOpts: {
+            cursor: cursorMap[cursorKey] || null,
+            numItems: args.numItems,
+          },
+        },
+      );
+    } catch (error) {
+      if (!isInvalidCursorError(error)) throw error;
+      console.warn(
+        `[InboundSync][Cron] Cursor inválido para projects ${cursorKey}; se reintenta desde el inicio del bucket.`,
+      );
+      delete cursorMap[cursorKey];
+      page = await ctx.runQuery(
+        internal.data.corInboundSync.listProjectsForScheduledPull,
+        {
+          ...runQueryArgs,
+          paginationOpts: {
+            cursor: null,
+            numItems: args.numItems,
+          },
+        },
+      );
+    }
 
-    const nextBucketIndex = page.isDone
-      ? normalizeScheduledIndex(
-          bucketIndex + 1,
-          SCHEDULED_PROJECT_BUCKETS.length,
-        )
-      : bucketIndex;
-    const nextCursor = page.isDone ? "" : page.continueCursor;
+    const nextBucketIndex = page.isDone ? bucketIndex + 1 : bucketIndex;
+    if (page.isDone) {
+      delete cursorMap[cursorKey];
+    } else {
+      cursorMap[cursorKey] = page.continueCursor;
+    }
 
     if (page.page.length > 0 || !page.isDone) {
       return {
         bucket: bucket.key,
         page: page.page,
         nextBucketIndex,
-        nextCursor,
+        nextCursorMap: cursorMap,
+        exhausted: false,
       };
     }
 
     bucketIndex = nextBucketIndex;
-    cursor = null;
   }
 
-  const bucket = SCHEDULED_PROJECT_BUCKETS[bucketIndex];
   return {
-    bucket: bucket.key,
+    bucket: "",
     page: [],
-    nextBucketIndex: bucketIndex,
-    nextCursor: "",
+    nextBucketIndex: SCHEDULED_PROJECT_BUCKETS.length,
+    nextCursorMap: cursorMap,
+    exhausted: true,
   };
 }
 
@@ -702,20 +801,37 @@ export const listTasksForScheduledPull = internalQuery({
     paginationOpts: paginationOptsValidator,
   },
   handler: async (ctx, args) => {
-    const dateRange = (q: any) => {
-      if (args.includeUndated) return q.eq("deadline", undefined);
+    const matchesDateMode = (deadline: unknown) => {
+      if (args.includeUndated) return deadline === undefined;
+      if (typeof deadline !== "string" || deadline.trim() === "") return false;
       if (args.dateMode === "expired") {
-        return q.gt("deadline", "").lt("deadline", args.dateKey);
+        return deadline < args.dateKey;
       }
-      return q.gte("deadline", args.dateKey);
+      return deadline >= args.dateKey;
     };
 
-    return await ctx.db
+    const page = await ctx.db
       .query("tasks")
-      .withIndex("by_convexStatus_deadline", (q) =>
-        dateRange(q.eq("convexStatus", args.convexStatus)),
+      .withIndex("by_convexStatus", (q) =>
+        q.eq("convexStatus", args.convexStatus),
       )
+      .order("desc")
       .paginate(args.paginationOpts);
+
+    return {
+      ...page,
+      page: page.page.filter((task) => {
+        if (task.status === "finalizada") return false;
+        if (!task.corTaskId) return false;
+        if (
+          task.corSyncStatus === "syncing" ||
+          task.corSyncStatus === "retrying"
+        ) {
+          return false;
+        }
+        return matchesDateMode(task.deadline);
+      }),
+    };
   },
 });
 
@@ -732,20 +848,37 @@ export const listProjectsForScheduledPull = internalQuery({
     paginationOpts: paginationOptsValidator,
   },
   handler: async (ctx, args) => {
-    const dateRange = (q: any) => {
-      if (args.includeUndated) return q.eq("endDate", undefined);
+    const matchesDateMode = (endDate: unknown) => {
+      if (args.includeUndated) return endDate === undefined;
+      if (typeof endDate !== "string" || endDate.trim() === "") return false;
       if (args.dateMode === "expired") {
-        return q.gt("endDate", "").lt("endDate", args.dateKey);
+        return endDate < args.dateKey;
       }
-      return q.gte("endDate", args.dateKey);
+      return endDate >= args.dateKey;
     };
 
-    return await ctx.db
+    const page = await ctx.db
       .query("projects")
-      .withIndex("by_convexStatus_endDate", (q) =>
-        dateRange(q.eq("convexStatus", args.convexStatus)),
+      .withIndex("by_convexStatus", (q) =>
+        q.eq("convexStatus", args.convexStatus),
       )
+      .order("desc")
       .paginate(args.paginationOpts);
+
+    return {
+      ...page,
+      page: page.page.filter((project) => {
+        if (project.status === "finished") return false;
+        if (!project.corProjectId) return false;
+        if (
+          project.corSyncStatus === "syncing" ||
+          project.corSyncStatus === "retrying"
+        ) {
+          return false;
+        }
+        return matchesDateMode(project.endDate);
+      }),
+    };
   },
 });
 
@@ -767,15 +900,29 @@ export const claimScheduledInboundSyncRun = internalMutation({
       };
     }
 
-    const baseState = {
-      taskStatusIndex: existing?.taskStatusIndex ?? 0,
-      taskCursor: existing?.taskCursor ?? "",
-      projectStatusIndex: existing?.projectStatusIndex ?? 0,
-      projectCursor: existing?.projectCursor ?? "",
+    const baseState: {
+      taskStatusIndex: number;
+      taskBucketCursors: ScheduledCursorMap;
+      projectStatusIndex: number;
+      projectBucketCursors: ScheduledCursorMap;
+    } = {
+      taskStatusIndex: 0,
+      taskBucketCursors: {},
+      projectStatusIndex: 0,
+      projectBucketCursors: {},
     };
 
     const patch = {
-      ...baseState,
+      taskStatusIndex: baseState.taskStatusIndex,
+      taskCursor: "",
+      taskBucketCursorsJson: stringifyScheduledCursorMap(
+        baseState.taskBucketCursors,
+      ),
+      projectStatusIndex: baseState.projectStatusIndex,
+      projectCursor: "",
+      projectBucketCursorsJson: stringifyScheduledCursorMap(
+        baseState.projectBucketCursors,
+      ),
       leaseUntil: now + SCHEDULED_SYNC_LEASE_MS,
       lastRunAt: now,
       lastError: "",
@@ -802,9 +949,9 @@ export const completeScheduledInboundSyncRun = internalMutation({
   args: {
     stateKey: v.string(),
     taskStatusIndex: v.number(),
-    taskCursor: v.string(),
+    taskBucketCursorsJson: v.string(),
     projectStatusIndex: v.number(),
-    projectCursor: v.string(),
+    projectBucketCursorsJson: v.string(),
     taskCount: v.number(),
     projectCount: v.number(),
   },
@@ -818,9 +965,11 @@ export const completeScheduledInboundSyncRun = internalMutation({
     const now = Date.now();
     await ctx.db.patch(state._id, {
       taskStatusIndex: args.taskStatusIndex,
-      taskCursor: args.taskCursor,
+      taskCursor: "",
+      taskBucketCursorsJson: args.taskBucketCursorsJson,
       projectStatusIndex: args.projectStatusIndex,
-      projectCursor: args.projectCursor,
+      projectCursor: "",
+      projectBucketCursorsJson: args.projectBucketCursorsJson,
       leaseUntil: 0,
       lastCompletedAt: now,
       lastError: "",
@@ -848,6 +997,183 @@ export const failScheduledInboundSyncRun = internalMutation({
       lastError: args.error,
       updatedAt: Date.now(),
     });
+  },
+});
+
+export const extendScheduledInboundSyncRun = internalMutation({
+  args: {
+    stateKey: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const state = await ctx.db
+      .query("corInboundSyncState")
+      .withIndex("by_key", (q) => q.eq("key", args.stateKey))
+      .unique();
+    if (!state) return;
+
+    const now = Date.now();
+    await ctx.db.patch(state._id, {
+      leaseUntil: now + SCHEDULED_SYNC_LEASE_MS,
+      updatedAt: now,
+    });
+  },
+});
+
+function getScheduledWorkerDelay(workerIndex: number) {
+  return (
+    Math.floor(workerIndex / SCHEDULED_WORKERS_PER_DELAY_BATCH) *
+    SCHEDULED_WORKER_BATCH_STAGGER_MS
+  );
+}
+
+export const dispatchScheduledInboundSyncPage = internalAction({
+  args: {
+    stateKey: v.string(),
+    dateMode: v.union(v.literal("current"), v.literal("expired")),
+    dateKey: v.string(),
+    label: v.string(),
+    taskStatusIndex: v.number(),
+    taskBucketCursorsJson: v.string(),
+    projectStatusIndex: v.number(),
+    projectBucketCursorsJson: v.string(),
+    totalTaskCount: v.number(),
+    totalProjectCount: v.number(),
+    tasksExhausted: v.boolean(),
+    projectsExhausted: v.boolean(),
+  },
+  handler: async (ctx, args) => {
+    let taskStatusIndex = args.taskStatusIndex;
+    let taskBucketCursors = parseScheduledCursorMap(
+      args.taskBucketCursorsJson,
+    );
+    let projectStatusIndex = args.projectStatusIndex;
+    let projectBucketCursors = parseScheduledCursorMap(
+      args.projectBucketCursorsJson,
+    );
+    let totalTaskCount = args.totalTaskCount;
+    let totalProjectCount = args.totalProjectCount;
+    let scheduledWorkers = 0;
+    let scannedPages = 0;
+    let tasksExhausted = args.tasksExhausted;
+    let projectsExhausted = args.projectsExhausted;
+
+    try {
+      while (
+        !tasksExhausted &&
+        scheduledWorkers < SCHEDULED_MAX_WORKERS_PER_DISPATCH &&
+        scannedPages < SCHEDULED_MAX_PAGES_PER_DISPATCH
+      ) {
+        const tasksPage = await getNextScheduledTaskPage(ctx, {
+          bucketIndex: taskStatusIndex,
+          cursorMap: taskBucketCursors,
+          numItems: SCHEDULED_TASKS_PER_PAGE,
+          dateMode: args.dateMode,
+          dateKey: args.dateKey,
+        });
+        scannedPages += 1;
+        taskStatusIndex = tasksPage.nextBucketIndex;
+        taskBucketCursors = tasksPage.nextCursorMap;
+        tasksExhausted = tasksPage.exhausted;
+
+        for (const task of tasksPage.page as Array<{ _id: Id<"tasks"> }>) {
+          await ctx.scheduler.runAfter(
+            getScheduledWorkerDelay(scheduledWorkers),
+            internal.data.corInboundSync.pullTaskFromCORWorker,
+            { taskId: task._id },
+          );
+          scheduledWorkers += 1;
+          totalTaskCount += 1;
+        }
+      }
+
+      while (
+        tasksExhausted &&
+        !projectsExhausted &&
+        scheduledWorkers < SCHEDULED_MAX_WORKERS_PER_DISPATCH &&
+        scannedPages < SCHEDULED_MAX_PAGES_PER_DISPATCH
+      ) {
+        const projectsPage = await getNextScheduledProjectPage(ctx, {
+          bucketIndex: projectStatusIndex,
+          cursorMap: projectBucketCursors,
+          numItems: SCHEDULED_PROJECTS_PER_PAGE,
+          dateMode: args.dateMode,
+          dateKey: args.dateKey,
+        });
+        scannedPages += 1;
+        projectStatusIndex = projectsPage.nextBucketIndex;
+        projectBucketCursors = projectsPage.nextCursorMap;
+        projectsExhausted = projectsPage.exhausted;
+
+        for (const project of projectsPage.page as Array<{
+          _id: Id<"projects">;
+        }>) {
+          await ctx.scheduler.runAfter(
+            getScheduledWorkerDelay(scheduledWorkers),
+            internal.data.corInboundSync.pullProjectFromCORWorker,
+            { projectId: project._id },
+          );
+          scheduledWorkers += 1;
+          totalProjectCount += 1;
+        }
+      }
+
+      if (tasksExhausted && projectsExhausted) {
+        await ctx.runMutation(
+          internal.data.corInboundSync.completeScheduledInboundSyncRun,
+          {
+            stateKey: args.stateKey,
+            taskStatusIndex,
+            taskBucketCursorsJson:
+              stringifyScheduledCursorMap(taskBucketCursors),
+            projectStatusIndex,
+            projectBucketCursorsJson:
+              stringifyScheduledCursorMap(projectBucketCursors),
+            taskCount: totalTaskCount,
+            projectCount: totalProjectCount,
+          },
+        );
+
+        console.log(
+          `[InboundSync][Cron] ✅ Corrida ${args.label} despachada completa. Tasks: ${totalTaskCount}, Proyectos: ${totalProjectCount}`,
+        );
+        return;
+      }
+
+      await ctx.runMutation(
+        internal.data.corInboundSync.extendScheduledInboundSyncRun,
+        { stateKey: args.stateKey },
+      );
+      await ctx.scheduler.runAfter(
+        SCHEDULED_DISPATCHER_CONTINUE_DELAY_MS,
+        internal.data.corInboundSync.dispatchScheduledInboundSyncPage,
+        {
+          stateKey: args.stateKey,
+          dateMode: args.dateMode,
+          dateKey: args.dateKey,
+          label: args.label,
+          taskStatusIndex,
+          taskBucketCursorsJson: stringifyScheduledCursorMap(taskBucketCursors),
+          projectStatusIndex,
+          projectBucketCursorsJson:
+            stringifyScheduledCursorMap(projectBucketCursors),
+          totalTaskCount,
+          totalProjectCount,
+          tasksExhausted,
+          projectsExhausted,
+        },
+      );
+
+      console.log(
+        `[InboundSync][Cron] ↪️ Corrida ${args.label} continúa. Workers despachados en este bloque: ${scheduledWorkers}, acumulado tasks/proyectos: ${totalTaskCount}/${totalProjectCount}`,
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      await ctx.runMutation(
+        internal.data.corInboundSync.failScheduledInboundSyncRun,
+        { stateKey: args.stateKey, error: message },
+      );
+      throw error;
+    }
   },
 });
 
@@ -880,56 +1206,31 @@ async function runScheduledInboundSync(
   }
 
   try {
-    const tasksPage = await getNextScheduledTaskPage(ctx, {
-      bucketIndex: state.taskStatusIndex,
-      cursor: state.taskCursor,
-      numItems: SCHEDULED_TASKS_PER_RUN,
-      dateMode: args.dateMode,
-      dateKey,
-    });
-
-    const projectsPage = await getNextScheduledProjectPage(ctx, {
-      bucketIndex: state.projectStatusIndex,
-      cursor: state.projectCursor,
-      numItems: SCHEDULED_PROJECTS_PER_RUN,
-      dateMode: args.dateMode,
-      dateKey,
-    });
-
-    let delay = 0;
-    for (const task of tasksPage.page as Array<{ _id: Id<"tasks"> }>) {
-      await ctx.scheduler.runAfter(
-        delay,
-        internal.data.corInboundSync.pullTaskFromCORWorker,
-        { taskId: task._id },
-      );
-      delay += SCHEDULED_WORKER_STAGGER_MS;
-    }
-
-    for (const project of projectsPage.page as Array<{ _id: Id<"projects"> }>) {
-      await ctx.scheduler.runAfter(
-        delay,
-        internal.data.corInboundSync.pullProjectFromCORWorker,
-        { projectId: project._id },
-      );
-      delay += SCHEDULED_WORKER_STAGGER_MS;
-    }
-
-    await ctx.runMutation(
-      internal.data.corInboundSync.completeScheduledInboundSyncRun,
+    await ctx.scheduler.runAfter(
+      0,
+      internal.data.corInboundSync.dispatchScheduledInboundSyncPage,
       {
         stateKey: args.stateKey,
-        taskStatusIndex: tasksPage.nextBucketIndex,
-        taskCursor: tasksPage.nextCursor,
-        projectStatusIndex: projectsPage.nextBucketIndex,
-        projectCursor: projectsPage.nextCursor,
-        taskCount: tasksPage.page.length,
-        projectCount: projectsPage.page.length,
+        dateMode: args.dateMode,
+        dateKey,
+        label: args.label,
+        taskStatusIndex: state.taskStatusIndex,
+        taskBucketCursorsJson: stringifyScheduledCursorMap(
+          state.taskBucketCursors,
+        ),
+        projectStatusIndex: state.projectStatusIndex,
+        projectBucketCursorsJson: stringifyScheduledCursorMap(
+          state.projectBucketCursors,
+        ),
+        totalTaskCount: 0,
+        totalProjectCount: 0,
+        tasksExhausted: false,
+        projectsExhausted: false,
       },
     );
 
     console.log(
-      `[InboundSync][Cron] ✅ Corrida ${args.label} despachada. Tasks: ${tasksPage.page.length} (${tasksPage.bucket}), Proyectos: ${projectsPage.page.length} (${projectsPage.bucket})`,
+      `[InboundSync][Cron] 🚀 Dispatcher ${args.label} agendado para despachar todos los registros elegibles`,
     );
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -943,7 +1244,7 @@ async function runScheduledInboundSync(
 
 /**
  * Orquestador programado por cron frecuente.
- * Avanza por lotes pequeños sobre tasks/proyectos no vencidos y continúa en la próxima corrida.
+ * Dispara un dispatcher que recorre todos los registros vigentes elegibles.
  */
 export const runScheduledInboundSyncAction = internalAction({
   args: {},
@@ -1062,18 +1363,18 @@ export const pullTaskFromCORWorker = internalAction({
     );
 
     if (taskUpdateResult?.statusChanged) {
-      await ctx.scheduler.runAfter(
-        0,
-        (internal as any).data.trello.syncTaskStatusFromCORToTrello,
-        { taskId: args.taskId },
+      await ctx.runMutation(
+        (internal as any).data.trello.enqueueTrelloOutboundSyncFromCOR,
+        { taskId: args.taskId, kind: "status" },
       );
     }
 
-    await ctx.scheduler.runAfter(
-      0,
-      (internal as any).data.trello.syncTaskFieldsFromCORToTrello,
-      { taskId: args.taskId },
-    );
+    if (taskUpdateResult?.trelloFieldsChanged) {
+      await ctx.runMutation(
+        (internal as any).data.trello.enqueueTrelloOutboundSyncFromCOR,
+        { taskId: args.taskId, kind: "fields" },
+      );
+    }
 
     await ctx.scheduler.runAfter(
       SCHEDULED_ATTACHMENT_DELAY_MS,
@@ -1126,6 +1427,18 @@ export const pullTaskAttachmentsFromCORWorker = internalAction({
     }
 
     await syncTaskAttachmentsFromCOR(ctx, args.taskId, args.corTaskId);
+
+    try {
+      await ctx.runAction(
+        (internal as any).data.trello.syncClientAttachmentsFromCORToTrello,
+        { taskId: args.taskId },
+      );
+    } catch (error) {
+      console.warn(
+        `[InboundSync][Attachments] ⚠️ No se pudieron sincronizar attachments cliente a Trello para task ${args.taskId}:`,
+        error,
+      );
+    }
   },
 });
 

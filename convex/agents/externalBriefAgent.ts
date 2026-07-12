@@ -10,6 +10,7 @@ import {
   reviewExternalBriefTool,
   nowTool,
   validateExternalUserForBrandTool,
+  getClientKnowledgeTool,
 } from "../tools";
 import { agentConfig, getExternalBriefAgentInstructions } from "../lib/serverConfig";
 
@@ -28,6 +29,7 @@ export const externalBriefAgent = new Agent(components.agent, {
     createExternalTask: createExternalTaskTool,
     editExternalTask: editExternalTaskTool,
     now: nowTool,
+    getClientKnowledge: getClientKnowledgeTool,
   },
 
   maxSteps: 8,

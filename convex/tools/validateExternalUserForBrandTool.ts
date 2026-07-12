@@ -3,6 +3,27 @@ import { z } from "zod";
 import { internal } from "../_generated/api";
 import { isTrelloEnabledForCorClientId } from "../lib/trelloPolicy";
 
+async function loadClientKnowledge(ctx: any, corClientId: number) {
+  try {
+    const knowledge = await ctx.runQuery(
+      (internal as any).data.clientKnowledge.getForAgent,
+      {
+        corClientId,
+        audience: "external",
+      },
+    );
+
+    if (!knowledge?.agency && !knowledge?.client) return undefined;
+    return knowledge;
+  } catch (error) {
+    console.error(
+      "[ValidateExternalUserForBrand] Error cargando clientKnowledge:",
+      error,
+    );
+    return undefined;
+  }
+}
+
 function normalizeText(value: string) {
   return value
     .trim()
@@ -124,6 +145,8 @@ export const validateExternalUserForBrandTool = createTool({
           });
         }
 
+        const knowledge = await loadClientKnowledge(ctx, target.corClientId);
+
         return JSON.stringify({
           authorized: true,
           localClientId: String(target.clientId),
@@ -134,6 +157,7 @@ export const validateExternalUserForBrandTool = createTool({
           requiresBrand: false,
           requiresSubBrand: false,
           trelloEnabled: false,
+          knowledge,
         });
       }
 
@@ -208,6 +232,7 @@ export const validateExternalUserForBrandTool = createTool({
       internal.data.subBrands.listByBrandInternal,
       { clientBrandId: brand._id as any },
     );
+    const knowledge = await loadClientKnowledge(ctx, brand.corClientId);
 
     return JSON.stringify({
       authorized: true,
@@ -225,6 +250,7 @@ export const validateExternalUserForBrandTool = createTool({
         name: subBrand.name,
         corProductId: subBrand.corProductId,
       })),
+      knowledge,
     });
   },
 });

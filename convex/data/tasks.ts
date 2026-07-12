@@ -46,6 +46,7 @@ const MARKDOWN_LINK_PATTERN = /\[[^\]]+\]\(https?:\/\/[^\s)]+(?:\s+"[^"]*")?\)/;
 
 const MIN_PUBLISHABLE_DESCRIPTION_LENGTH = 40;
 const DESCRIPTION_MIN_REMAINING_RATIO = 0.35;
+const TRELLO_ATTACHMENT_SYNC_STALE_MS = 10 * 60 * 1000;
 
 async function isExternalUser(ctx: any, userId: any) {
   const approvedExternalUser = await ctx.db
@@ -905,15 +906,6 @@ export const updateTaskFields = mutation({
       );
     }
 
-    const updateKeys = Object.keys(updateData);
-    if (updateKeys.includes("description")) {
-      const descriptionError = validateDescriptionUpdate(
-        task.description,
-        updateData.description,
-      );
-      if (descriptionError) throw new Error(descriptionError);
-    }
-
     // Agregar timestamp de edición local
     updateData.lastLocalEditAt = Date.now();
 
@@ -1088,8 +1080,41 @@ export const updateAttachmentTrelloSync = internalMutation({
       trelloAttachmentUrl: args.trelloAttachmentUrl,
       trelloSyncStatus: "synced",
       trelloSyncError: undefined,
+      trelloSyncStartedAt: undefined,
       trelloSyncedAt: Date.now(),
     });
+  },
+});
+
+export const claimAttachmentTrelloSync = internalMutation({
+  args: {
+    taskId: v.id("tasks"),
+    attachmentId: v.id("taskAttachments"),
+  },
+  handler: async (ctx, args) => {
+    const attachment = await ctx.db.get(args.attachmentId);
+    if (!attachment || attachment.taskId !== args.taskId) return null;
+    if (attachment.trelloAttachmentId) return null;
+
+    const now = Date.now();
+    const syncStartedAt =
+      typeof attachment.trelloSyncStartedAt === "number"
+        ? attachment.trelloSyncStartedAt
+        : 0;
+    if (
+      attachment.trelloSyncStatus === "syncing" &&
+      now - syncStartedAt < TRELLO_ATTACHMENT_SYNC_STALE_MS
+    ) {
+      return null;
+    }
+
+    await ctx.db.patch(args.attachmentId, {
+      trelloSyncStatus: "syncing",
+      trelloSyncError: undefined,
+      trelloSyncStartedAt: now,
+    });
+
+    return attachment;
   },
 });
 
@@ -1102,6 +1127,7 @@ export const updateAttachmentTrelloError = internalMutation({
     await ctx.db.patch(args.attachmentId, {
       trelloSyncStatus: "error",
       trelloSyncError: args.error,
+      trelloSyncStartedAt: undefined,
     });
   },
 });

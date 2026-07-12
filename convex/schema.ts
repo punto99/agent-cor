@@ -30,6 +30,15 @@ export default defineSchema({
     email: v.string(),
     name: v.optional(v.string()),
     userId: v.optional(v.id("users")),
+    preapprovedClientAccess: v.optional(
+      v.array(
+        v.object({
+          clientId: v.id("corClients"),
+          // undefined = acceso completo al cliente. Array = categorías específicas.
+          brandIds: v.optional(v.array(v.id("clientBrands"))),
+        }),
+      ),
+    ),
     trelloMemberId: v.optional(v.string()),
     trelloUsername: v.optional(v.string()),
     trelloMemberEmail: v.optional(v.string()),
@@ -37,6 +46,8 @@ export default defineSchema({
     trelloMemberSyncStatus: v.optional(v.string()),
     trelloMemberSyncError: v.optional(v.string()),
     trelloMemberVerifiedAt: v.optional(v.number()),
+    trelloManualReviewNotificationSentAt: v.optional(v.number()),
+    trelloManualReviewNotificationError: v.optional(v.string()),
     createdAt: v.number(),
     addedBy: v.optional(v.id("users")),
   })
@@ -186,6 +197,7 @@ export default defineSchema({
       "corTaskId",
       "deadline",
     ])
+    .index("by_convexStatus", ["convexStatus"])
     .index("by_corSyncStatus", ["corSyncStatus"])
     .index("by_trelloCardId", ["trelloCardId"])
     .index("by_trelloSyncStatus", ["trelloSyncStatus"])
@@ -208,8 +220,9 @@ export default defineSchema({
     // === Sincronización con Trello ===
     trelloAttachmentId: v.optional(v.string()),
     trelloAttachmentUrl: v.optional(v.string()),
-    trelloSyncStatus: v.optional(v.string()), // "pending" | "synced" | "error"
+    trelloSyncStatus: v.optional(v.string()), // "pending" | "syncing" | "synced" | "error"
     trelloSyncError: v.optional(v.string()),
+    trelloSyncStartedAt: v.optional(v.number()),
     trelloSyncedAt: v.optional(v.number()),
     // === Metadata ===
     createdAt: v.number(),
@@ -250,8 +263,10 @@ export default defineSchema({
     key: v.string(),
     taskStatusIndex: v.number(),
     taskCursor: v.optional(v.string()),
+    taskBucketCursorsJson: v.optional(v.string()),
     projectStatusIndex: v.number(),
     projectCursor: v.optional(v.string()),
+    projectBucketCursorsJson: v.optional(v.string()),
     leaseUntil: v.optional(v.number()),
     lastRunAt: v.optional(v.number()),
     lastCompletedAt: v.optional(v.number()),
@@ -477,6 +492,26 @@ export default defineSchema({
     .index("by_corClientId_and_corBrandId", ["corClientId", "corBrandId"]),
 
   // =====================================================
+  // Client Knowledge — Lineamientos contextuales para agentes
+  // =====================================================
+  clientKnowledge: defineTable({
+    scope: v.union(v.literal("agency"), v.literal("client")),
+    // Para scope="client" este valor debe ser el ID real del cliente en COR.
+    // Para scope="agency" se omite: Punto99 no es cliente.
+    corClientId: v.optional(v.number()),
+    // undefined = disponible para agentes internos y externos.
+    audience: v.optional(v.union(v.literal("internal"), v.literal("external"))),
+    name: v.string(),
+    text: v.string(), // Markdown flexible con toda la informacion de conocimiento.
+    source: v.optional(v.string()),
+    updatedAt: v.number(),
+  })
+    .index("by_scope", ["scope"])
+    .index("by_corClientId", ["corClientId"])
+    .index("by_audience", ["audience"])
+    .index("by_corClientId_audience", ["corClientId", "audience"]),
+
+  // =====================================================
   // Sub Brands — Productos de COR asociados a una marca
   // =====================================================
   subBrands: defineTable({
@@ -570,6 +605,7 @@ export default defineSchema({
     .index("by_corClientId", ["corClientId"])
     .index("by_corProjectId", ["corProjectId"])
     .index("by_convexStatus_endDate", ["convexStatus", "endDate"])
+    .index("by_convexStatus", ["convexStatus"])
     .index("by_createdBy", ["createdBy"])
     .index("by_threadId", ["threadId"])
     .index("by_corSyncStatus", ["corSyncStatus"])
@@ -655,6 +691,28 @@ export default defineSchema({
     .index("by_brand", ["clientBrandId"])
     .index("by_card", ["trelloCardId"])
     .index("by_syncStatus", ["syncStatus"]),
+
+  trelloOutboundSyncState: defineTable({
+    key: v.string(),
+    nextRunAt: v.number(),
+    processorLeaseUntil: v.optional(v.number()),
+    updatedAt: v.number(),
+  }).index("by_key", ["key"]),
+
+  trelloOutboundSyncQueue: defineTable({
+    taskId: v.id("tasks"),
+    kind: v.union(v.literal("status"), v.literal("fields")),
+    status: v.string(), // "pending" | "processing" | "retrying" | "synced" | "error"
+    nextRunAt: v.number(),
+    processingUntil: v.optional(v.number()),
+    attempt: v.number(),
+    lastError: v.optional(v.string()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_task_kind", ["taskId", "kind"])
+    .index("by_status_nextRunAt", ["status", "nextRunAt"])
+    .index("by_status_processingUntil", ["status", "processingUntil"]),
 
   // =====================================================
   // Trello Webhooks — Suscripciones por board/categoría

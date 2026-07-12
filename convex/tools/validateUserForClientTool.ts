@@ -9,6 +9,27 @@ import {
   isProjectManagementEnabled,
 } from "../integrations/registry";
 
+async function loadClientKnowledge(ctx: any, corClientId: number) {
+  try {
+    const knowledge = await ctx.runQuery(
+      (internal as any).data.clientKnowledge.getForAgent,
+      {
+        corClientId,
+        audience: "internal",
+      },
+    );
+
+    if (!knowledge?.agency && !knowledge?.client) return undefined;
+    return knowledge;
+  } catch (error) {
+    console.error(
+      "[ValidateUserForClient] Error cargando clientKnowledge:",
+      error,
+    );
+    return undefined;
+  }
+}
+
 function normalizeClientName(name: string): string {
   return name
     .normalize("NFD")
@@ -279,6 +300,8 @@ export const validateUserForClientTool = createTool({
       brands.push({ ...brand, subBrands });
     }
 
+    const knowledge = await loadClientKnowledge(ctx, corClient.id);
+
     return JSON.stringify({
       authorized: true,
       corUserId: corUser.corUserId,
@@ -298,6 +321,7 @@ export const validateUserForClientTool = createTool({
         })),
       })),
       requiresBrand: brands.length > 0,
+      knowledge,
     });
   },
 });

@@ -10,6 +10,7 @@ import {
 import { useRouter } from "next/navigation";
 import {
   AlertTriangle,
+  ChevronDown,
   CheckCircle2,
   ExternalLink,
   LinkIcon,
@@ -51,12 +52,15 @@ type ExternalUser = {
   assignments: Array<{
     _id: Id<"clientUserAssignments">;
     clientId: Id<"corClients">;
-    brandId: Id<"clientBrands">;
+    brandId?: Id<"clientBrands">;
     assignedAt: number;
+    clientName?: string;
     brandName?: string;
     trelloBoardId?: string;
   }>;
   assignedBrandCount: number;
+  fullClientCount: number;
+  brandCount: number;
   missingBoardCount: number;
   status: ExternalStatus;
 };
@@ -167,9 +171,18 @@ export default function ExternalUsersAdminPage() {
   const [search, setSearch] = useState("");
   const [selectedUserId, setSelectedUserId] = useState<string | null>(null);
   const [newEmail, setNewEmail] = useState("");
-  const [newName, setNewName] = useState("");
+  const [newFirstName, setNewFirstName] = useState("");
+  const [newLastName, setNewLastName] = useState("");
+  const [newClientId, setNewClientId] = useState<string | null>(null);
+  const [newClientSearch, setNewClientSearch] = useState("");
+  const [newBrandIds, setNewBrandIds] = useState<Set<string>>(
+    () => new Set(),
+  );
   const [categorySearch, setCategorySearch] = useState("");
   const [showAssignedOnly, setShowAssignedOnly] = useState(false);
+  const [draftFullClientIds, setDraftFullClientIds] = useState<Set<string>>(
+    () => new Set(),
+  );
   const [draftBrandIds, setDraftBrandIds] = useState<Set<string>>(
     () => new Set(),
   );
@@ -204,6 +217,17 @@ export default function ExternalUsersAdminPage() {
   const canAccess = dashboard?.canAccess === true;
   const users = canAccess ? dashboard.users : [];
   const clients = canAccess ? dashboard.clients : [];
+  const selectedNewClient = useMemo(
+    () =>
+      newClientId
+        ? clients.find((client) => String(client._id) === newClientId) ?? null
+        : null,
+    [clients, newClientId],
+  );
+
+  useEffect(() => {
+    setNewBrandIds(new Set());
+  }, [newClientId]);
 
   const visibleUsers = useMemo(() => {
     const term = search.trim().toLowerCase();
@@ -237,45 +261,85 @@ export default function ExternalUsersAdminPage() {
 
   useEffect(() => {
     setTrelloResult(null);
+    setDraftFullClientIds(
+      new Set(
+        selectedUser?.assignments
+          .filter((assignment) => !assignment.brandId)
+          .map((assignment) => String(assignment.clientId)) ?? [],
+      ),
+    );
     setDraftBrandIds(
       new Set(
-        selectedUser?.assignments.map((assignment) =>
-          String(assignment.brandId),
-        ) ?? [],
+        selectedUser?.assignments
+          .filter((assignment) => assignment.brandId)
+          .map((assignment) => String(assignment.brandId)) ?? [],
       ),
     );
   }, [selectedUser?._id, selectedUser?.assignments]);
 
-  const currentBrandIds = useMemo(
+  const currentFullClientIds = useMemo(
     () =>
       new Set(
-        selectedUser?.assignments.map((assignment) =>
-          String(assignment.brandId),
-        ) ?? [],
+        selectedUser?.assignments
+          .filter((assignment) => !assignment.brandId)
+          .map((assignment) => String(assignment.clientId)) ?? [],
       ),
     [selectedUser],
   );
-  const hasPermissionChanges = !sameStringSet(currentBrandIds, draftBrandIds);
+  const currentBrandIds = useMemo(
+    () =>
+      new Set(
+        selectedUser?.assignments
+          .filter((assignment) => assignment.brandId)
+          .map((assignment) => String(assignment.brandId)) ?? [],
+      ),
+    [selectedUser],
+  );
+  const hasPermissionChanges =
+    !sameStringSet(currentFullClientIds, draftFullClientIds) ||
+    !sameStringSet(currentBrandIds, draftBrandIds);
 
   const visibleClients = useMemo(() => {
     const term = categorySearch.trim().toLowerCase();
     return clients
       .map((client) => {
+        const fullSelected = draftFullClientIds.has(String(client._id));
+        const clientMatches =
+          !term ||
+          client.name.toLowerCase().includes(term) ||
+          String(client.corClientId).includes(term) ||
+          client.nomenclature?.toLowerCase().includes(term);
         const brands = client.brands.filter((brand) => {
           const isAssigned = draftBrandIds.has(String(brand._id));
-          if (showAssignedOnly && !isAssigned) return false;
-          if (!term) return true;
+          if (showAssignedOnly && !fullSelected && !isAssigned) return false;
+          if (!term || clientMatches) return true;
           return (
-            client.name.toLowerCase().includes(term) ||
             brand.name.toLowerCase().includes(term) ||
-            String(client.corClientId).includes(term) ||
-            client.nomenclature?.toLowerCase().includes(term)
+            String(brand.corBrandId).includes(term)
           );
         });
         return { ...client, brands };
       })
-      .filter((client) => client.brands.length > 0);
-  }, [categorySearch, clients, draftBrandIds, showAssignedOnly]);
+      .filter((client) => {
+        const fullSelected = draftFullClientIds.has(String(client._id));
+        if (showAssignedOnly && fullSelected) return true;
+        if (client.brands.length > 0) return true;
+        if (showAssignedOnly) return false;
+        const term = categorySearch.trim().toLowerCase();
+        return (
+          !term ||
+          client.name.toLowerCase().includes(term) ||
+          String(client.corClientId).includes(term) ||
+          client.nomenclature?.toLowerCase().includes(term)
+        );
+      });
+  }, [
+    categorySearch,
+    clients,
+    draftBrandIds,
+    draftFullClientIds,
+    showAssignedOnly,
+  ]);
 
   const summary = useMemo(
     () => ({
@@ -296,11 +360,34 @@ export default function ExternalUsersAdminPage() {
   const handleSelectThread = () => router.push("/workspace");
 
   const handleAddExternalUser = async () => {
+    const selectedClient = selectedNewClient;
+    if (!newEmail.trim() || !newFirstName.trim() || !newLastName.trim()) {
+      setToast({
+        type: "error",
+        message: "Correo, nombre y apellido son obligatorios.",
+      });
+      return;
+    }
+    if (!selectedClient) {
+      setToast({ type: "error", message: "Selecciona un cliente." });
+      return;
+    }
+
+    const selectedBrandIds =
+      selectedClient.brands.length > 0 &&
+      newBrandIds.size > 0 &&
+      newBrandIds.size < selectedClient.brands.length
+        ? (Array.from(newBrandIds) as Id<"clientBrands">[])
+        : undefined;
+
     try {
       setAdding(true);
       const result = await upsertApprovedExternalUser({
         email: newEmail,
-        name: newName || undefined,
+        firstName: newFirstName,
+        lastName: newLastName,
+        clientId: selectedClient._id,
+        brandIds: selectedBrandIds,
       });
       setToast({
         type: "success",
@@ -309,7 +396,11 @@ export default function ExternalUsersAdminPage() {
           : "Correo actualizado.",
       });
       setNewEmail("");
-      setNewName("");
+      setNewFirstName("");
+      setNewLastName("");
+      setNewClientId(null);
+      setNewClientSearch("");
+      setNewBrandIds(new Set());
     } catch (error) {
       setToast({
         type: "error",
@@ -326,13 +417,14 @@ export default function ExternalUsersAdminPage() {
       setSaving(true);
       await setAssignments({
         approvedExternalUserId: selectedUser._id,
+        fullClientIds: Array.from(draftFullClientIds) as Id<"corClients">[],
         brandIds: Array.from(draftBrandIds) as Id<"clientBrands">[],
       });
-      setToast({ type: "success", message: "Categorías actualizadas." });
+      setToast({ type: "success", message: "Permisos actualizados." });
     } catch (error) {
       setToast({
         type: "error",
-        message: getErrorMessage(error, "No pudimos guardar las categorías."),
+        message: getErrorMessage(error, "No pudimos guardar los permisos."),
       });
     } finally {
       setSaving(false);
@@ -340,6 +432,7 @@ export default function ExternalUsersAdminPage() {
   };
 
   const handleResetAssignments = () => {
+    setDraftFullClientIds(new Set(currentFullClientIds));
     setDraftBrandIds(new Set(currentBrandIds));
   };
 
@@ -492,8 +585,38 @@ export default function ExternalUsersAdminPage() {
     }
   };
 
-  const toggleBrand = (brandId: string) => {
+  const toggleFullClient = (client: AdminClient) => {
+    setDraftFullClientIds((current) => {
+      const next = new Set(current);
+      const clientId = String(client._id);
+      if (next.has(clientId)) {
+        next.delete(clientId);
+      } else {
+        next.add(clientId);
+        setDraftBrandIds((brandIds) => {
+          const nextBrandIds = new Set(brandIds);
+          for (const brand of client.brands) {
+            nextBrandIds.delete(String(brand._id));
+          }
+          return nextBrandIds;
+        });
+      }
+      return next;
+    });
+  };
+
+  const toggleBrand = (client: AdminClient, brandId: string) => {
+    if (draftFullClientIds.has(String(client._id))) return;
     setDraftBrandIds((current) => {
+      const next = new Set(current);
+      if (next.has(brandId)) next.delete(brandId);
+      else next.add(brandId);
+      return next;
+    });
+  };
+
+  const toggleNewBrand = (brandId: string) => {
+    setNewBrandIds((current) => {
       const next = new Set(current);
       if (next.has(brandId)) next.delete(brandId);
       else next.add(brandId);
@@ -564,11 +687,32 @@ export default function ExternalUsersAdminPage() {
                   className="h-9 rounded-md border border-border bg-background px-3 text-sm text-foreground outline-none focus:ring-2 focus:ring-primary"
                 />
                 <input
-                  value={newName}
-                  onChange={(event) => setNewName(event.target.value)}
-                  placeholder="Nombre opcional"
+                  value={newFirstName}
+                  onChange={(event) => setNewFirstName(event.target.value)}
+                  placeholder="Nombre"
                   className="h-9 rounded-md border border-border bg-background px-3 text-sm text-foreground outline-none focus:ring-2 focus:ring-primary"
                 />
+                <input
+                  value={newLastName}
+                  onChange={(event) => setNewLastName(event.target.value)}
+                  placeholder="Apellido"
+                  className="h-9 rounded-md border border-border bg-background px-3 text-sm text-foreground outline-none focus:ring-2 focus:ring-primary"
+                />
+                <ClientSearchSelect
+                  clients={clients}
+                  selectedClientId={newClientId}
+                  search={newClientSearch}
+                  onSearchChange={setNewClientSearch}
+                  onSelect={(clientId) => setNewClientId(clientId)}
+                />
+                {selectedNewClient && selectedNewClient.brands.length > 0 && (
+                  <CategoryAccessSelect
+                    brands={selectedNewClient.brands}
+                    selectedBrandIds={newBrandIds}
+                    onSelectAll={() => setNewBrandIds(new Set())}
+                    onToggleBrand={toggleNewBrand}
+                  />
+                )}
                 <Button
                   type="button"
                   onClick={handleAddExternalUser}
@@ -654,9 +798,9 @@ export default function ExternalUsersAdminPage() {
 
                   {!selectedUser.userId && (
                     <div className="mt-4 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-200">
-                      Este correo ya puede ingresar con código. Cuando la
-                      persona entre por primera vez, podrás asignarle categorías
-                      y configurar Trello.
+                      Este correo ya puede ingresar con código. El cliente
+                      preasignado se habilitará automáticamente cuando la
+                      persona entre por primera vez.
                     </div>
                   )}
                 </section>
@@ -669,12 +813,12 @@ export default function ExternalUsersAdminPage() {
                           <div className="flex items-center gap-2">
                             <ShieldCheck className="h-4 w-4 text-primary" />
                             <h3 className="text-sm font-semibold text-foreground">
-                              Categorías permitidas
+                              Permisos del cliente
                             </h3>
                           </div>
                           <p className="mt-1 text-xs text-muted-foreground">
                             El usuario externo solo podrá crear requerimientos
-                            para estas categorías.
+                            para estos clientes o categorías.
                           </p>
                         </div>
                         <div className="flex items-center gap-2">
@@ -693,7 +837,7 @@ export default function ExternalUsersAdminPage() {
                             onClick={handleSaveAssignments}
                             disabled={!hasPermissionChanges || saving}
                           >
-                            {saving ? "Guardando..." : "Guardar categorías"}
+                            {saving ? "Guardando..." : "Guardar permisos"}
                           </Button>
                         </div>
                       </div>
@@ -719,80 +863,137 @@ export default function ExternalUsersAdminPage() {
                             }
                             className="h-4 w-4 cursor-pointer rounded border-border text-primary focus:ring-primary"
                           />
-                          Solo asignadas
+                          Solo asignados
                         </label>
                       </div>
 
                       <div className="divide-y divide-border">
                         {visibleClients.length === 0 ? (
                           <div className="px-4 py-8 text-sm text-muted-foreground">
-                            No hay categorías que coincidan con el filtro
-                            actual.
+                            No hay clientes que coincidan con el filtro actual.
                           </div>
                         ) : (
-                          visibleClients.map((client) => (
-                            <div key={client._id} className="px-4 py-4">
-                              <div className="mb-3">
-                                <div className="text-sm font-medium text-foreground">
-                                  {client.name}
-                                </div>
-                                <div className="text-xs text-muted-foreground">
-                                  COR {client.corClientId}
-                                  {client.nomenclature
-                                    ? ` · ${client.nomenclature}`
-                                    : ""}
-                                </div>
-                              </div>
-                              <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-3">
-                                {client.brands.map((brand) => {
-                                  const selected = draftBrandIds.has(
-                                    String(brand._id),
-                                  );
-                                  return (
-                                    <div
-                                      key={brand._id}
-                                      className="flex items-center gap-2 rounded-md border border-border bg-background px-3 py-2 text-sm text-foreground transition-colors hover:bg-accent"
-                                    >
-                                      <label className="flex min-w-0 flex-1 cursor-pointer items-center gap-2">
-                                        <input
-                                          type="checkbox"
-                                          checked={selected}
-                                          onChange={() =>
-                                            toggleBrand(String(brand._id))
-                                          }
-                                          className="h-4 w-4 cursor-pointer rounded border-border text-primary focus:ring-primary"
-                                        />
-                                        <span className="min-w-0 flex-1 truncate">
-                                          {brand.name}
-                                        </span>
-                                      </label>
-                                      {brand.trelloBoardId ? (
-                                        <button
-                                          type="button"
-                                          className="shrink-0 cursor-pointer rounded border border-border bg-card px-2 py-1 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-                                          onClick={() =>
-                                            handleOpenBoardDialog(brand)
-                                          }
-                                        >
-                                          Cambiar
-                                        </button>
-                                      ) : (
-                                        <button
-                                          type="button"
-                                          className="shrink-0 cursor-pointer rounded border border-amber-200 bg-amber-50 px-2 py-1 text-xs text-amber-700 transition-colors hover:bg-amber-100 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-200 dark:hover:bg-amber-950"
-                                          onClick={() =>
-                                            handleOpenBoardDialog(brand)
-                                          }
-                                        >
-                                          Sin tablero
-                                        </button>
-                                      )}
+                          visibleClients.map((client) => {
+                            const fullSelected = draftFullClientIds.has(
+                              String(client._id),
+                            );
+                            const selectedBrandCount = client.brands.filter(
+                              (brand) => draftBrandIds.has(String(brand._id)),
+                            ).length;
+                            const hasCategories = client.brands.length > 0;
+                            const assignmentLabel = hasCategories
+                              ? fullSelected
+                                ? "Todas las categorías"
+                                : `${selectedBrandCount} de ${client.brands.length} categoría${
+                                    client.brands.length !== 1 ? "s" : ""
+                                  }`
+                              : fullSelected
+                                ? "Cliente asignado"
+                                : "Sin categorías";
+
+                            return (
+                              <div key={client._id} className="px-4 py-4">
+                                <div className="flex flex-wrap items-start justify-between gap-3">
+                                  <div className="min-w-0">
+                                    <div className="truncate text-sm font-medium text-foreground">
+                                      {client.name}
                                     </div>
-                                  );
-                                })}
+                                    <div className="text-xs text-muted-foreground">
+                                      COR {client.corClientId}
+                                      {client.nomenclature
+                                        ? ` · ${client.nomenclature}`
+                                        : ""}
+                                    </div>
+                                  </div>
+
+                                  <div className="flex flex-wrap items-center justify-end gap-3">
+                                    <span className="text-xs text-muted-foreground">
+                                      {assignmentLabel}
+                                    </span>
+
+                                    <label className="inline-flex h-8 cursor-pointer items-center gap-2 rounded-md border border-border bg-background px-3 text-xs font-medium text-foreground">
+                                      <input
+                                        type="checkbox"
+                                        checked={fullSelected}
+                                        onChange={() =>
+                                          toggleFullClient(client)
+                                        }
+                                        className="h-4 w-4 cursor-pointer rounded border-border text-primary focus:ring-primary"
+                                      />
+                                      {hasCategories
+                                        ? "Acceso completo"
+                                        : "Acceso al cliente"}
+                                    </label>
+                                  </div>
+                                </div>
+
+                                {client.brands.length > 0 && (
+                                  <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-3">
+                                    {client.brands.map((brand) => {
+                                      const selected =
+                                        fullSelected ||
+                                        draftBrandIds.has(String(brand._id));
+                                      return (
+                                        <div
+                                          key={brand._id}
+                                          className={`flex items-center gap-2 rounded-md border px-3 py-2 text-sm transition-colors ${
+                                            fullSelected
+                                              ? "border-border bg-muted/50 text-muted-foreground"
+                                              : "border-border bg-background text-foreground hover:bg-accent"
+                                          }`}
+                                        >
+                                          <label
+                                            className={`flex min-w-0 flex-1 items-center gap-2 ${
+                                              fullSelected
+                                                ? "cursor-not-allowed"
+                                                : "cursor-pointer"
+                                            }`}
+                                          >
+                                            <input
+                                              type="checkbox"
+                                              disabled={fullSelected}
+                                              checked={selected}
+                                              onChange={() =>
+                                                toggleBrand(
+                                                  client,
+                                                  String(brand._id),
+                                                )
+                                              }
+                                              className="h-4 w-4 cursor-pointer rounded border-border text-primary focus:ring-primary disabled:cursor-not-allowed disabled:opacity-50"
+                                            />
+                                            <span className="min-w-0 flex-1 truncate">
+                                              {brand.name}
+                                            </span>
+                                          </label>
+                                          {brand.trelloBoardId ? (
+                                            <button
+                                              type="button"
+                                              className="shrink-0 cursor-pointer rounded border border-border bg-card px-2 py-1 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                                              onClick={() =>
+                                                handleOpenBoardDialog(brand)
+                                              }
+                                            >
+                                              Cambiar
+                                            </button>
+                                          ) : (
+                                            <button
+                                              type="button"
+                                              className="shrink-0 cursor-pointer rounded border border-amber-200 bg-amber-50 px-2 py-1 text-xs text-amber-700 transition-colors hover:bg-amber-100 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-200 dark:hover:bg-amber-950"
+                                              onClick={() =>
+                                                handleOpenBoardDialog(brand)
+                                              }
+                                            >
+                                              Sin tablero
+                                            </button>
+                                          )}
+                                        </div>
+                                      );
+                                    })}
+                                  </div>
+                                )}
                               </div>
-                            </div>
-                          ))
+                            );
+                          })
                         )}
                       </div>
 
@@ -804,7 +1005,7 @@ export default function ExternalUsersAdminPage() {
                                 Cambios sin guardar
                               </div>
                               <div className="text-xs text-muted-foreground">
-                                Guarda o descarta las categorías seleccionadas.
+                                Guarda o descarta los permisos seleccionados.
                               </div>
                             </div>
                             <div className="flex items-center gap-2">
@@ -823,7 +1024,7 @@ export default function ExternalUsersAdminPage() {
                                 onClick={handleSaveAssignments}
                                 disabled={saving}
                               >
-                                {saving ? "Guardando..." : "Guardar categorías"}
+                                {saving ? "Guardando..." : "Guardar permisos"}
                               </Button>
                             </div>
                           </div>
@@ -865,6 +1066,184 @@ export default function ExternalUsersAdminPage() {
         )}
       </div>
     </WorkspaceLayout>
+  );
+}
+
+function ClientSearchSelect({
+  clients,
+  selectedClientId,
+  search,
+  onSearchChange,
+  onSelect,
+}: {
+  clients: AdminClient[];
+  selectedClientId: string | null;
+  search: string;
+  onSearchChange: (value: string) => void;
+  onSelect: (clientId: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const selectedClient = selectedClientId
+    ? clients.find((client) => String(client._id) === selectedClientId)
+    : null;
+  const filteredClients = useMemo(() => {
+    const term = search.trim().toLowerCase();
+    if (!term) return clients;
+    return clients.filter(
+      (client) =>
+        client.name.toLowerCase().includes(term) ||
+        String(client.corClientId).includes(term) ||
+        client.nomenclature?.toLowerCase().includes(term),
+    );
+  }, [clients, search]);
+
+  return (
+    <div className="relative">
+      <button
+        type="button"
+        className="flex h-9 w-full cursor-pointer items-center justify-between gap-2 rounded-md border border-border bg-background px-3 text-left text-sm text-foreground outline-none transition-colors hover:bg-accent focus:ring-2 focus:ring-primary"
+        onClick={() => setOpen((current) => !current)}
+        aria-expanded={open}
+      >
+        <span
+          className={`min-w-0 flex-1 truncate ${
+            selectedClient ? "" : "text-muted-foreground"
+          }`}
+        >
+          {selectedClient?.name ?? "Seleccionar cliente"}
+        </span>
+        <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground" />
+      </button>
+
+      {open && (
+        <div className="absolute left-0 right-0 top-10 z-30 rounded-md border border-border bg-card shadow-lg">
+          <div className="border-b border-border p-2">
+            <div className="relative">
+              <Search className="absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+              <input
+                value={search}
+                onChange={(event) => onSearchChange(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Escape") setOpen(false);
+                }}
+                placeholder="Buscar cliente"
+                className="h-8 w-full rounded-md border border-border bg-background pl-8 pr-2 text-sm text-foreground outline-none focus:ring-2 focus:ring-primary"
+                autoFocus
+              />
+            </div>
+          </div>
+          <div className="max-h-56 overflow-y-auto p-1">
+            {filteredClients.length === 0 ? (
+              <div className="px-2 py-3 text-sm text-muted-foreground">
+                Sin resultados.
+              </div>
+            ) : (
+              filteredClients.map((client) => (
+                <button
+                  key={client._id}
+                  type="button"
+                  className={`w-full cursor-pointer rounded-md px-2 py-2 text-left text-sm transition-colors ${
+                    selectedClientId === String(client._id)
+                      ? "bg-primary/10 text-primary"
+                      : "text-foreground hover:bg-accent"
+                  }`}
+                  onClick={() => {
+                    onSelect(String(client._id));
+                    onSearchChange("");
+                    setOpen(false);
+                  }}
+                >
+                  <span className="block truncate font-medium">
+                    {client.name}
+                  </span>
+                  <span className="block truncate text-xs text-muted-foreground">
+                    COR {client.corClientId}
+                    {client.nomenclature ? ` · ${client.nomenclature}` : ""}
+                  </span>
+                </button>
+              ))
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function CategoryAccessSelect({
+  brands,
+  selectedBrandIds,
+  onSelectAll,
+  onToggleBrand,
+}: {
+  brands: AdminClient["brands"];
+  selectedBrandIds: Set<string>;
+  onSelectAll: () => void;
+  onToggleBrand: (brandId: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const allSelected =
+    selectedBrandIds.size === 0 || selectedBrandIds.size === brands.length;
+  const label = allSelected
+    ? "Todas las categorías"
+    : `${selectedBrandIds.size} categoría${
+        selectedBrandIds.size !== 1 ? "s" : ""
+      }`;
+
+  return (
+    <div className="relative">
+      <button
+        type="button"
+        className="flex h-9 w-full cursor-pointer items-center justify-between gap-2 rounded-md border border-border bg-background px-3 text-left text-sm text-foreground outline-none transition-colors hover:bg-accent focus:ring-2 focus:ring-primary"
+        onClick={() => setOpen((current) => !current)}
+        aria-expanded={open}
+      >
+        <span className="min-w-0 flex-1 truncate">{label}</span>
+        <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground" />
+      </button>
+
+      {open && (
+        <div className="absolute left-0 right-0 top-10 z-20 max-h-64 overflow-y-auto rounded-md border border-border bg-card p-1 shadow-lg">
+          <button
+            type="button"
+            className={`flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-2 text-left text-sm transition-colors ${
+              allSelected
+                ? "bg-primary/10 text-primary"
+                : "text-foreground hover:bg-accent"
+            }`}
+            onClick={onSelectAll}
+          >
+            <input
+              type="checkbox"
+              checked={allSelected}
+              readOnly
+              className="h-4 w-4 rounded border-border text-primary focus:ring-primary"
+            />
+            <span className="min-w-0 flex-1 truncate">Todas</span>
+          </button>
+
+          {brands.map((brand) => {
+            const selected = allSelected || selectedBrandIds.has(String(brand._id));
+            return (
+              <button
+                key={brand._id}
+                type="button"
+                className="flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-2 text-left text-sm text-foreground transition-colors hover:bg-accent"
+                onClick={() => onToggleBrand(String(brand._id))}
+              >
+                <input
+                  type="checkbox"
+                  checked={selected}
+                  readOnly
+                  className="h-4 w-4 rounded border-border text-primary focus:ring-primary"
+                />
+                <span className="min-w-0 flex-1 truncate">{brand.name}</span>
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -1053,7 +1432,7 @@ function getStatusConfig(status: ExternalStatus) {
     return { label: "Esperando primer ingreso", className: neutral };
   }
   if (status === "missing_categories") {
-    return { label: "Faltan categorías", className: neutral };
+    return { label: "Faltan permisos", className: neutral };
   }
   if (status === "missing_trello") {
     return { label: "Falta vincular Trello", className: neutral };

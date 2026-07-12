@@ -1,5 +1,6 @@
 import { v } from "convex/values";
 import { internalMutation, internalQuery, query } from "../_generated/server";
+import { syncClientAssignmentsFromAccess } from "../lib/externalUserPreapproval";
 
 const OTP_REQUEST_LIMIT = 6;
 const OTP_REQUEST_WINDOW_MS = 15 * 60 * 1000;
@@ -63,9 +64,19 @@ export const linkApprovedExternalUser = internalMutation({
     if (!approvedUser) return;
     if (approvedUser.userId === args.userId) return;
 
+    const preapprovedClientAccess = (approvedUser as any)
+      .preapprovedClientAccess;
     await ctx.db.patch(approvedUser._id, {
       userId: args.userId,
     });
+
+    if (preapprovedClientAccess?.length) {
+      await syncClientAssignmentsFromAccess(ctx, {
+        userId: args.userId,
+        access: preapprovedClientAccess,
+        assignedBy: approvedUser.addedBy,
+      });
+    }
   },
 });
 
