@@ -2362,6 +2362,45 @@ export const enqueueTrelloOutboundSyncFromCOR = internalMutation({
   },
   handler: async (ctx, args) => {
     const now = Date.now();
+    const task = await ctx.db.get(args.taskId);
+    if (!task || task.convexStatus === "deleted") {
+      return {
+        queued: false,
+        skipped: true,
+        reason: "Task no encontrada.",
+      };
+    }
+
+    if (!isTrelloEnabledForCorClientId(task.corClientId)) {
+      return {
+        queued: false,
+        skipped: true,
+        trelloDisabled: true,
+        reason: getTrelloDisabledReason(task.corClientId),
+      };
+    }
+
+    const trelloCard = await ctx.db
+      .query("trelloCards")
+      .withIndex("by_task", (q) => q.eq("taskId", args.taskId))
+      .first();
+    const trelloCardId = trelloCard?.trelloCardId || task.trelloCardId;
+    if (!trelloCardId) {
+      return {
+        queued: false,
+        skipped: true,
+        reason: "La task no tiene card Trello creada.",
+      };
+    }
+
+    if (args.kind === "status" && !trelloCard?.trelloCardId) {
+      return {
+        queued: false,
+        skipped: true,
+        reason: "La task no tiene mapping Trello para mover status.",
+      };
+    }
+
     const existing = await ctx.db
       .query("trelloOutboundSyncQueue")
       .withIndex("by_task_kind", (q) =>
@@ -2387,28 +2426,9 @@ export const enqueueTrelloOutboundSyncFromCOR = internalMutation({
       };
     }
 
-    const state = await ctx.db
-      .query("trelloOutboundSyncState")
-      .withIndex("by_key", (q) => q.eq("key", TRELLO_OUTBOUND_QUEUE_STATE_KEY))
-      .unique();
-    const nextRunAt = Math.max(now, state?.nextRunAt ?? now);
-    const statePatch = {
-      nextRunAt: nextRunAt + TRELLO_OUTBOUND_SPACING_MS,
-      updatedAt: now,
-    };
-
-    if (state) {
-      await ctx.db.patch(state._id, statePatch);
-    } else {
-      await ctx.db.insert("trelloOutboundSyncState", {
-        key: TRELLO_OUTBOUND_QUEUE_STATE_KEY,
-        ...statePatch,
-      });
-    }
-
     const queuePatch = {
       status: "pending",
-      nextRunAt,
+      nextRunAt: now,
       processingUntil: undefined,
       attempt: 0,
       lastError: undefined,
@@ -2429,12 +2449,12 @@ export const enqueueTrelloOutboundSyncFromCOR = internalMutation({
     }
 
     await ctx.scheduler.runAfter(
-      Math.max(0, nextRunAt - now),
+      0,
       internalTrello.processTrelloOutboundSyncQueue,
       {},
     );
 
-    return { queued: true, deduped: false, queueId, nextRunAt };
+    return { queued: true, deduped: false, queueId, nextRunAt: now };
   },
 });
 
@@ -2451,6 +2471,13 @@ export const claimNextTrelloOutboundSync = internalMutation({
       return {
         claimed: false as const,
         waitMs: null,
+      };
+    }
+
+    if (state?.nextRunAt && state.nextRunAt > now) {
+      return {
+        claimed: false as const,
+        waitMs: state.nextRunAt - now,
       };
     }
 
@@ -2511,6 +2538,7 @@ export const claimNextTrelloOutboundSync = internalMutation({
     });
 
     const statePatch = {
+      nextRunAt: now + TRELLO_OUTBOUND_SPACING_MS,
       processorLeaseUntil: now + TRELLO_OUTBOUND_PROCESSOR_LEASE_MS,
       updatedAt: now,
     };
@@ -2519,7 +2547,6 @@ export const claimNextTrelloOutboundSync = internalMutation({
     } else {
       await ctx.db.insert("trelloOutboundSyncState", {
         key: TRELLO_OUTBOUND_QUEUE_STATE_KEY,
-        nextRunAt: now,
         ...statePatch,
       });
     }
