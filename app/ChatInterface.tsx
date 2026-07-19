@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useRef, useEffect } from "react";
-import { useMutation, useAction } from "convex/react";
+import { useMutation, useAction, useQuery } from "convex/react";
 import { useUIMessages } from "@convex-dev/agent/react";
 import { api } from "@/convex/_generated/api";
 import mammoth from "mammoth";
@@ -137,6 +137,7 @@ export default function ChatInterface({
   const sendMessage = useMutation(api.messaging.chat.sendMessage);
   const generateUploadUrl = useMutation(api.data.files.generateUploadUrl);
   const registerUploadedFile = useAction(api.data.files.registerUploadedFile);
+  const accessProfile = useQuery(api.data.userAccess.viewerAccessProfile);
 
   const { results: uiMessages, status: streamStatus } = useUIMessages(
     api.messaging.chat.listThreadMessages,
@@ -549,6 +550,7 @@ export default function ChatInterface({
           isAgentThinking={isAgentThinking}
           currentThreadId={currentThreadId}
           isCreatingThread={isCreatingThread}
+          showUserLinkPreviews={Boolean(accessProfile)}
         />
         <div ref={messagesEndRef} />
       </div>

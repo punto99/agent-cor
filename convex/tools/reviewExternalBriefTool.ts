@@ -8,6 +8,19 @@ import { google } from "@ai-sdk/google";
 
 const languageModel = google("gemini-3.5-flash");
 
+function getCurrentDateContext(): string {
+  const now = new Date();
+  const currentDate = now.toLocaleDateString("es-EC", {
+    weekday: "long",
+    year: "numeric",
+    month: "long",
+    day: "numeric",
+    timeZone: "America/Guayaquil",
+  });
+
+  return `${currentDate} (${now.toISOString().split("T")[0]}, America/Guayaquil)`;
+}
+
 const externalReviewerSystem = `Eres un supervisor de calidad que revisa briefs de clientes externos.
 
 Tu tarea es determinar si la informacion recolectada es suficiente para guardar un requerimiento externo para revision del equipo interno.
@@ -24,16 +37,20 @@ CAMPOS OBLIGATORIOS PARA APROBAR:
 
 REGLA ESPECIAL DE FECHA:
 - La fecha de lanzamiento SI es obligatoria para usuarios externos.
-- Puede ser exacta o aproximada: acepta valores como "mediados de agosto", "septiembre", "Q4", "antes del evento" o una fecha exacta.
+- Siempre usa la fecha actual incluida en el prompt para validar que la fecha de lanzamiento sea futura.
+- Puede ser exacta o aproximada: acepta valores como "mediados de agosto", "septiembre", "Q4", "antes del evento" o una fecha exacta solo si queda claro que se refieren a una fecha futura.
 - Si falta launchDate o esta vacia, aprobado DEBE ser false.
 - No exijas formato YYYY-MM-DD para aprobar.
+- Si launchDate es una fecha exacta que ya paso o es hoy, aprobado DEBE ser false.
+- Si launchDate es aproximada pero ya paso, aprobado DEBE ser false.
+- Si no puedes determinar si launchDate es futura, aprobado DEBE ser false y debes sugerir pedir una fecha o referencia mas clara.
 
 INFORMACION OPCIONAL:
 - Objetivo, mensaje clave, KPIs, presupuesto, aprobadores, referencias, links, archivos y detalles adicionales.
 
 CRITERIOS:
 1. Si falta tipo de requerimiento, categoria/marca requerida, entregables o fecha de lanzamiento, aprobado DEBE ser false.
-2. Si la fecha de lanzamiento es aproximada pero clara, aprobado puede ser true.
+2. Si la fecha de lanzamiento es aproximada pero clara y futura, aprobado puede ser true.
 3. La informacion debe ser clara y especifica, no vaga.
 4. Si hay contradicciones, senalalas.
 5. Si hay archivos, referencias o links mencionados, verifica que los detalles importantes esten reflejados en la informacion adicional.
@@ -95,7 +112,9 @@ export const reviewExternalBriefTool = createTool({
   handler: async (_ctx, args): Promise<string> => {
     console.log("[ReviewExternalTool] Validando brief externo...");
 
+    const currentDateContext = getCurrentDateContext();
     const briefSummary = [
+      `Fecha actual para validar lanzamiento: ${currentDateContext}`,
       `Tipo de requerimiento: ${args.requestType}`,
       `Categoria/marca: ${args.brand}`,
       `Fecha de lanzamiento: ${args.launchDate}`,

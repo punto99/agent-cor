@@ -8,6 +8,7 @@ interface ChatMessageListProps {
   isAgentThinking: boolean;
   currentThreadId: string | null;
   isCreatingThread: boolean;
+  showUserLinkPreviews?: boolean;
 }
 
 /**
@@ -18,6 +19,7 @@ export function ChatMessageList({
   isAgentThinking,
   currentThreadId,
   isCreatingThread,
+  showUserLinkPreviews = false,
 }: ChatMessageListProps) {
   return (
     <>
@@ -51,7 +53,11 @@ export function ChatMessageList({
       )}
 
       {messages.map((message) => (
-        <ChatMessage key={message.key} message={message} />
+        <ChatMessage
+          key={message.key}
+          message={message}
+          showUserLinkPreviews={showUserLinkPreviews}
+        />
       ))}
 
       {/* Indicador de "pensando" cuando el agente está procesando */}
@@ -63,7 +69,13 @@ export function ChatMessageList({
 /**
  * Componente para un mensaje individual
  */
-function ChatMessage({ message }: { message: Message }) {
+function ChatMessage({
+  message,
+  showUserLinkPreviews,
+}: {
+  message: Message;
+  showUserLinkPreviews: boolean;
+}) {
   return (
     <div
       className={`flex ${message.role === "user" ? "justify-end" : "justify-start"}`}
@@ -99,7 +111,10 @@ function ChatMessage({ message }: { message: Message }) {
             </div>
           )}
 
-        <MessageContent message={message} />
+        <MessageContent
+          message={message}
+          showLinkPreviews={showUserLinkPreviews && message.role === "user"}
+        />
 
         {message.status === "streaming" && (
           <div className="mt-2 flex items-center space-x-1">

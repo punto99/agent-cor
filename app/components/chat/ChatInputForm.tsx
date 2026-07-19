@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState, useCallback, DragEvent } from "react";
+import { useRef, useState, useCallback, DragEvent, ClipboardEvent } from "react";
 import { FilePreviewList, FileInfo } from "./FilePreviewList";
 import { VoiceRecorderPanel } from "./VoiceRecorderPanel";
 
@@ -22,11 +22,72 @@ const DRAG_ALLOWED_TYPES = [
   "application/msword",
 ];
 
+function getImageExtension(mimeType: string): string {
+  if (mimeType === "image/jpeg") return "jpg";
+  if (mimeType === "image/png") return "png";
+  if (mimeType === "image/gif") return "gif";
+  if (mimeType === "image/webp") return "webp";
+  return "png";
+}
+
+function createSyntheticFileSelectEvent(files: File[]) {
+  const dt = new DataTransfer();
+  files.forEach((file) => dt.items.add(file));
+  return {
+    target: { files: dt.files, value: "" },
+    preventDefault: () => {},
+  } as unknown as React.ChangeEvent<HTMLInputElement>;
+}
+
+function dataUrlToFile(dataUrl: string, filename: string): File | null {
+  const match = dataUrl.match(/^data:(image\/[a-zA-Z0-9.+-]+);base64,(.+)$/);
+  if (!match) return null;
+
+  const mimeType = match[1];
+  const base64Data = match[2].replace(/\s/g, "");
+  const bytes = Uint8Array.from(atob(base64Data), (char) =>
+    char.charCodeAt(0),
+  );
+
+  return new File([bytes], filename, {
+    type: mimeType,
+    lastModified: Date.now(),
+  });
+}
+
+function extractDataImageFilesFromHtml(
+  html: string,
+  maxImages: number,
+): { files: File[]; detectedCount: number } {
+  if (!html) return { files: [], detectedCount: 0 };
+
+  const document = new DOMParser().parseFromString(html, "text/html");
+  const imageSources = Array.from(document.querySelectorAll("img"))
+    .map((img) => img.getAttribute("src") || "")
+    .filter((src) => src.startsWith("data:image/"));
+
+  const files = imageSources
+    .slice(0, Math.max(0, maxImages))
+    .map((src, index) => {
+      const mimeType = src.match(/^data:([^;]+);base64,/)?.[1] || "image/png";
+      const extension = getImageExtension(mimeType);
+      return dataUrlToFile(
+        src,
+        `imagen-pegada-${Date.now()}-${index + 1}.${extension}`,
+      );
+    })
+    .filter((file): file is File => file !== null);
+
+  return { files, detectedCount: imageSources.length };
+}
+
 interface ChatInputFormProps {
   input: string;
   onInputChange: (value: string) => void;
   selectedFiles: FileInfo[];
-  onFileSelect: (e: React.ChangeEvent<HTMLInputElement>) => void;
+  onFileSelect: (
+    e: React.ChangeEvent<HTMLInputElement>,
+  ) => void | Promise<void>;
   onRemoveFile: (index: number) => void;
   onSubmit: (e: React.FormEvent) => void;
   // Voice recording
@@ -70,12 +131,22 @@ export function ChatInputForm({
 }: ChatInputFormProps) {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [isDragging, setIsDragging] = useState(false);
+  const [isProcessingPastedFiles, setIsProcessingPastedFiles] = useState(false);
+  const [fileNotice, setFileNotice] = useState<string | null>(null);
+
+  const showFileNotice = useCallback((message: string) => {
+    setFileNotice(message);
+    window.setTimeout(() => {
+      setFileNotice((current) => (current === message ? null : current));
+    }, 7000);
+  }, []);
 
   const canSubmit =
     (input.trim() || selectedFiles.length > 0 || finalTranscript.trim()) &&
     currentThreadId &&
     !isCreatingThread &&
     !isUploadingFile &&
+    !isProcessingPastedFiles &&
     !isRecording &&
     !isAgentThinking;
 
@@ -134,13 +205,7 @@ export function ChatInputForm({
 
       if (valid.length === 0) return;
 
-      const dt = new DataTransfer();
-      valid.forEach((f) => dt.items.add(f));
-      const syntheticEvent = {
-        target: { files: dt.files, value: "" },
-        preventDefault: () => {},
-      } as unknown as React.ChangeEvent<HTMLInputElement>;
-      onFileSelect(syntheticEvent);
+      onFileSelect(createSyntheticFileSelectEvent(valid));
     },
     [
       currentThreadId,
@@ -171,15 +236,106 @@ export function ChatInputForm({
 
       if (valid.length === 0) return;
 
-      const dt = new DataTransfer();
-      valid.forEach((f) => dt.items.add(f));
-      const syntheticEvent = {
-        target: { files: dt.files, value: "" },
-        preventDefault: () => {},
-      } as unknown as React.ChangeEvent<HTMLInputElement>;
-      onFileSelect(syntheticEvent);
+      onFileSelect(createSyntheticFileSelectEvent(valid));
     },
     [onFileSelect],
+  );
+
+  const handlePaste = useCallback(
+    async (e: ClipboardEvent<HTMLTextAreaElement>) => {
+      const items = Array.from(e.clipboardData.items);
+      const filesFromClipboard = Array.from(e.clipboardData.files);
+      const html = e.clipboardData.getData("text/html");
+
+      if (!currentThreadId || isCreatingThread || isRecording) {
+        return;
+      }
+
+      const filesFromItems = items
+        .filter((item) => item.kind === "file")
+        .map((item) => item.getAsFile())
+        .filter((file): file is File => file !== null);
+
+      const imageFilesFromClipboard = [...filesFromClipboard, ...filesFromItems]
+        .filter((file) => file.type.startsWith("image/"))
+        .map((file, index) => {
+          const extension = getImageExtension(file.type);
+          const filename =
+            file.name && file.name !== "image.png"
+              ? file.name
+              : `imagen-pegada-${Date.now()}-${index + 1}.${extension}`;
+
+          return new File([file], filename, {
+            type: file.type || "image/png",
+            lastModified: Date.now(),
+          });
+        });
+
+      const remainingSlots = MAX_FILES - selectedFiles.length;
+      if (remainingSlots <= 0) {
+        if (imageFilesFromClipboard.length > 0 || html.includes("<img")) {
+          alert(`Solo puedes subir hasta ${MAX_FILES} archivos.`);
+        }
+        return;
+      }
+
+      const htmlImages =
+        imageFilesFromClipboard.length > 0
+          ? { files: [], detectedCount: 0 }
+          : extractDataImageFilesFromHtml(html, remainingSlots);
+      const imageFiles =
+        imageFilesFromClipboard.length > 0
+          ? imageFilesFromClipboard
+          : htmlImages.files;
+      const detectedCount =
+        imageFilesFromClipboard.length > 0
+          ? imageFilesFromClipboard.length
+          : htmlImages.detectedCount;
+
+      if (imageFiles.length === 0) return;
+
+      const discardedCount = Math.max(0, detectedCount - remainingSlots);
+      if (discardedCount > 0) {
+        const acceptedCount = Math.min(detectedCount, remainingSlots);
+        showFileNotice(
+          `Se ${
+            acceptedCount === 1 ? "agregó" : "agregaron"
+          } ${acceptedCount} ${
+            acceptedCount === 1 ? "imagen" : "imágenes"
+          }. ${discardedCount} no ${
+            discardedCount === 1 ? "se agregó" : "se agregaron"
+          } porque el límite es ${MAX_FILES} archivos por mensaje.`,
+        );
+      }
+
+      const valid: File[] = [];
+      for (const file of imageFiles.slice(0, remainingSlots)) {
+        if (file.size > MAX_FILE_SIZE_BYTES) {
+          alert(`"${file.name}" supera el límite de ${MAX_FILE_SIZE_MB}MB.`);
+          continue;
+        }
+        valid.push(file);
+      }
+
+      if (valid.length === 0) return;
+
+      setIsProcessingPastedFiles(true);
+      try {
+        await onFileSelect(createSyntheticFileSelectEvent(valid));
+      } catch (error) {
+        console.error("Error procesando imágenes pegadas:", error);
+      } finally {
+        setIsProcessingPastedFiles(false);
+      }
+    },
+    [
+      currentThreadId,
+      isCreatingThread,
+      isRecording,
+      selectedFiles.length,
+      onFileSelect,
+      showFileNotice,
+    ],
   );
 
   return (
@@ -213,6 +369,19 @@ export function ChatInputForm({
       {/* Preview de archivos seleccionados */}
       <FilePreviewList files={selectedFiles} onRemoveFile={onRemoveFile} />
 
+      {isProcessingPastedFiles && (
+        <div className="mb-3 flex items-center gap-2 rounded-lg border border-primary/20 bg-primary/5 px-3 py-2 text-sm text-primary">
+          <span className="size-3 rounded-full border-2 border-primary/30 border-t-primary animate-spin" />
+          Procesando imágenes pegadas...
+        </div>
+      )}
+
+      {fileNotice && (
+        <div className="mb-3 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+          {fileNotice}
+        </div>
+      )}
+
       <form onSubmit={onSubmit} className="flex flex-col">
         {/* Input oculto para archivos */}
         <input
@@ -228,6 +397,7 @@ export function ChatInputForm({
         <textarea
           value={input}
           onChange={(e) => onInputChange(e.target.value)}
+          onPaste={handlePaste}
           onKeyDown={(e) => {
             // Enter sin Shift envía el mensaje
             if (e.key === "Enter" && !e.shiftKey) {
@@ -271,6 +441,7 @@ export function ChatInputForm({
                 !currentThreadId ||
                 isCreatingThread ||
                 selectedFiles.length >= MAX_FILES ||
+                isProcessingPastedFiles ||
                 isRecording
               }
               className="p-2 text-muted-foreground hover:text-foreground hover:bg-accent rounded-lg disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
@@ -299,7 +470,9 @@ export function ChatInputForm({
             <button
               type="button"
               onClick={isRecording ? onStopRecording : onStartRecording}
-              disabled={!currentThreadId || isCreatingThread}
+              disabled={
+                !currentThreadId || isCreatingThread || isProcessingPastedFiles
+              }
               className={`p-2 rounded-lg transition-colors ${
                 isRecording
                   ? "text-destructive hover:bg-destructive/10 animate-pulse"
@@ -336,7 +509,13 @@ export function ChatInputForm({
                 ? "bg-foreground text-background hover:bg-foreground/90"
                 : "bg-muted text-muted-foreground cursor-not-allowed"
             }`}
-            title={isUploadingFile ? "Subiendo..." : "Enviar mensaje"}
+            title={
+              isProcessingPastedFiles
+                ? "Procesando imágenes pegadas..."
+                : isUploadingFile
+                  ? "Subiendo..."
+                  : "Enviar mensaje"
+            }
           >
             <svg
               xmlns="http://www.w3.org/2000/svg"
