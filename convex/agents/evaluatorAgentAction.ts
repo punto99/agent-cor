@@ -11,16 +11,15 @@ import { v } from "convex/values";
 import { internalAction } from "../_generated/server";
 import { agentConfig, getEvaluatorAgentInstructions } from "../lib/serverConfig";
 import { 
-  classifyError, 
   extractErrorMessage,
-  logLLMAttempt,
   geminiConfig,
   openaiConfig,
   withLLMFallback,
 } from "../lib/llmFallback";
+import { prepareEvaluatorArgsForGemini } from "./evaluatorFilePreparation";
 
 // Usar modelo flash que es más eficiente en memoria
-const languageModel = google("gemini-3.5-flash");
+const languageModel = google("gemini-3.6-flash");
 
 // Tool para obtener la información de la task del thread
 const getTaskInfoTool = createTool({
@@ -194,27 +193,56 @@ export const generateEvaluationAsync = internalAction({
     visibleThreadId: v.optional(v.string()),
     visiblePromptMessageId: v.optional(v.string()),
     evaluationId: v.optional(v.id("taskEvaluations")),
+    contextFileIds: v.optional(v.array(v.string())),
   },
-  handler: async (ctx, { threadId, promptMessageId, visibleThreadId, visiblePromptMessageId, evaluationId }): Promise<{
-    text: string;
-    promptMessageId: string;
-    provider: "gemini" | "openai";
-  }> => {
+  handler: async (ctx, { threadId, promptMessageId, visibleThreadId, visiblePromptMessageId, evaluationId, contextFileIds }): Promise<
+    | {
+        text: string;
+        promptMessageId: string;
+        provider: "gemini" | "openai";
+      }
+    | {
+        text: "";
+        promptMessageId: string;
+        skipped: true;
+      }
+  > => {
     const startTime = Date.now();
     console.log("\n========================================");
     console.log("[Evaluator] 🚀 INICIO DE EVALUACIÓN");
     console.log(`[Evaluator] ThreadId: ${threadId}`);
     console.log("========================================\n");
 
+    let failPendingMessage: ((reason: string) => Promise<void>) | undefined;
+
     try {
       const { generateText } = await import("ai");
 
+      if (evaluationId) {
+        const claim = await ctx.runMutation(
+          internal.data.evaluation.claimTaskEvaluationRun,
+          { evaluationId },
+        );
+        if (!claim.shouldRun) {
+          console.log(
+            `[Evaluator] Evaluación ${evaluationId} cancelada o finalizada; se omite el job`,
+          );
+          return {
+            text: "",
+            promptMessageId,
+            skipped: true,
+          };
+        }
+      }
+
       // Preparar contexto
-      const { args: preparedArgs, save, getSavedMessages } = await evaluatorAgent.start(
-        ctx,
-        { promptMessageId },
-        { threadId }
-      );
+      const {
+        args: preparedArgs,
+        save,
+        fail,
+        getSavedMessages,
+      } = await evaluatorAgent.start(ctx, { promptMessageId }, { threadId });
+      failPendingMessage = fail;
 
       // Verificar configuración de proveedores
       const geminiEnabled: boolean = await ctx.runQuery(internal.data.llmConfig.isProviderEnabled, { provider: "gemini" });
@@ -226,19 +254,49 @@ export const generateEvaluationAsync = internalAction({
         threadId,
         geminiEnabled,
         openaiEnabled,
-        primaryFn: (signal) => generateText({
-          ...preparedArgs,
-          model: geminiConfig.model,
-          providerOptions: geminiConfig.providerOptions as any,
-          maxRetries: 0,
-          abortSignal: signal,
-        }),
-        fallbackFn: (signal) => generateText({
-          ...preparedArgs,
-          model: openaiConfig.model,
-          maxRetries: 0,
-          abortSignal: signal,
-        }),
+        primaryFn: async (signal) => {
+          let geminiPreparedArgs = preparedArgs;
+          if (contextFileIds && contextFileIds.length > 0) {
+            if (evaluationId) {
+              await ctx.runMutation(
+                internal.data.evaluation.updateTaskEvaluationProgress,
+                { evaluationId, stage: "preparing_files" },
+              );
+            }
+            geminiPreparedArgs = await prepareEvaluatorArgsForGemini(
+              ctx,
+              preparedArgs,
+              contextFileIds,
+            );
+          }
+          if (evaluationId) {
+            await ctx.runMutation(
+              internal.data.evaluation.updateTaskEvaluationProgress,
+              { evaluationId, stage: "generating_gemini" },
+            );
+          }
+          return await generateText({
+            ...geminiPreparedArgs,
+            model: geminiConfig.model,
+            providerOptions: geminiConfig.providerOptions as any,
+            maxRetries: 0,
+            abortSignal: signal,
+          });
+        },
+        fallbackFn: async (signal) => {
+          if (evaluationId) {
+            await ctx.runMutation(
+              internal.data.evaluation.updateTaskEvaluationProgress,
+              { evaluationId, stage: "generating_openai" },
+            );
+          }
+          return await generateText({
+            ...preparedArgs,
+            model: openaiConfig.model,
+            maxRetries: 0,
+            abortSignal: signal,
+          });
+        },
         logError: async (log) => {
           await ctx.runMutation(internal.data.llmConfig.logLLMError, log);
         },
@@ -246,6 +304,12 @@ export const generateEvaluationAsync = internalAction({
       });
 
       // Guardar resultado
+      if (evaluationId) {
+        await ctx.runMutation(
+          internal.data.evaluation.updateTaskEvaluationProgress,
+          { evaluationId, stage: "saving_result" },
+        );
+      }
       for (const step of result.steps) {
         await save({ step });
       }
@@ -296,11 +360,50 @@ export const generateEvaluationAsync = internalAction({
       };
     } catch (error) {
       const errorMessage = extractErrorMessage(error);
+
+      if (failPendingMessage) {
+        try {
+          await failPendingMessage(errorMessage);
+        } catch (failMessageError) {
+          console.error(
+            "[Evaluator] No se pudo finalizar el mensaje pending:",
+            failMessageError,
+          );
+        }
+      }
+
       if (evaluationId) {
-        await ctx.runMutation(internal.data.evaluation.failTaskEvaluation, {
-          evaluationId,
-          error: errorMessage,
-        });
+        try {
+          await ctx.runMutation(internal.data.evaluation.failTaskEvaluation, {
+            evaluationId,
+            error: errorMessage,
+          });
+        } catch (failEvaluationError) {
+          console.error(
+            "[Evaluator] No se pudo marcar la evaluación como fallida:",
+            failEvaluationError,
+          );
+        }
+      }
+
+      if (visibleThreadId) {
+        try {
+          await saveMessage(ctx, components.agent, {
+            threadId: visibleThreadId,
+            promptMessageId: visiblePromptMessageId,
+            agentName: agentConfig.evaluator.name,
+            message: {
+              role: "assistant",
+              content:
+                "⚠️ No se pudo completar la evaluación. Puedes reintentarla con los mismos archivos.",
+            },
+          });
+        } catch (saveVisibleError) {
+          console.error(
+            "[Evaluator] No se pudo guardar el error en el thread visible:",
+            saveVisibleError,
+          );
+        }
       }
       throw error;
     }

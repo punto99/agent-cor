@@ -7,7 +7,7 @@ import { agentConfig, getDocumentSearchAgentInstructions } from "../lib/serverCo
 import { searchDocumentsTool, searchEntitiesTool, getRAGStatisticsTool, searchByImageTool } from "../rag/ragTools";
 
 // Mismo modelo base que los demás agentes
-const languageModel = google("gemini-3.5-flash");
+const languageModel = google("gemini-3.6-flash");
 
 // ==================== DOCUMENT SEARCH AGENT ====================
 // - Tools de RAG: searchDocuments, searchEntities, getRAGStatistics, searchByImage

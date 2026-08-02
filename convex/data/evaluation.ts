@@ -7,6 +7,218 @@ import { createThread, saveMessage, listUIMessages, getFile } from "@convex-dev/
 import { paginationOptsValidator } from "convex/server";
 import { getAuthUserId } from "@convex-dev/auth/server";
 
+const evaluationStageValidator = v.union(
+  v.literal("queued"),
+  v.literal("preparing_files"),
+  v.literal("generating_gemini"),
+  v.literal("generating_openai"),
+  v.literal("saving_result"),
+  v.literal("completed"),
+  v.literal("failed"),
+);
+
+const EVALUATION_STALE_AFTER_MS = 15 * 60 * 1000;
+
+async function buildEvaluationContent(
+  ctx: any,
+  args: {
+    fileIds: string[];
+    briefThreadId: string;
+    taskId: string;
+  },
+) {
+  const loadFileParts = async (fileIds: string[]) => {
+    const parts: any[] = [];
+    const loadedFileIds: string[] = [];
+
+    for (const fileId of fileIds) {
+      try {
+        const fileData = await getFile(ctx, components.agent, fileId);
+        const { imagePart, filePart, file } = fileData;
+        const filename = file?.filename || "";
+        const isWordDocument =
+          filename.toLowerCase().endsWith(".docx") ||
+          filename.toLowerCase().endsWith(".doc");
+
+        if (imagePart) {
+          parts.push(imagePart);
+          loadedFileIds.push(fileId);
+        } else if (filePart && !isWordDocument) {
+          parts.push(filePart);
+          loadedFileIds.push(fileId);
+        } else if (isWordDocument) {
+          console.log(
+            `[Evaluation] Archivo Word omitido porque el evaluador no lo soporta: ${filename}`,
+          );
+        }
+      } catch (error) {
+        console.error(`[Evaluation] Error obteniendo archivo ${fileId}:`, error);
+      }
+    }
+
+    return { parts, loadedFileIds };
+  };
+
+  const finalFiles = await loadFileParts(args.fileIds);
+  if (finalFiles.loadedFileIds.length !== args.fileIds.length) {
+    throw new Error(
+      `No se pudieron recuperar todos los archivos de la evaluación: ${finalFiles.loadedFileIds.length}/${args.fileIds.length}.`,
+    );
+  }
+
+  const taskId = ctx.db.normalizeId("tasks", args.taskId);
+  const taskAttachments = taskId
+    ? await ctx.db
+        .query("taskAttachments")
+        .withIndex("by_task", (q: any) => q.eq("taskId", taskId))
+        .collect()
+    : [];
+  const finalFileIdSet = new Set(args.fileIds);
+  const originalCandidateIds = Array.from(
+    new Set<string>(
+      taskAttachments
+        .map((attachment: any) => String(attachment.fileId))
+        .filter((fileId: string) => !finalFileIdSet.has(fileId)),
+    ),
+  );
+  const originalFiles = await loadFileParts(originalCandidateIds);
+
+  const content: any[] = [
+    {
+      type: "text",
+      text: "ENTREGABLES FINALES A EVALUAR:",
+    },
+    ...finalFiles.parts,
+  ];
+
+  if (originalFiles.parts.length > 0) {
+    content.push(
+      {
+        type: "text",
+        text: "ARCHIVOS DE REFERENCIA DEL REQUERIMIENTO ORIGINAL:",
+      },
+      ...originalFiles.parts,
+    );
+  }
+
+  content.push({
+    type: "text",
+    text: `📋 INFORMACIÓN DEL CONTEXTO
+
+Se adjuntaron los siguientes elementos para evaluación:
+✅ ${finalFiles.loadedFileIds.length} entregable(s) final(es)
+${originalFiles.loadedFileIds.length > 0 ? `✅ ${originalFiles.loadedFileIds.length} archivo(s) de referencia original` : "ℹ️ Sin archivos de referencia originales"}
+
+Referencias del requerimiento original:
+• Brief Thread ID: ${args.briefThreadId}
+• Task ID: ${args.taskId}`,
+  });
+
+  return {
+    content,
+    finalFileIds: finalFiles.loadedFileIds,
+    originalReferenceFileIds: originalFiles.loadedFileIds,
+  };
+}
+
+async function enqueueTaskEvaluation(
+  ctx: any,
+  args: {
+    task: any;
+    evaluationThreadId: string;
+    briefThreadId: string;
+    prompt: string;
+    fileIds: string[];
+    originalReferenceFileIds: string[];
+    content: any[];
+    userId: string;
+    attempt: number;
+    retryOfEvaluationId?: any;
+  },
+) {
+  const agentEvaluationThreadId = await createThread(ctx, components.agent, {
+    userId: args.userId,
+    title: `Evaluación aislada de Brief`,
+    summary: `Thread técnico para evaluar task ${args.task._id}`,
+  });
+
+  const allContextFileIds = [
+    ...new Set([...args.fileIds, ...args.originalReferenceFileIds]),
+  ];
+
+  const { messageId } = await saveMessage(ctx, components.agent, {
+    threadId: args.evaluationThreadId,
+    message: {
+      role: "user",
+      content: args.content,
+    },
+    metadata:
+      allContextFileIds.length > 0
+        ? { fileIds: allContextFileIds }
+        : undefined,
+  });
+
+  const { messageId: agentUserMessageId } = await saveMessage(
+    ctx,
+    components.agent,
+    {
+      threadId: agentEvaluationThreadId,
+      message: {
+        role: "user",
+        content: args.content,
+      },
+      metadata:
+        allContextFileIds.length > 0
+          ? { fileIds: allContextFileIds }
+          : undefined,
+    },
+  );
+
+  const now = Date.now();
+  const evaluationId = await ctx.db.insert("taskEvaluations", {
+    taskId: args.task._id,
+    evaluationThreadId: args.evaluationThreadId,
+    agentEvaluationThreadId,
+    originalThreadId: args.briefThreadId,
+    requestedBy: args.userId,
+    requestedBySource: "auth",
+    requestedAt: now,
+    status: "processing",
+    stage: "queued",
+    attempt: args.attempt,
+    retryOfEvaluationId: args.retryOfEvaluationId,
+    prompt: args.prompt,
+    inputFileIds: args.fileIds,
+    originalReferenceFileIds: args.originalReferenceFileIds,
+    userMessageId: messageId,
+    agentUserMessageId,
+    clientId: args.task.clientId,
+    clientBrandId: args.task.clientBrandId,
+    taskSource: args.task.source,
+    createdAt: now,
+    updatedAt: now,
+  });
+
+  const scheduledFunctionId = await ctx.scheduler.runAfter(
+    0,
+    internal.agents.evaluatorAgentAction.generateEvaluationAsync,
+    {
+      threadId: agentEvaluationThreadId,
+      promptMessageId: agentUserMessageId,
+      visibleThreadId: args.evaluationThreadId,
+      visiblePromptMessageId: messageId,
+      evaluationId,
+      contextFileIds: allContextFileIds,
+    },
+  );
+
+  await ctx.db.patch(evaluationId, {
+    scheduledFunctionId: String(scheduledFunctionId),
+  });
+
+  return { messageId, evaluationId };
+}
+
 // Crear un thread de evaluación para un thread de brief existente
 export const createEvaluationThread = mutation({
   args: {
@@ -87,123 +299,141 @@ export const sendEvaluationFile = mutation({
       throw new Error("El thread de evaluación no corresponde a esta task.");
     }
     
-    // Crear contenido del mensaje
-    const content: any[] = [];
-    
     // Combinar fileId y fileIds para compatibilidad
-    const allFileIds: string[] = [];
-    if (fileId) allFileIds.push(fileId);
-    if (fileIds) allFileIds.push(...fileIds);
-    
-    // Procesar todos los archivos
-    for (const fId of allFileIds) {
-      try {
-        const fileData = await getFile(ctx, components.agent, fId);
-        const { imagePart, filePart, file } = fileData;
+    const combinedFileIds: string[] = [];
+    if (fileId) combinedFileIds.push(fileId);
+    if (fileIds) combinedFileIds.push(...fileIds);
+    const allFileIds = [...new Set(combinedFileIds)];
 
-        // Verificar si es Word (no soportado por Gemini)
-        const filename = file?.filename || '';
-        const isWordDocument = filename.toLowerCase().endsWith('.docx') || 
-          filename.toLowerCase().endsWith('.doc');
-        
-        if (imagePart) {
-          // LOG: Estimar tamaño de la imagen
-          if ((imagePart as any).image?.source?.data) {
-            const dataLength = (imagePart as any).image.source.data.length;
-            console.log(`[Evaluation] 🖼️ imagePart tamaño data: ${(dataLength / 1024).toFixed(1)}KB`);
-          } else {
-            console.log(`[Evaluation] 🖼️ imagePart es referencia URL`);
-          }
-          content.push(imagePart);
-        } else if (filePart && !isWordDocument) {
-          content.push(filePart);
-        } else if (isWordDocument) {
-          console.log(`[Evaluation] 📝 Archivo Word detectado - omitiendo (contenido no soportado)`);
-        }
-      } catch (error) {
-        console.error(`[Evaluation] Error obteniendo archivo ${fId}:`, error);
-      }
+    if (allFileIds.length === 0) {
+      throw new Error("Debes adjuntar al menos un archivo para evaluar.");
     }
-    
-    // Agregar contexto del brief thread con el taskId para que el tool pueda encontrarlo
-    // Los IDs se incluyen en el texto ya que metadata tiene esquema fijo
-    const contextPrompt = `📋 INFORMACIÓN DEL CONTEXTO
 
-Se adjuntaron los siguientes elementos para evaluación:
-${allFileIds.length > 0 ? `✅ ${allFileIds.length} archivo(s) adjunto(s)` : '❌ Sin archivos adjuntos'}
-
-Referencias del requerimiento original:
-• Brief Thread ID: ${briefThreadId}
-• Task ID: ${taskId}`;
-    
-    content.push({ type: "text", text: contextPrompt });
-    
-    if (content.length === 0) {
-      throw new Error("Debes adjuntar al menos un archivo o escribir un mensaje");
-    }
-    
-    const agentEvaluationThreadId = await createThread(ctx, components.agent, {
-      userId,
-      title: `Evaluación aislada de Brief`,
-      summary: `Thread técnico para evaluar task ${taskId}`,
+    const preparedContent = await buildEvaluationContent(ctx, {
+      fileIds: allFileIds,
+      briefThreadId,
+      taskId,
     });
 
-    // Guardar el mensaje del usuario en el thread visible de la task.
-    const { messageId } = await saveMessage(ctx, components.agent, {
-      threadId: evaluationThreadId,
-      message: { 
-        role: "user", 
-        content
-      },
-      metadata: allFileIds.length > 0 ? { fileIds: allFileIds } : undefined,
-    });
-
-    // Guardar el mismo mensaje en un thread técnico limpio para la generación.
-    const { messageId: agentUserMessageId } = await saveMessage(ctx, components.agent, {
-      threadId: agentEvaluationThreadId,
-      message: {
-        role: "user",
-        content,
-      },
-      metadata: allFileIds.length > 0 ? { fileIds: allFileIds } : undefined,
-    });
-    
-    console.log(`[Evaluation] ✅ Mensaje de evaluación guardado: ${messageId}`);
-    
-    // Actualizar status del thread de evaluación
     await ctx.db.patch(evalThread._id, { status: "in_progress" });
 
-    const now = Date.now();
-    const evaluationId = await ctx.db.insert("taskEvaluations", {
-      taskId,
+    const result = await enqueueTaskEvaluation(ctx, {
+      task,
       evaluationThreadId,
-      agentEvaluationThreadId,
-      originalThreadId: briefThreadId,
-      requestedBy: userId,
-      requestedBySource: "auth",
-      requestedAt: now,
-      status: "processing",
+      briefThreadId,
       prompt,
-      inputFileIds: allFileIds,
-      userMessageId: messageId,
-      agentUserMessageId,
-      clientId: task.clientId,
-      clientBrandId: task.clientBrandId,
-      taskSource: task.source,
-      createdAt: now,
-      updatedAt: now,
+      fileIds: preparedContent.finalFileIds,
+      originalReferenceFileIds: preparedContent.originalReferenceFileIds,
+      content: preparedContent.content,
+      userId,
+      attempt: 1,
     });
-    
-    // Disparar generación de evaluación asíncrona
-    await ctx.scheduler.runAfter(0, internal.agents.evaluatorAgentAction.generateEvaluationAsync, {
-      threadId: agentEvaluationThreadId,
-      promptMessageId: agentUserMessageId,
-      visibleThreadId: evaluationThreadId,
-      visiblePromptMessageId: messageId,
-      evaluationId,
+
+    console.log(
+      `[Evaluation] ✅ Evaluación encolada: ${result.evaluationId}`,
+    );
+    return result;
+  },
+});
+
+export const retryTaskEvaluation = mutation({
+  args: {
+    evaluationId: v.id("taskEvaluations"),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) {
+      throw new Error("Debes iniciar sesión para reintentar una evaluación.");
+    }
+
+    const previousEvaluation = await ctx.db.get(args.evaluationId);
+    if (!previousEvaluation) {
+      throw new Error("No se encontró la evaluación que deseas reintentar.");
+    }
+
+    const latestEvaluation = await ctx.db
+      .query("taskEvaluations")
+      .withIndex("by_task_and_createdAt", (q) =>
+        q.eq("taskId", previousEvaluation.taskId),
+      )
+      .order("desc")
+      .first();
+
+    if (latestEvaluation && latestEvaluation._id !== previousEvaluation._id) {
+      if (latestEvaluation.status === "processing") {
+        return {
+          status: "already_processing" as const,
+          evaluationId: latestEvaluation._id,
+        };
+      }
+      throw new Error(
+        "Esta evaluación ya no es la más reciente de la task.",
+      );
+    }
+
+    const isStaleProcessing =
+      previousEvaluation.status === "processing" &&
+      previousEvaluation.updatedAt < Date.now() - EVALUATION_STALE_AFTER_MS;
+
+    if (previousEvaluation.status !== "failed" && !isStaleProcessing) {
+      throw new Error(
+        "Solo puedes reintentar evaluaciones fallidas o interrumpidas.",
+      );
+    }
+
+    const task = await ctx.db.get(previousEvaluation.taskId);
+    if (!task || task.convexStatus === "deleted") {
+      throw new Error("No se encontró la task asociada a esta evaluación.");
+    }
+
+    const evalThread = await ctx.db
+      .query("evaluationThreads")
+      .withIndex("by_evaluation_thread", (q) =>
+        q.eq("evaluationThreadId", previousEvaluation.evaluationThreadId),
+      )
+      .first();
+
+    if (!evalThread || evalThread.taskId !== previousEvaluation.taskId) {
+      throw new Error("El thread de evaluación no corresponde a esta task.");
+    }
+
+    if (previousEvaluation.inputFileIds.length === 0) {
+      throw new Error("La evaluación anterior no tiene archivos para reintentar.");
+    }
+
+    const preparedContent = await buildEvaluationContent(ctx, {
+      fileIds: previousEvaluation.inputFileIds,
+      briefThreadId: previousEvaluation.originalThreadId,
+      taskId: previousEvaluation.taskId,
     });
-    
-    return { messageId, evaluationId };
+
+    if (isStaleProcessing) {
+      await ctx.db.patch(previousEvaluation._id, {
+        status: "failed",
+        stage: "failed",
+        error: "La evaluación anterior fue interrumpida antes de completarse.",
+        updatedAt: Date.now(),
+      });
+    }
+
+    await ctx.db.patch(evalThread._id, { status: "in_progress" });
+
+    const result = await enqueueTaskEvaluation(ctx, {
+      task,
+      evaluationThreadId: previousEvaluation.evaluationThreadId,
+      briefThreadId: previousEvaluation.originalThreadId,
+      prompt:
+        previousEvaluation.prompt ||
+        "Por favor evalúa este producto final y compáralo con el requerimiento original.",
+      fileIds: preparedContent.finalFileIds,
+      originalReferenceFileIds: preparedContent.originalReferenceFileIds,
+      content: preparedContent.content,
+      userId,
+      attempt: (previousEvaluation.attempt ?? 1) + 1,
+      retryOfEvaluationId: previousEvaluation._id,
+    });
+
+    return { status: "scheduled" as const, ...result };
   },
 });
 
@@ -243,11 +473,54 @@ export const getLatestTaskEvaluationByTask = query({
     taskId: v.id("tasks"),
   },
   handler: async (ctx, args) => {
-    return await ctx.db
+    const evaluation = await ctx.db
       .query("taskEvaluations")
       .withIndex("by_task_and_createdAt", (q) => q.eq("taskId", args.taskId))
       .order("desc")
       .first();
+
+    if (!evaluation) return null;
+
+    return {
+      ...evaluation,
+      isStale:
+        evaluation.status === "processing" &&
+        evaluation.updatedAt < Date.now() - EVALUATION_STALE_AFTER_MS,
+    };
+  },
+});
+
+export const updateTaskEvaluationProgress = internalMutation({
+  args: {
+    evaluationId: v.id("taskEvaluations"),
+    stage: evaluationStageValidator,
+  },
+  handler: async (ctx, args) => {
+    const evaluation = await ctx.db.get(args.evaluationId);
+    if (!evaluation || evaluation.status !== "processing") {
+      return { status: "ignored" as const };
+    }
+
+    await ctx.db.patch(args.evaluationId, {
+      stage: args.stage,
+      updatedAt: Date.now(),
+    });
+    return { status: "updated" as const };
+  },
+});
+
+export const claimTaskEvaluationRun = internalMutation({
+  args: {
+    evaluationId: v.id("taskEvaluations"),
+  },
+  handler: async (ctx, args) => {
+    const evaluation = await ctx.db.get(args.evaluationId);
+    if (!evaluation || evaluation.status !== "processing") {
+      return { shouldRun: false as const };
+    }
+
+    await ctx.db.patch(args.evaluationId, { updatedAt: Date.now() });
+    return { shouldRun: true as const };
   },
 });
 
@@ -262,10 +535,14 @@ export const completeTaskEvaluation = internalMutation({
   handler: async (ctx, args) => {
     const evaluation = await ctx.db.get(args.evaluationId);
     if (!evaluation) return { status: "missing" as const };
+    if (evaluation.status !== "processing") {
+      return { status: "ignored" as const };
+    }
 
     const now = Date.now();
     await ctx.db.patch(args.evaluationId, {
       status: "completed",
+      stage: "completed",
       resultText: args.resultText,
       resultMessageId: args.resultMessageId,
       agentResultMessageId: args.agentResultMessageId,
@@ -298,10 +575,14 @@ export const failTaskEvaluation = internalMutation({
   handler: async (ctx, args) => {
     const evaluation = await ctx.db.get(args.evaluationId);
     if (!evaluation) return { status: "missing" as const };
+    if (evaluation.status === "completed") {
+      return { status: "ignored" as const };
+    }
 
     const now = Date.now();
     await ctx.db.patch(args.evaluationId, {
       status: "failed",
+      stage: "failed",
       error: args.error,
       updatedAt: now,
     });
@@ -396,6 +677,8 @@ export const createBackfilledTaskEvaluation = internalMutation({
       requestedAt: args.requestedAt,
       completedAt: args.completedAt,
       status: "completed",
+      stage: "completed",
+      attempt: 1,
       prompt: args.prompt,
       inputFileIds: args.inputFileIds,
       userMessageId: args.userMessageId,

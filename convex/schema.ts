@@ -302,8 +302,23 @@ export default defineSchema({
       v.literal("completed"),
       v.literal("failed"),
     ),
+    stage: v.optional(
+      v.union(
+        v.literal("queued"),
+        v.literal("preparing_files"),
+        v.literal("generating_gemini"),
+        v.literal("generating_openai"),
+        v.literal("saving_result"),
+        v.literal("completed"),
+        v.literal("failed"),
+      ),
+    ),
+    attempt: v.optional(v.number()),
+    retryOfEvaluationId: v.optional(v.id("taskEvaluations")),
+    scheduledFunctionId: v.optional(v.string()),
     prompt: v.optional(v.string()),
     inputFileIds: v.array(v.string()),
+    originalReferenceFileIds: v.optional(v.array(v.string())),
     userMessageId: v.optional(v.string()),
     agentUserMessageId: v.optional(v.string()),
     resultMessageId: v.optional(v.string()),
@@ -333,7 +348,7 @@ export default defineSchema({
   // Registro de errores de LLM para monitoreo y debugging
   llmErrors: defineTable({
     provider: v.string(), // "gemini" | "openai"
-    model: v.string(), // "gemini-3.5-flash" | "gpt-5.5"
+    model: v.string(), // "gemini-3.6-flash" | "gpt-5.5"
     agentName: v.string(), // "briefAgent" | "reviewerAgent" | "evaluatorAgent"
     errorType: v.string(), // "rate_limit" | "high_demand" | "timeout" | "unknown"
     errorMessage: v.string(),

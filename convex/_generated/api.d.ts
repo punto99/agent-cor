@@ -11,6 +11,7 @@
 import type * as agents_agent from "../agents/agent.js";
 import type * as agents_documentSearchAgent from "../agents/documentSearchAgent.js";
 import type * as agents_evaluatorAgentAction from "../agents/evaluatorAgentAction.js";
+import type * as agents_evaluatorFilePreparation from "../agents/evaluatorFilePreparation.js";
 import type * as agents_externalBriefAgent from "../agents/externalBriefAgent.js";
 import type * as agents_orchestratorAgent from "../agents/orchestratorAgent.js";
 import type * as agents_priorityAgent from "../agents/priorityAgent.js";
@@ -105,6 +106,7 @@ declare const fullApi: ApiFromModules<{
   "agents/agent": typeof agents_agent;
   "agents/documentSearchAgent": typeof agents_documentSearchAgent;
   "agents/evaluatorAgentAction": typeof agents_evaluatorAgentAction;
+  "agents/evaluatorFilePreparation": typeof agents_evaluatorFilePreparation;
   "agents/externalBriefAgent": typeof agents_externalBriefAgent;
   "agents/orchestratorAgent": typeof agents_orchestratorAgent;
   "agents/priorityAgent": typeof agents_priorityAgent;

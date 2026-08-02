@@ -79,6 +79,8 @@ interface EvaluationMessageListProps {
   messages: EvaluationMessage[];
   isThinking: boolean;
   errorMessage?: string | null;
+  onRetry?: () => void;
+  isRetrying?: boolean;
 }
 
 /**
@@ -88,6 +90,8 @@ export function EvaluationMessageList({
   messages,
   isThinking,
   errorMessage,
+  onRetry,
+  isRetrying = false,
 }: EvaluationMessageListProps) {
   return (
     <div className="flex-1 p-4 space-y-4 overflow-y-auto">
@@ -115,9 +119,18 @@ export function EvaluationMessageList({
               No se pudo completar la evaluación
             </div>
             <p className="text-sm">
-              {errorMessage} Puedes subir el archivo nuevamente e intentarlo
-              otra vez.
+              {errorMessage}
             </p>
+            {onRetry && (
+              <button
+                type="button"
+                onClick={onRetry}
+                disabled={isRetrying}
+                className="mt-3 rounded-md bg-destructive px-3 py-1.5 text-sm font-medium text-destructive-foreground transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {isRetrying ? "Reintentando..." : "Reintentar con los mismos archivos"}
+              </button>
+            )}
           </div>
         </div>
       )}

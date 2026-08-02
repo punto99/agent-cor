@@ -379,6 +379,9 @@ export function TaskDetailDialog({
   const sendEvaluationFile = useMutation(
     api.data.evaluation.sendEvaluationFile,
   );
+  const retryTaskEvaluation = useMutation(
+    api.data.evaluation.retryTaskEvaluation,
+  );
   const generateUploadUrl = useMutation(api.data.files.generateUploadUrl);
   const registerUploadedFile = useAction(api.data.files.registerUploadedFile);
   const [publishError, setPublishError] = useState<string | null>(null);
@@ -424,6 +427,10 @@ export function TaskDetailDialog({
   );
   const [selectedFiles, setSelectedFiles] = useState<SelectedFile[]>([]);
   const [isSubmittingEval, setIsSubmittingEval] = useState(false);
+  const [isRetryingEval, setIsRetryingEval] = useState(false);
+  const [evaluationRetryError, setEvaluationRetryError] = useState<
+    string | null
+  >(null);
   const [copiedId, setCopiedId] = useState<string | null>(null);
 
   /** Copia un ID al clipboard y muestra feedback visual por 1.5s */
@@ -862,6 +869,7 @@ export function TaskDetailDialog({
     if (selectedFiles.length === 0 || !evaluationThreadId) return;
 
     setIsSubmittingEval(true);
+    setEvaluationRetryError(null);
     try {
       const fileIds: string[] = [];
       for (const file of selectedFiles) {
@@ -906,6 +914,24 @@ export function TaskDetailDialog({
     }
   };
 
+  const handleRetryEvaluation = async () => {
+    if (!latestTaskEvaluation) return;
+
+    setIsRetryingEval(true);
+    setEvaluationRetryError(null);
+    try {
+      await retryTaskEvaluation({ evaluationId: latestTaskEvaluation._id });
+    } catch (error) {
+      setEvaluationRetryError(
+        error instanceof Error
+          ? error.message
+          : "No se pudo reintentar la evaluación.",
+      );
+    } finally {
+      setIsRetryingEval(false);
+    }
+  };
+
   // Transformar mensajes de evaluación para el componente
   const evalMessageList: EvaluationMessage[] = (evaluationMessages?.page || [])
     .map((msg: any) => ({
@@ -926,13 +952,23 @@ export function TaskDetailDialog({
       return true;
     });
 
+  const isStaleEvaluation = Boolean(latestTaskEvaluation?.isStale);
   const isEvaluatorThinking =
-    latestTaskEvaluation?.status === "processing" || isSubmittingEval;
-  const evaluationErrorMessage =
-    latestTaskEvaluation?.status === "failed" && !isEvaluatorThinking
-      ? latestTaskEvaluation.error ||
-        "El evaluador no pudo generar una respuesta."
-      : null;
+    (latestTaskEvaluation?.status === "processing" && !isStaleEvaluation) ||
+    isSubmittingEval ||
+    isRetryingEval;
+  const canRetryEvaluation = Boolean(
+    latestTaskEvaluation &&
+      (latestTaskEvaluation.status === "failed" || isStaleEvaluation),
+  );
+  const evaluationErrorMessage = evaluationRetryError
+    ? evaluationRetryError
+    : !isEvaluatorThinking && isStaleEvaluation
+      ? "La evaluación fue interrumpida antes de completarse."
+      : latestTaskEvaluation?.status === "failed" && !isEvaluatorThinking
+        ? latestTaskEvaluation.error ||
+          "El evaluador no pudo generar una respuesta."
+        : null;
   const shouldDeleteBoth = taskMissingInCOR && projectMissingInCOR && !!project;
 
   const handleConfirmDeleteTask = async () => {
@@ -1285,6 +1321,8 @@ export function TaskDetailDialog({
                 messages={evalMessageList}
                 isThinking={isEvaluatorThinking}
                 errorMessage={evaluationErrorMessage}
+                onRetry={canRetryEvaluation ? handleRetryEvaluation : undefined}
+                isRetrying={isRetryingEval}
               />
               <EvaluationInput
                 selectedFiles={selectedFiles}

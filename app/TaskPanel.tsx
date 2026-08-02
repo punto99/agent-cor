@@ -33,6 +33,10 @@ export default function TaskPanel({ threadId, onClose }: TaskPanelProps) {
   );
   const [selectedFiles, setSelectedFiles] = useState<SelectedFile[]>([]);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isRetryingEvaluation, setIsRetryingEvaluation] = useState(false);
+  const [evaluationRetryError, setEvaluationRetryError] = useState<string | null>(
+    null,
+  );
 
   // Obtener task asociada al thread actual
   const task = useQuery(
@@ -51,6 +55,9 @@ export default function TaskPanel({ threadId, onClose }: TaskPanelProps) {
     api.data.evaluation.createEvaluationThread,
   );
   const sendEvaluationFile = useMutation(api.data.evaluation.sendEvaluationFile);
+  const retryTaskEvaluation = useMutation(
+    api.data.evaluation.retryTaskEvaluation,
+  );
   const uploadFile = useAction(api.data.files.uploadFile);
 
   // Sincronizar evaluationThreadId cuando cambia la task
@@ -106,6 +113,7 @@ export default function TaskPanel({ threadId, onClose }: TaskPanelProps) {
       return;
 
     setIsSubmitting(true);
+    setEvaluationRetryError(null);
     try {
       const fileIds: string[] = [];
 
@@ -131,6 +139,24 @@ export default function TaskPanel({ threadId, onClose }: TaskPanelProps) {
       console.error("Error enviando evaluación:", error);
     } finally {
       setIsSubmitting(false);
+    }
+  };
+
+  const handleRetryEvaluation = async () => {
+    if (!latestTaskEvaluation) return;
+
+    setIsRetryingEvaluation(true);
+    setEvaluationRetryError(null);
+    try {
+      await retryTaskEvaluation({ evaluationId: latestTaskEvaluation._id });
+    } catch (error) {
+      setEvaluationRetryError(
+        error instanceof Error
+          ? error.message
+          : "No se pudo reintentar la evaluación.",
+      );
+    } finally {
+      setIsRetryingEvaluation(false);
     }
   };
 
@@ -167,13 +193,23 @@ export default function TaskPanel({ threadId, onClose }: TaskPanelProps) {
     });
 
   // Verificar si el evaluador está pensando
+  const isStaleEvaluation = Boolean(latestTaskEvaluation?.isStale);
   const isEvaluatorThinking =
-    latestTaskEvaluation?.status === "processing" || isSubmitting;
-  const evaluationErrorMessage =
-    latestTaskEvaluation?.status === "failed" && !isEvaluatorThinking
-      ? latestTaskEvaluation.error ||
-        "El evaluador no pudo generar una respuesta."
-      : null;
+    (latestTaskEvaluation?.status === "processing" && !isStaleEvaluation) ||
+    isSubmitting ||
+    isRetryingEvaluation;
+  const canRetryEvaluation = Boolean(
+    latestTaskEvaluation &&
+      (latestTaskEvaluation.status === "failed" || isStaleEvaluation),
+  );
+  const evaluationErrorMessage = evaluationRetryError
+    ? evaluationRetryError
+    : !isEvaluatorThinking && isStaleEvaluation
+      ? "La evaluación fue interrumpida antes de completarse."
+      : latestTaskEvaluation?.status === "failed" && !isEvaluatorThinking
+        ? latestTaskEvaluation.error ||
+          "El evaluador no pudo generar una respuesta."
+        : null;
 
   const statusColor = getStatusColor(task.status);
   const priorityConfig = getPriorityConfig(task.priority);
@@ -246,6 +282,8 @@ export default function TaskPanel({ threadId, onClose }: TaskPanelProps) {
             messages={evaluationMessageList}
             isThinking={isEvaluatorThinking}
             errorMessage={evaluationErrorMessage}
+            onRetry={canRetryEvaluation ? handleRetryEvaluation : undefined}
+            isRetrying={isRetryingEvaluation}
           />
           <EvaluationInput
             selectedFiles={selectedFiles}

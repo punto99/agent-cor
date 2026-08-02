@@ -14,7 +14,7 @@ import {
 } from "../tools";
 import { agentConfig, getExternalBriefAgentInstructions } from "../lib/serverConfig";
 
-const languageModel = google("gemini-3.5-flash");
+const languageModel = google("gemini-3.6-flash");
 
 export const externalBriefAgent = new Agent(components.agent, {
   name: agentConfig.externalBrief.name,

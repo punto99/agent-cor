@@ -6,7 +6,7 @@ import { z } from "zod";
 import { generateText } from "ai";
 import { google } from "@ai-sdk/google";
 
-const languageModel = google("gemini-3.5-flash");
+const languageModel = google("gemini-3.6-flash");
 
 function getCurrentDateContext(): string {
   const now = new Date();
