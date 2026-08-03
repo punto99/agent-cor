@@ -17,6 +17,7 @@ import type {
   ExternalProduct,
   ExternalProject,
   ExternalTask,
+  ExternalCollaborator,
   ExternalTaskAttachment,
   CreateProjectInput,
   CreateTaskInput,
@@ -278,6 +279,30 @@ function mapProjectFromCOR(project: Record<string, unknown>): ExternalProject {
     status: project.status as string | undefined,
     estimatedTime: project.estimated_time as number | undefined,
   };
+}
+
+function mapCollaboratorsFromCOR(payload: unknown): ExternalCollaborator[] {
+  const rawItems = Array.isArray(payload)
+    ? payload
+    : Array.isArray((payload as { data?: unknown[] } | null)?.data)
+      ? (payload as { data: unknown[] }).data
+      : [];
+
+  return rawItems.flatMap((raw): ExternalCollaborator[] => {
+    const item = raw as Record<string, unknown>;
+    const id = parsePositiveInteger(item.id ?? item.user_id);
+    if (id === undefined) return [];
+    return [
+      {
+        id,
+        firstName:
+          typeof item.first_name === "string" ? item.first_name : undefined,
+        lastName:
+          typeof item.last_name === "string" ? item.last_name : undefined,
+        email: typeof item.email === "string" ? item.email : undefined,
+      },
+    ];
+  });
 }
 
 /**
@@ -602,6 +627,107 @@ export function createCORProvider(): ProjectManagementProvider {
         status: task.status,
         priority: task.priority,
       };
+    },
+
+    // ==================== PROJECT COLLABORATORS ====================
+
+    async getProjectCollaborators(
+      projectId: number,
+    ): Promise<ExternalCollaborator[]> {
+      // COR's dedicated collaborators endpoint can return an empty array even
+      // when the project has collaborators. The project detail response is the
+      // reliable source and exposes them in its `collaborators` property.
+      const response = await corApiFetch(`/projects/${projectId}`);
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(
+          `COR API error: ${response.status} - No se pudieron obtener los colaboradores del proyecto ${projectId}: ${errorText}`,
+        );
+      }
+
+      const raw = await response.text();
+      if (!raw.trim()) return [];
+
+      const payload = JSON.parse(raw) as Record<string, unknown>;
+      const project =
+        payload.data &&
+        typeof payload.data === "object" &&
+        !Array.isArray(payload.data)
+          ? (payload.data as Record<string, unknown>)
+          : payload;
+      return mapCollaboratorsFromCOR(project.collaborators);
+    },
+
+    async addProjectCollaborators(
+      projectId: number,
+      userIds: number[],
+    ): Promise<{ success: boolean; error?: string }> {
+      const uniqueUserIds = Array.from(
+        new Set(userIds.filter((id) => Number.isInteger(id) && id > 0)),
+      );
+      if (uniqueUserIds.length === 0) return { success: true };
+
+      const form = new URLSearchParams();
+      for (const userId of uniqueUserIds) {
+        // Although COR documents `usersIds` as an array, its form parser only
+        // accepts the bracket notation; the unbracketed key returns EH001/500.
+        form.append("usersIds[]", String(userId));
+      }
+
+      const response = await corApiFetch(
+        `/projects/${projectId}/collaborators`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          body: form.toString(),
+        },
+      );
+      if (!response.ok) {
+        const errorText = await response.text();
+        return {
+          success: false,
+          error: `COR API error: ${response.status} - No se pudieron agregar colaboradores al proyecto ${projectId}: ${errorText}`,
+        };
+      }
+      return { success: true };
+    },
+
+    // ==================== TASK COLLABORATORS ====================
+
+    async getTaskCollaborators(
+      taskId: number,
+    ): Promise<ExternalCollaborator[]> {
+      const response = await corApiFetch(`/tasks/${taskId}/collaborators`);
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(
+          `COR API error: ${response.status} - No se pudieron obtener los colaboradores de la task ${taskId}: ${errorText}`,
+        );
+      }
+
+      const raw = await response.text();
+      return raw.trim() ? mapCollaboratorsFromCOR(JSON.parse(raw)) : [];
+    },
+
+    async setTaskCollaborators(
+      taskId: number,
+      userIds: number[],
+    ): Promise<{ success: boolean; error?: string }> {
+      const collaborators = Array.from(
+        new Set(userIds.filter((id) => Number.isInteger(id) && id > 0)),
+      );
+      const response = await corApiFetch(`/tasks/${taskId}/collaborators`, {
+        method: "POST",
+        body: JSON.stringify({ collaborators, reasignEstimate: false }),
+      });
+      if (!response.ok) {
+        const errorText = await response.text();
+        return {
+          success: false,
+          error: `COR API error: ${response.status} - No se pudieron sincronizar colaboradores de la task ${taskId}: ${errorText}`,
+        };
+      }
+      return { success: true };
     },
 
     // ==================== GET TASK ====================

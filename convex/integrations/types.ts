@@ -78,6 +78,14 @@ export interface ExternalTask {
   priority?: number;
 }
 
+/** Colaborador asignado a un proyecto o task en el sistema externo. */
+export interface ExternalCollaborator {
+  id: number;
+  firstName?: string;
+  lastName?: string;
+  email?: string;
+}
+
 /** Attachment de una task en sistema externo */
 export interface ExternalTaskAttachment {
   id: number;
@@ -250,6 +258,27 @@ export interface ProjectManagementProvider {
    * En COR: POST /tasks con project_id
    */
   createTask(data: CreateTaskInput): Promise<ExternalTask>;
+
+  /** Lista los colaboradores directos de un proyecto. */
+  getProjectCollaborators(projectId: number): Promise<ExternalCollaborator[]>;
+
+  /** Agrega colaboradores faltantes a un proyecto sin reemplazar los existentes. */
+  addProjectCollaborators(
+    projectId: number,
+    userIds: number[],
+  ): Promise<{ success: boolean; error?: string }>;
+
+  /** Lista los colaboradores directos de una task. */
+  getTaskCollaborators(taskId: number): Promise<ExternalCollaborator[]>;
+
+  /**
+   * Sincroniza el estado final de colaboradores de una task.
+   * La lista enviada reemplaza la asignación actual en COR.
+   */
+  setTaskCollaborators(
+    taskId: number,
+    userIds: number[],
+  ): Promise<{ success: boolean; error?: string }>;
 
   /**
    * Obtener los datos de una task desde el sistema externo.

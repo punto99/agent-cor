@@ -129,6 +129,24 @@ export default defineSchema({
     // === Campos para tracking de sincronización bidireccional ===
     corDescriptionHash: v.optional(v.string()),
     lastLocalEditAt: v.optional(v.number()),
+    // Selección final de colaboradores COR propia de la task.
+    // undefined = usar defaults del cliente (solo para tasks externas).
+    // [] = selección explícitamente vacía.
+    corCollaboratorUserIds: v.optional(v.array(v.id("users"))),
+    // Indica que una publicación con colaboradores debe poder reanudarse sin
+    // duplicar proyecto o task. Se conserva el nombre por compatibilidad.
+    corExternalCollaboratorsPending: v.optional(v.boolean()),
+    // Estado independiente de la publicación principal en COR. Un error aquí
+    // no implica que el proyecto o la task hayan fallado al publicarse.
+    corCollaboratorSyncStatus: v.optional(
+      v.union(
+        v.literal("pending"),
+        v.literal("syncing"),
+        v.literal("synced"),
+        v.literal("error"),
+      ),
+    ),
+    corCollaboratorSyncError: v.optional(v.string()),
     // === Sincronización con Trello (solo Convex; no se expone como custom fields) ===
     trelloCardId: v.optional(v.string()),
     trelloCardUrl: v.optional(v.string()),
@@ -469,6 +487,15 @@ export default defineSchema({
   })
     .index("by_userId", ["userId"])
     .index("by_corUserId", ["corUserId"]),
+
+  // Configuración por cliente para publicaciones de tasks creadas por externos.
+  // Es independiente de los permisos internos de clientUserAssignments.
+  clientCorPublishingSettings: defineTable({
+    clientId: v.id("corClients"),
+    externalTaskCollaboratorUserIds: v.array(v.id("users")),
+    updatedAt: v.number(),
+    updatedBy: v.optional(v.id("users")),
+  }).index("by_client", ["clientId"]),
 
   // =====================================================
   // COR Clients — Clientes sincronizados desde COR

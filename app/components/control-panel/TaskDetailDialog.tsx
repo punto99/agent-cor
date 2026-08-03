@@ -9,6 +9,7 @@ import { ProjectBriefContent } from "../task/ProjectBriefContent";
 import { EvaluationMessageList } from "../task/EvaluationMessages";
 import { EvaluationInput } from "../task/EvaluationInput";
 import { ConfirmDialog } from "@/app/components/ui/ConfirmDialog";
+import { TaskCollaboratorsSection } from "./TaskCollaboratorsSection";
 import { getStatusColor, getStatusDisplay } from "../task/types";
 import type { Task, SelectedFile, EvaluationMessage } from "../task/types";
 import { clientConfig } from "@/config/tenant.config";
@@ -48,6 +49,9 @@ interface TaskDetailDialogProps {
     productId?: number;
     subBrandName?: string;
     corSyncError?: string;
+    corCollaboratorSyncStatus?: string;
+    corCollaboratorSyncError?: string;
+    corExternalCollaboratorsPending?: boolean;
     projectId?: Id<"projects">;
     corTaskMissingInCOR?: boolean;
     corProjectMissingInCOR?: boolean;
@@ -363,6 +367,9 @@ export function TaskDetailDialog({
   const convex = useConvex();
   const startPublish = useMutation(api.data.tasks.startPublishTaskToExternal);
   const retryTask = useMutation(api.data.tasks.retryTaskSync);
+  const retryTaskCollaborators = useMutation(
+    api.data.tasks.retryTaskCollaborators,
+  );
   const updateTaskTaxonomy = useMutation(api.data.tasks.updateTaskTaxonomy);
   const softDeleteUnpublishedDraftTask = useMutation(
     api.data.tasks.softDeleteUnpublishedDraftTask,
@@ -388,6 +395,8 @@ export function TaskDetailDialog({
   const [isPublishing, setIsPublishing] = useState(false);
   const [isPublishingToTrello, setIsPublishingToTrello] = useState(false);
   const [isRetrying, setIsRetrying] = useState(false);
+  const [isRetryingCollaborators, setIsRetryingCollaborators] =
+    useState(false);
   const [isPulling, setIsPulling] = useState(false);
   const [isDeletingLocal, setIsDeletingLocal] = useState(false);
   const [confirmDeleteTaskOpen, setConfirmDeleteTaskOpen] = useState(false);
@@ -502,6 +511,12 @@ export function TaskDetailDialog({
 
   // Obtener syncStatus en vivo (preferir liveTask, fallback a task prop)
   const syncStatus = liveTask?.corSyncStatus || task.corSyncStatus || "pending";
+  const collaboratorSyncStatus =
+    (liveTask as any)?.corCollaboratorSyncStatus ??
+    task.corCollaboratorSyncStatus;
+  const collaboratorSyncError =
+    (liveTask as any)?.corCollaboratorSyncError ??
+    task.corCollaboratorSyncError;
   const isPublishedInCOR =
     syncStatus === "synced" ||
     Boolean((liveTask as any)?.corTaskId ?? task.corTaskId);
@@ -570,13 +585,31 @@ export function TaskDetailDialog({
   // Detectar cuando la publicación finaliza (synced o error)
   useEffect(() => {
     if (syncStatus === "synced") {
-      setIsPublishing(false);
       setIsRetrying(false);
       setPublishError(null);
 
+      // Proyecto y task ya existen. Si hay colaboradores configurados,
+      // mantener el dialog abierto hasta conocer únicamente ese resultado.
+      if (
+        collaboratorSyncStatus === "pending" ||
+        collaboratorSyncStatus === "syncing"
+      ) {
+        return;
+      }
+
+      setIsPublishing(false);
+
       if (publishInitiatedRef.current) {
-        // Publicación exitosa → notificar al padre y cerrar
         publishInitiatedRef.current = false;
+        if (collaboratorSyncStatus === "error") {
+          onPublishResult?.({
+            success: true,
+            message: `Tarea publicada en ${toolName}, pero no se pudieron sincronizar los colaboradores`,
+          });
+          return;
+        }
+
+        // Publicación y colaboradores completos → notificar y cerrar.
         onPublishResult?.({
           success: true,
           message: `Tarea publicada exitosamente en ${toolName}`,
@@ -603,7 +636,15 @@ export function TaskDetailDialog({
         message: errorMsg,
       });
     }
-  }, [syncStatus, isPublishing, liveTask, onClose, onPublishResult, toolName]);
+  }, [
+    collaboratorSyncStatus,
+    syncStatus,
+    isPublishing,
+    liveTask,
+    onClose,
+    onPublishResult,
+    toolName,
+  ]);
 
   useEffect(() => {
     if (!isPublishingToTrello) return;
@@ -817,6 +858,20 @@ export function TaskDetailDialog({
       setIsPublishing(false);
       publishInitiatedRef.current = false;
       setPublishError(err.message || "Error al iniciar la publicación");
+    }
+  };
+
+  const handleRetryCollaborators = async () => {
+    try {
+      setIsRetryingCollaborators(true);
+      setPublishError(null);
+      await retryTaskCollaborators({ taskId: task._id });
+    } catch (err: any) {
+      setPublishError(
+        err.message || "No se pudo reintentar la sincronización de colaboradores.",
+      );
+    } finally {
+      setIsRetryingCollaborators(false);
     }
   };
 
@@ -1222,6 +1277,13 @@ export function TaskDetailDialog({
                       !isPublishedInCOR && !liveCorTaskId && isDeadlineMissing
                     }
                   />
+                  <TaskCollaboratorsSection
+                    taskId={task._id}
+                    published={isPublishedInCOR}
+                    editable={canEditFromDialog}
+                    syncStatus={syncStatus}
+                    collaboratorSyncStatus={collaboratorSyncStatus}
+                  />
                 </>
               )}
             </div>
@@ -1343,14 +1405,64 @@ export function TaskDetailDialog({
                 <CheckCircle2 className="h-4 w-4" />
                 <span>
                   Publicada en {toolName} exitosamente
-                  {task.corTaskId && (
+                  {liveCorTaskId && (
                     <span className="text-muted-foreground ml-1">
-                      (Task ID: {task.corTaskId})
+                      (Task ID: {liveCorTaskId})
                     </span>
                   )}
                 </span>
               </div>
             )}
+
+            {syncStatus === "synced" &&
+              (collaboratorSyncStatus === "pending" ||
+                collaboratorSyncStatus === "syncing") && (
+                <div className="mb-3 flex items-center gap-2 text-sm text-blue-600 dark:text-blue-400">
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  <span>
+                    Proyecto y tarea publicados. Sincronizando colaboradores...
+                  </span>
+                </div>
+              )}
+
+            {syncStatus === "synced" &&
+              collaboratorSyncStatus === "error" && (
+                <div className="mb-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2.5 dark:border-amber-900/50 dark:bg-amber-950/20">
+                  <div className="flex items-start gap-2 text-sm text-amber-800 dark:text-amber-300">
+                    <AlertCircle className="mt-0.5 h-4 w-4 flex-shrink-0" />
+                    <div>
+                      <p className="font-medium">
+                        El proyecto y la tarea están publicados en {toolName}.
+                      </p>
+                      <p className="mt-0.5 text-xs">
+                        No se pudieron sincronizar los colaboradores. Puedes
+                        volver a intentar únicamente este paso.
+                      </p>
+                      {collaboratorSyncError && (
+                        <p className="mt-1 text-xs text-muted-foreground">
+                          {collaboratorSyncError}
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => void handleRetryCollaborators()}
+                    disabled={
+                      isRetryingCollaborators ||
+                      collaboratorSyncStatus === "syncing"
+                    }
+                    className="ml-6 mt-2 flex w-fit cursor-pointer items-center gap-2 rounded-lg bg-amber-100 px-3 py-1.5 text-xs font-medium text-amber-700 transition-colors hover:bg-amber-200 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-amber-900/30 dark:text-amber-300 dark:hover:bg-amber-900/50"
+                  >
+                    {isRetryingCollaborators ? (
+                      <Loader2 className="h-3 w-3 animate-spin" />
+                    ) : (
+                      <RefreshCw className="h-3 w-3" />
+                    )}
+                    Reintentar colaboradores
+                  </button>
+                </div>
+              )}
 
             {isPublishedInTrello && (
               <div className="flex items-center gap-2 text-sm text-emerald-600 dark:text-emerald-400 mb-3">

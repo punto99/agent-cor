@@ -56,10 +56,11 @@ export const getDashboard = query({
       return { canAccess: false as const };
     }
 
-    const [users, clients, brands] = await Promise.all([
+    const [users, clients, brands, publishingSettings] = await Promise.all([
       ctx.db.query("users").collect(),
       ctx.db.query("corClients").collect(),
       ctx.db.query("clientBrands").collect(),
+      ctx.db.query("clientCorPublishingSettings").collect(),
     ]);
 
     const brandsByClientId = new Map<string, any[]>();
@@ -159,8 +160,99 @@ export const getDashboard = query({
       canAccess: true as const,
       users: internalUsers,
       clients: catalog,
+      clientCorPublishingSettings: publishingSettings.map((settings) => ({
+        _id: settings._id,
+        clientId: settings.clientId,
+        externalTaskCollaboratorUserIds:
+          settings.externalTaskCollaboratorUserIds,
+        updatedAt: settings.updatedAt,
+        updatedBy: settings.updatedBy,
+      })),
       generatedAt: Date.now(),
     };
+  },
+});
+
+/**
+ * Configura, por cliente, los usuarios internos que deben agregarse a COR
+ * exclusivamente al publicar tasks creadas por usuarios externos.
+ *
+ * Una configuración ausente significa "cliente no configurado". Una lista
+ * vacía es una decisión explícita de no agregar colaboradores automáticos.
+ */
+export const setClientCorPublishingCollaborators = mutation({
+  args: {
+    clientId: v.id("corClients"),
+    userIds: v.array(v.id("users")),
+  },
+  handler: async (ctx, args) => {
+    const adminUserId = await requireInternalUserAdmin(ctx);
+    const client = await ctx.db.get(args.clientId);
+    if (!client) throw new Error("Cliente no encontrado.");
+
+    const uniqueUserIds = Array.from(
+      new Set(args.userIds.map((userId) => String(userId))),
+    ).map((userId) => {
+      const normalized = ctx.db.normalizeId("users", userId);
+      if (!normalized) throw new Error(`Usuario inválido: ${userId}`);
+      return normalized;
+    });
+
+    if (uniqueUserIds.length > 20) {
+      throw new Error(
+        "COR admite como máximo 20 colaboradores directos por task.",
+      );
+    }
+
+    for (const userId of uniqueUserIds) {
+      const user = await ctx.db.get(userId);
+      if (!user) throw new Error(`Usuario no encontrado: ${userId}`);
+      if (await isExternalUser(ctx, userId)) {
+        throw new Error(
+          `El usuario ${formatUserName(user as Record<string, unknown>)} es externo y no puede configurarse como colaborador interno obligatorio.`,
+        );
+      }
+
+      const corUser = await ctx.db
+        .query("corUsers")
+        .withIndex("by_userId", (q: any) => q.eq("userId", userId))
+        .unique();
+      if (!corUser) {
+        throw new Error(
+          `El usuario ${formatUserName(user as Record<string, unknown>)} todavía no está resuelto en COR.`,
+        );
+      }
+
+      const localEmail = normalizeEmail(
+        (user as Record<string, unknown>).email,
+      );
+      const corEmail = normalizeEmail(corUser.corEmail);
+      if (!localEmail || localEmail !== corEmail) {
+        throw new Error(
+          `El email de ${formatUserName(user as Record<string, unknown>)} no coincide con su usuario COR.`,
+        );
+      }
+    }
+
+    const existing = await ctx.db
+      .query("clientCorPublishingSettings")
+      .withIndex("by_client", (q: any) => q.eq("clientId", args.clientId))
+      .unique();
+    const update = {
+      externalTaskCollaboratorUserIds: uniqueUserIds,
+      updatedAt: Date.now(),
+      updatedBy: adminUserId,
+    };
+
+    if (existing) {
+      await ctx.db.patch(existing._id, update);
+      return existing._id;
+    }
+
+    return await ctx.db.insert("clientCorPublishingSettings", {
+      clientId: args.clientId,
+      ...update,
+    });
   },
 });
 

@@ -17,6 +17,7 @@ import type {
   ExternalProduct,
   ExternalProject,
   ExternalTask,
+  ExternalCollaborator,
   ExternalTaskAttachment,
   CreateProjectInput,
   CreateTaskInput,
@@ -62,6 +63,38 @@ export function createNoopProvider(): ProjectManagementProvider {
         "No se puede crear una task externa. " +
         "Configura un provider en integrationConfig.projectManagement.provider"
       );
+    },
+
+    async getProjectCollaborators(
+      _projectId: number,
+    ): Promise<ExternalCollaborator[]> {
+      return [];
+    },
+
+    async addProjectCollaborators(
+      _projectId: number,
+      _userIds: number[],
+    ): Promise<{ success: boolean; error?: string }> {
+      return {
+        success: false,
+        error: "No hay integración de gestión de proyectos configurada.",
+      };
+    },
+
+    async getTaskCollaborators(
+      _taskId: number,
+    ): Promise<ExternalCollaborator[]> {
+      return [];
+    },
+
+    async setTaskCollaborators(
+      _taskId: number,
+      _userIds: number[],
+    ): Promise<{ success: boolean; error?: string }> {
+      return {
+        success: false,
+        error: "No hay integración de gestión de proyectos configurada.",
+      };
     },
 
     async getTask(_taskId: number): Promise<ExternalTask | null> {
