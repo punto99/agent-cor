@@ -340,7 +340,7 @@ export function ChatInputForm({
 
   return (
     <div
-      className={`relative border-t border-border p-4 bg-background transition-colors ${
+      className={`relative border-t border-border bg-background p-3 transition-colors md:p-4 ${
         isDragging ? "ring-2 ring-primary ring-inset bg-primary/5" : ""
       }`}
       onDragOver={handleDragOver}
@@ -535,7 +535,7 @@ export function ChatInputForm({
       </form>
       {/* Drag hint */}
       {!isDragging && selectedFiles.length < MAX_FILES && (
-        <p className="text-xs text-muted-foreground mt-1 text-center">
+        <p className="mt-1 hidden text-center text-xs text-muted-foreground sm:block">
           Imágenes, PDF o Word (botón o arrastrar) · máx. {MAX_FILE_SIZE_MB}MB
           por archivo
         </p>

@@ -83,7 +83,8 @@ export function TopNavigation() {
               key={tab.href}
               href={tab.href}
               className={`
-                flex items-center gap-2 px-4 py-3 text-sm font-medium transition-colors relative
+                ${tab.href === "/workspace" ? "flex" : "hidden md:flex"}
+                relative items-center gap-2 px-4 py-3 text-sm font-medium transition-colors
                 ${
                   tab.isActive
                     ? "text-primary"

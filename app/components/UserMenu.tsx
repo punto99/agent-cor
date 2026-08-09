@@ -79,35 +79,35 @@ export function UserMenu() {
         <DropdownMenuSeparator />
         {analyticsAccess?.canAccess && (
           <>
-            <DropdownMenuItem asChild className="cursor-pointer">
+            <DropdownMenuItem asChild className="hidden cursor-pointer md:flex">
               <Link href="/workspace/analytics">
                 <BarChart3 className="mr-2 h-4 w-4" />
                 <span>Analytics</span>
               </Link>
             </DropdownMenuItem>
-            <DropdownMenuSeparator />
+            <DropdownMenuSeparator className="hidden md:block" />
           </>
         )}
         {internalUserAdminAccess?.canAccess && (
           <>
-            <DropdownMenuItem asChild className="cursor-pointer">
+            <DropdownMenuItem asChild className="hidden cursor-pointer md:flex">
               <Link href="/workspace/users">
                 <UserCog className="mr-2 h-4 w-4" />
                 <span>Usuarios internos</span>
               </Link>
             </DropdownMenuItem>
-            <DropdownMenuSeparator />
+            <DropdownMenuSeparator className="hidden md:block" />
           </>
         )}
         {externalUserAdminAccess?.canAccess && (
           <>
-            <DropdownMenuItem asChild className="cursor-pointer">
+            <DropdownMenuItem asChild className="hidden cursor-pointer md:flex">
               <Link href="/workspace/external-users">
                 <UserPlus className="mr-2 h-4 w-4" />
                 <span>Usuarios externos</span>
               </Link>
             </DropdownMenuItem>
-            <DropdownMenuSeparator />
+            <DropdownMenuSeparator className="hidden md:block" />
           </>
         )}
         <DropdownMenuItem onClick={signOut} className="cursor-pointer">

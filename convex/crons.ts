@@ -11,10 +11,10 @@ crons.interval(
   {}
 );
 
-// Medianoche de Ecuador continental (UTC-5) equivale a 05:00 UTC.
-crons.daily(
+// Cada 6 horas desde medianoche de Ecuador continental (UTC-5).
+crons.cron(
   "scheduled expired cor inbound sync",
-  { hourUTC: 5, minuteUTC: 0 },
+  "0 5,11,17,23 * * *",
   internal.data.corInboundSync.runScheduledExpiredInboundSyncAction,
   {}
 );

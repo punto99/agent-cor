@@ -152,6 +152,14 @@ export const createThread = mutation({
       updatedAt: now,
     });
 
+    await ctx.db.insert("taskDrafts", {
+      threadId,
+      userId,
+      status: "collecting",
+      createdAt: now,
+      updatedAt: now,
+    });
+
     console.log(`[Threads] ✅ ChatThread registrado: ${chatThreadId}`);
 
     // Retornamos el threadId del Agent (string) que es lo que necesita ChatInterface

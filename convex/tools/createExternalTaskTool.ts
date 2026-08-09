@@ -1,9 +1,8 @@
 import { createTool } from "@convex-dev/agent";
 import { z } from "zod";
-import { listMessages } from "@convex-dev/agent";
-import { internal, components } from "../_generated/api";
+import { internal } from "../_generated/api";
 import { buildBriefDescription } from "../lib/briefFormat";
-import { associateFilesHelper } from "../data/tasks";
+import { registerLegacyThreadFilesForDraft } from "../data/tasks";
 import { isTrelloEnabledForCorClientId } from "../lib/trelloPolicy";
 
 function getTrelloBoardUrl(preparation: {
@@ -195,37 +194,28 @@ export const createExternalTaskTool = createTool({
     const deliverablesCount =
       args.deliverablesCount ?? inferDeliverablesCount(args.deliverables);
 
-    let fileUrls: string[] = [];
     try {
-      const messagesResult = await listMessages(ctx, components.agent, {
-        threadId,
-        paginationOpts: { cursor: null, numItems: 50 },
-      });
-
-      for (const msg of messagesResult.page) {
-        const msgAny = msg as any;
-        if (msgAny.fileIds && Array.isArray(msgAny.fileIds)) {
-          for (const fileId of msgAny.fileIds) {
-            try {
-              const fileInfo = await ctx.runQuery(
-                internal.data.tasks.getFileInfoInternal,
-                { fileId },
-              );
-              if (fileInfo?.url) fileUrls.push(fileInfo.url);
-            } catch {
-              // Ignorar archivos que no se puedan resolver.
-            }
-          }
-        }
-      }
+      await registerLegacyThreadFilesForDraft(ctx, threadId);
     } catch (error) {
-      console.log(
-        "[CreateExternalTask] No se pudieron obtener URLs de archivos:",
+      console.error(
+        "[CreateExternalTask] No se pudieron registrar los archivos:",
         error,
       );
+      return "Error: No se pudo crear el requerimiento porque uno o más archivos adjuntos no pudieron validarse. Vuelve a subirlos e intenta nuevamente.";
     }
+    const draftFiles = await ctx.runQuery(
+      internal.data.tasks.getTaskDraftFilesForCreation,
+      { threadId },
+    );
+    const fileUrls = draftFiles.files
+      .map((file) => file.url)
+      .filter((url): url is string => Boolean(url));
 
-    let result: { projectId: string; taskId: string };
+    let result: {
+      projectId: string;
+      taskId: string;
+      attachmentCount: number;
+    };
     try {
       result = await ctx.runMutation(internal.data.tasks.createProjectAndTask, {
         projectName: fullTitle,
@@ -259,6 +249,8 @@ export const createExternalTaskTool = createTool({
         taskProductId: preparation.corProductId,
         taskSubBrandName: preparation.subBrandName,
         threadId,
+        taskDraftId: draftFiles.draftId,
+        expectedThreadUploadedFileIds: draftFiles.files.map((file) => file._id),
         existingProjectId: preparation.existingProjectId as any,
         externalTrelloAccessVerified: trelloEnabled ? true : undefined,
       });
@@ -268,6 +260,10 @@ export const createExternalTaskTool = createTool({
         return error.message;
       }
       return "Error: No se pudo crear el proyecto y requerimiento asociados.";
+    }
+
+    if (result.attachmentCount !== draftFiles.files.length) {
+      return "Error: No se pudo crear el requerimiento porque no se asociaron todos los archivos adjuntos.";
     }
 
     try {
@@ -288,15 +284,6 @@ export const createExternalTaskTool = createTool({
     } catch (error) {
       console.log(
         "[CreateExternalTask] No se pudo programar clasificación de prioridad:",
-        error,
-      );
-    }
-
-    try {
-      await associateFilesHelper(ctx, result.taskId, threadId);
-    } catch (error) {
-      console.log(
-        "[CreateExternalTask] No se pudieron asociar archivos:",
         error,
       );
     }

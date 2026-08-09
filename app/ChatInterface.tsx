@@ -188,6 +188,7 @@ export default function ChatInterface({
 
     try {
       const fileIds: string[] = [];
+      const attachmentFileIds: string[] = [];
       const extractedTexts: string[] = [];
 
       if (currentFiles.length > 0) {
@@ -221,6 +222,7 @@ export default function ChatInterface({
           // Siempre incluir el archivo original (para adjuntar a la tarea)
           // chat.ts ya se encarga de omitir Word/PDF al construir el contenido para el LLM
           fileIds.push(result.fileId);
+          attachmentFileIds.push(result.fileId);
 
           if (result.extractedImageFileIds?.length > 0) {
             fileIds.push(...result.extractedImageFileIds);
@@ -247,6 +249,8 @@ export default function ChatInterface({
         threadId: currentThreadId as any,
         prompt: finalPrompt,
         fileIds: fileIds.length > 0 ? fileIds : undefined,
+        attachmentFileIds:
+          attachmentFileIds.length > 0 ? attachmentFileIds : undefined,
       });
     } catch (error) {
       console.error("Error enviando mensaje:", error);
@@ -544,7 +548,7 @@ export default function ChatInterface({
       )}
 
       {/* Área de mensajes */}
-      <div className="flex-1 overflow-y-auto p-4 space-y-4">
+      <div className="flex-1 space-y-4 overflow-y-auto p-3 md:p-4">
         <ChatMessageList
           messages={messageList}
           isAgentThinking={isAgentThinking}

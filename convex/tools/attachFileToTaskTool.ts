@@ -3,6 +3,7 @@
 import { createTool, listMessages } from "@convex-dev/agent";
 import { z } from "zod";
 import { components, internal } from "../_generated/api";
+import { registerLegacyThreadFilesForDraft } from "../data/tasks";
 
 function unique(values: string[]): string[] {
   return Array.from(new Set(values.filter(Boolean)));
@@ -69,6 +70,7 @@ export const attachFileToTaskTool = createTool({
 
       let currentUserId: string | null = null;
       if (threadId) {
+        await registerLegacyThreadFilesForDraft(ctx, threadId);
         currentUserId = await ctx.runQuery(internal.data.tasks.getUserIdFromThread, { threadId });
         console.log(`[AttachFileToTask] Usuario actual: ${currentUserId}`);
       }
@@ -101,6 +103,13 @@ export const attachFileToTaskTool = createTool({
 
       if (!task || !taskIdToUpdate) {
         return "No se pudo identificar la task a la que quieres adjuntar el archivo. Enviame el ID local de la task o el ID de COR.";
+      }
+
+      // Un archivo subido en un chat solo puede adjuntarse a la task originada
+      // por ese mismo chat. Esto evita que un ID proporcionado por el modelo o
+      // el usuario desvíe la subida a otra task válida pero incorrecta.
+      if (!threadId || task.threadId !== threadId) {
+        return "No puedo adjuntar archivos de esta conversación a una task originada en otra conversación.";
       }
 
       if (task.corClientId && currentUserId) {

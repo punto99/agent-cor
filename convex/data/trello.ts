@@ -1944,6 +1944,26 @@ async function syncTaskAttachmentsToTrello(ctx: any, args: {
   return { total: attachments.length, synced, failed };
 }
 
+// Sincroniza attachments agregados desde el chat después de que la card ya
+// existe. La exclusividad fileId -> task se valida antes en data/tasks.ts.
+export const syncPendingTaskAttachmentsToTrello: any = internalAction({
+  args: {
+    taskId: v.id("tasks"),
+  },
+  handler: async (ctx, args) => {
+    const task = await ctx.runQuery(internal.data.tasks.getTaskByIdInternal, {
+      taskId: String(args.taskId),
+    });
+    if (!task?.trelloCardId) {
+      return { total: 0, synced: 0, failed: 0, skipped: true };
+    }
+    return await syncTaskAttachmentsToTrello(ctx, {
+      taskId: args.taskId,
+      cardId: task.trelloCardId,
+    });
+  },
+});
+
 function isClientFacingAttachmentFilename(filename: string | undefined) {
   return Boolean(filename && filename.toLowerCase().includes("cliente"));
 }

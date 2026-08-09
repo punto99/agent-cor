@@ -39,8 +39,14 @@ export const sendMessage = mutation({
     prompt: v.string(),
     fileId: v.optional(v.string()), // Mantener para compatibilidad
     fileIds: v.optional(v.array(v.string())), // Nuevo: múltiples archivos
+    // Solo archivos originales elegidos por el usuario. fileIds también puede
+    // contener imágenes auxiliares extraídas de documentos para contexto del LLM.
+    attachmentFileIds: v.optional(v.array(v.string())),
   },
-  handler: async (ctx, { threadId, prompt, fileId, fileIds }) => {
+  handler: async (
+    ctx,
+    { threadId, prompt, fileId, fileIds, attachmentFileIds },
+  ) => {
     const userId = await getAuthUserId(ctx);
     if (userId === null) {
       throw new Error("Not authenticated");
@@ -62,6 +68,16 @@ export const sendMessage = mutation({
     
     // Combinar fileId y fileIds para compatibilidad
     const allFileIds: string[] = [];
+    const resolvedFiles = new Map<
+      string,
+      {
+        fileId: string;
+        storageId: string;
+        filename: string;
+        mimeType: string;
+        size?: number;
+      }
+    >();
     let hasAudioInput = false;
     if (fileId) allFileIds.push(fileId);
     if (fileIds) allFileIds.push(...fileIds);
@@ -75,6 +91,7 @@ export const sendMessage = mutation({
         const mimeType =
           ((filePart as any)?.mimeType as string | undefined) ||
           ((filePart as any)?.mediaType as string | undefined) ||
+          ((file as any)?.mimeType as string | undefined) ||
           "";
         const lowerFilename = (file?.filename || "").toLowerCase();
         const isAudioByMime = mimeType.toLowerCase().startsWith("audio/");
@@ -108,8 +125,43 @@ export const sendMessage = mutation({
           // No enviamos el archivo original porque Gemini no lo soporta
           console.log(`[Chat] 📝 Archivo Word detectado - omitiendo (contenido extraído en frontend)`);
         }
+
+        resolvedFiles.set(fId, {
+          fileId: fId,
+          storageId: String(file.storageId),
+          filename: file.filename || `archivo_${fId}`,
+          mimeType: mimeType || "application/octet-stream",
+          size:
+            typeof (file as any).size === "number"
+              ? (file as any).size
+              : undefined,
+        });
       } catch (error) {
         console.error(`[Chat] Error obteniendo archivo ${fId}:`, error);
+        throw new Error(`No se pudo recuperar el archivo subido ${fId}.`);
+      }
+    }
+
+    const requestedAttachmentIds = attachmentFileIds
+      ? Array.from(new Set(attachmentFileIds))
+      : Array.from(resolvedFiles.values())
+          .filter((candidate) =>
+            !Array.from(resolvedFiles.values()).some(
+              (possibleOriginal) =>
+                possibleOriginal.fileId !== candidate.fileId &&
+                candidate.filename.startsWith(`${possibleOriginal.filename}-img-`),
+            ),
+          )
+          .map((file) => file.fileId);
+
+    for (const attachmentFileId of requestedAttachmentIds) {
+      if (!allFileIds.includes(attachmentFileId)) {
+        throw new Error(
+          `El archivo adjunto ${attachmentFileId} no pertenece a este mensaje.`,
+        );
+      }
+      if (!resolvedFiles.has(attachmentFileId)) {
+        throw new Error(`No se pudo validar el archivo adjunto ${attachmentFileId}.`);
       }
     }
     
@@ -140,6 +192,27 @@ export const sendMessage = mutation({
     });
     
     console.log(`[Chat] ✅ Mensaje guardado: ${messageId}`);
+
+    if (requestedAttachmentIds.length > 0) {
+      const registration = await ctx.runMutation(
+        internal.data.tasks.registerThreadUploadedFiles,
+        {
+          threadId,
+          messageId,
+          files: requestedAttachmentIds.map((attachmentFileId) =>
+            resolvedFiles.get(attachmentFileId)!,
+          ),
+        },
+      );
+      if (registration.total !== requestedAttachmentIds.length) {
+        throw new Error(
+          "No se pudieron registrar todos los archivos del mensaje.",
+        );
+      }
+      console.log(
+        `[Chat] ✅ ${registration.total} archivo(s) vinculados al borrador ${registration.draftId}`,
+      );
+    }
     
     // Disparar generación de respuesta asíncrona
     await ctx.scheduler.runAfter(0, internal.messaging.chatGenerate.generateResponseAsync, {

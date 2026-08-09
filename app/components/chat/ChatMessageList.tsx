@@ -81,7 +81,7 @@ function ChatMessage({
       className={`flex ${message.role === "user" ? "justify-end" : "justify-start"}`}
     >
       <div
-        className={`max-w-[80%] rounded-lg p-4 ${
+        className={`min-w-0 max-w-[92%] break-words rounded-lg p-3 md:max-w-[80%] md:p-4 ${
           message.role === "user"
             ? "bg-primary text-primary-foreground"
             : "bg-card text-card-foreground shadow-sm border border-border"
@@ -143,7 +143,7 @@ function ThinkingIndicator() {
 
   return (
     <div className="flex justify-start">
-      <div className="max-w-[80%] rounded-lg p-4 bg-card text-card-foreground shadow-sm border border-border">
+      <div className="max-w-[92%] rounded-lg border border-border bg-card p-3 text-card-foreground shadow-sm md:max-w-[80%] md:p-4">
         <div className="text-xs font-semibold mb-1 text-primary">
           {agentName}
         </div>

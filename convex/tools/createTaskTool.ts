@@ -5,16 +5,15 @@
 // OPTIMIZACIÓN: Usa funciones consolidadas para minimizar runQuery/runMutation.
 // - validateAndPrepareTask: 1 query en vez de ~6 queries separadas
 // - createProjectAndTask: 1 mutation en vez de 2 mutations separadas
-// - associateFilesHelper: helper TS directo (no runAction en mismo runtime)
+// - archivos del draft se crean atómicamente junto con la task
 // - schedulePriorityClassification: no-bloqueante (via scheduler)
 // Ref: https://docs.convex.dev/functions/actions#avoid-await-ctxrunmutation--await-ctxrunquery
 import { createTool } from "@convex-dev/agent";
 import { z } from "zod";
-import { listMessages } from "@convex-dev/agent";
-import { internal, components } from "../_generated/api";
+import { internal } from "../_generated/api";
 import { isProjectManagementEnabled } from "../integrations/registry";
 import { buildBriefDescription } from "../lib/briefFormat";
-import { associateFilesHelper } from "../data/tasks";
+import { registerLegacyThreadFilesForDraft } from "../data/tasks";
 
 function inferDeliverablesCount(deliverablesText: string): number {
   const trimmed = deliverablesText.trim();
@@ -289,48 +288,35 @@ export const createTaskTool = createTool({
       args.deliverablesCount ?? inferDeliverablesCount(args.deliverables);
 
     // ====================================================
-    // Obtener URLs de archivos del thread para el campo brief del proyecto
+    // Registrar archivos de conversaciones previas al ledger y obtener los
+    // archivos que pertenecen exclusivamente al draft de este thread.
     // ====================================================
-    let fileUrls: string[] = [];
     try {
-      const messagesResult = await listMessages(ctx, components.agent, {
-        threadId,
-        paginationOpts: { cursor: null, numItems: 50 },
-      });
-
-      for (const msg of messagesResult.page) {
-        const msgAny = msg as any;
-        if (msgAny.fileIds && Array.isArray(msgAny.fileIds)) {
-          for (const fileId of msgAny.fileIds) {
-            try {
-              const fileInfo = await ctx.runQuery(
-                internal.data.tasks.getFileInfoInternal,
-                { fileId },
-              );
-              if (fileInfo?.url) {
-                fileUrls.push(fileInfo.url);
-              }
-            } catch {
-              // Skip files that can't be resolved
-            }
-          }
-        }
-      }
-      console.log(
-        `[CreateTask] 📎 URLs de archivos encontradas: ${fileUrls.length}`,
-      );
+      await registerLegacyThreadFilesForDraft(ctx, threadId);
     } catch (error) {
-      console.log(
-        "[CreateTask] ⚠️ No se pudieron obtener URLs de archivos (continuando):",
-        error,
-      );
+      console.error("[CreateTask] ❌ No se pudieron registrar los archivos:", error);
+      return "❌ No se pudo crear el requerimiento porque uno o más archivos adjuntos no pudieron validarse. Vuelve a subirlos e intenta nuevamente.";
     }
+    const draftFiles = await ctx.runQuery(
+      internal.data.tasks.getTaskDraftFilesForCreation,
+      { threadId },
+    );
+    const fileUrls = draftFiles.files
+      .map((file) => file.url)
+      .filter((url): url is string => Boolean(url));
+    console.log(
+      `[CreateTask] 📎 Archivos pendientes validados: ${draftFiles.files.length}`,
+    );
 
     // ====================================================
     // CREAR PROYECTO + TASK ATÓMICAMENTE (1 mutation en vez de 2)
     // ====================================================
     console.log("[CreateTask] ⏳ Creando proyecto y task...");
-    let result: { projectId: string; taskId: string };
+    let result: {
+      projectId: string;
+      taskId: string;
+      attachmentCount: number;
+    };
     try {
       result = await ctx.runMutation(internal.data.tasks.createProjectAndTask, {
         // Project
@@ -368,6 +354,8 @@ export const createTaskTool = createTool({
         taskSubBrandName: resolvedSubBrand?.name,
         // Shared
         threadId,
+        taskDraftId: draftFiles.draftId,
+        expectedThreadUploadedFileIds: draftFiles.files.map((file) => file._id),
         existingProjectId: existingProjectId as any,
       });
     } catch (error) {
@@ -379,6 +367,9 @@ export const createTaskTool = createTool({
     }
 
     const { projectId, taskId } = result;
+    if (result.attachmentCount !== draftFiles.files.length) {
+      return "❌ No se pudo crear el requerimiento porque no se asociaron todos los archivos adjuntos.";
+    }
     console.log(`[CreateTask] ✅ Proyecto: ${projectId}, Task: ${taskId}`);
 
     // ====================================================
@@ -404,19 +395,6 @@ export const createTaskTool = createTool({
     } catch (error) {
       console.log(
         "[CreateTask] ⚠️ No se pudo programar clasificación de prioridad (continuando):",
-        error,
-      );
-    }
-
-    // ====================================================
-    // Asociar archivos del thread a la task (helper directo, sin runAction)
-    // ====================================================
-    try {
-      await associateFilesHelper(ctx, taskId, threadId);
-      console.log("[CreateTask] ✅ Archivos asociados");
-    } catch (error) {
-      console.log(
-        "[CreateTask] ⚠️ No se pudieron asociar archivos (continuando):",
         error,
       );
     }

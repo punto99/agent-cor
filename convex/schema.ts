@@ -75,6 +75,50 @@ export default defineSchema({
     .index("by_workspace", ["workspaceId"])
     .index("by_user_and_updated", ["userId", "updatedAt"]),
 
+  // Borrador único del requerimiento asociado a una conversación.
+  // La aplicación mantiene la regla "un thread = una task"; este registro
+  // permite vincular archivos a la futura task sin depender del historial del chat.
+  taskDrafts: defineTable({
+    threadId: v.string(),
+    userId: v.id("users"),
+    status: v.union(v.literal("collecting"), v.literal("created")),
+    taskId: v.optional(v.id("tasks")),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+    completedAt: v.optional(v.number()),
+  })
+    .index("by_thread", ["threadId"])
+    .index("by_thread_and_status", ["threadId", "status"])
+    .index("by_user_and_status", ["userId", "status"])
+    .index("by_task", ["taskId"]),
+
+  // Ledger durable de cada subida que el usuario realizó en el chat.
+  // Un mismo blob/fileId puede ser deduplicado y reutilizado en varias subidas;
+  // cada fila conserva la conversación, el mensaje y la task de una subida
+  // concreta para impedir asociaciones cruzadas.
+  threadUploadedFiles: defineTable({
+    draftId: v.id("taskDrafts"),
+    threadId: v.string(),
+    userId: v.id("users"),
+    messageId: v.optional(v.string()),
+    fileId: v.string(),
+    storageId: v.string(),
+    filename: v.string(),
+    mimeType: v.string(),
+    size: v.optional(v.number()),
+    status: v.union(v.literal("pending"), v.literal("attached")),
+    taskId: v.optional(v.id("tasks")),
+    uploadedAt: v.number(),
+    attachedAt: v.optional(v.number()),
+  })
+    .index("by_file", ["fileId"])
+    .index("by_thread_and_file", ["threadId", "fileId"])
+    .index("by_thread_message_and_file", ["threadId", "messageId", "fileId"])
+    .index("by_draft_and_status", ["draftId", "status"])
+    .index("by_thread_and_status", ["threadId", "status"])
+    .index("by_task", ["taskId"])
+    .index("by_user_and_status", ["userId", "status"]),
+
   // === Tasks: Estructura idéntica a COR para sincronización 1:1 ===
   // Campos principales = mismos campos que una task de COR:
   //   title       → título de la task
@@ -104,6 +148,7 @@ export default defineSchema({
     ),
     // === Campos internos (no van a COR) ===
     threadId: v.string(),
+    taskDraftId: v.optional(v.id("taskDrafts")),
     createdBy: v.optional(v.string()),
     projectId: v.optional(v.id("projects")), // Referencia al proyecto LOCAL en Convex
     source: v.optional(v.union(v.literal("internal"), v.literal("external"))),
@@ -161,6 +206,7 @@ export default defineSchema({
     trelloLastInboundAt: v.optional(v.number()),
   })
     .index("by_thread", ["threadId"])
+    .index("by_taskDraftId", ["taskDraftId"])
     .index("by_status", ["status"])
     .index("by_createdBy", ["createdBy"])
     .index("by_projectId", ["projectId"])
@@ -226,6 +272,8 @@ export default defineSchema({
   // Reemplaza el campo fileIds[] de tasks con una tabla dedicada.
   taskAttachments: defineTable({
     taskId: v.id("tasks"),
+    taskDraftId: v.optional(v.id("taskDrafts")),
+    threadUploadedFileId: v.optional(v.id("threadUploadedFiles")),
     // === Datos del archivo ===
     storageId: v.string(), // ID del blob en Convex storage (del agent component)
     fileId: v.string(), // ID del archivo en el agent component (para queries)
@@ -246,6 +294,8 @@ export default defineSchema({
     createdAt: v.number(),
   })
     .index("by_task", ["taskId"])
+    .index("by_file", ["fileId"])
+    .index("by_thread_uploaded_file", ["threadUploadedFileId"])
     .index("by_task_and_cor", ["taskId", "corAttachmentId"])
     .index("by_task_and_trello", ["taskId", "trelloAttachmentId"])
     .index("by_trelloSyncStatus", ["trelloSyncStatus"]),

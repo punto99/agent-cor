@@ -32,7 +32,7 @@ import {
 import { applyProjectDeliverablesDelta } from "../lib/deliverableAnalytics";
 import { formatTrelloCommentForCOR } from "../lib/trelloCommentFormat";
 import { isTrelloEnabledForCorClientId } from "../lib/trelloPolicy";
-import type { ActionCtx } from "../_generated/server";
+import type { ActionCtx, MutationCtx } from "../_generated/server";
 import type { Id } from "../_generated/dataModel";
 
 const STRATEGIC_PRIORITY_LABEL_IDS: Record<StrategicPriority, number> = {
@@ -49,6 +49,243 @@ const MIN_PUBLISHABLE_DESCRIPTION_LENGTH = 40;
 const DESCRIPTION_MIN_REMAINING_RATIO = 0.35;
 const TRELLO_ATTACHMENT_SYNC_STALE_MS = 10 * 60 * 1000;
 const COR_MAX_TASK_COLLABORATORS = 20;
+
+type ChatUploadedFileInput = {
+  fileId: string;
+  storageId: string;
+  filename: string;
+  mimeType: string;
+  size?: number;
+};
+
+async function getOrCreateTaskDraft(
+  ctx: MutationCtx,
+  args: { threadId: string; userId: Id<"users"> },
+) {
+  const drafts = await ctx.db
+    .query("taskDrafts")
+    .withIndex("by_thread", (q) => q.eq("threadId", args.threadId))
+    .collect();
+
+  if (drafts.length > 1) {
+    throw new Error(
+      `Integridad inválida: el thread ${args.threadId} tiene más de un borrador.`,
+    );
+  }
+
+  const existing = drafts[0];
+  if (existing) {
+    if (existing.userId !== args.userId) {
+      throw new Error(
+        "Integridad inválida: el borrador pertenece a otro usuario.",
+      );
+    }
+    const taskForThread = await ctx.db
+      .query("tasks")
+      .withIndex("by_thread", (q) => q.eq("threadId", args.threadId))
+      .first();
+    if (existing.status === "created") {
+      if (
+        !existing.taskId ||
+        !taskForThread ||
+        existing.taskId !== taskForThread._id
+      ) {
+        throw new Error(
+          "Integridad inválida: el borrador creado no coincide con la task del thread.",
+        );
+      }
+      return existing;
+    }
+    if (taskForThread) {
+      const now = Date.now();
+      await ctx.db.patch(existing._id, {
+        status: "created",
+        taskId: taskForThread._id,
+        updatedAt: now,
+        completedAt: now,
+      });
+      if (!taskForThread.taskDraftId) {
+        await ctx.db.patch(taskForThread._id, { taskDraftId: existing._id });
+      }
+      return (await ctx.db.get(existing._id))!;
+    }
+    return existing;
+  }
+
+  const existingTask = await ctx.db
+    .query("tasks")
+    .withIndex("by_thread", (q) => q.eq("threadId", args.threadId))
+    .first();
+  const now = Date.now();
+  const draftId = await ctx.db.insert("taskDrafts", {
+    threadId: args.threadId,
+    userId: args.userId,
+    status: existingTask ? "created" : "collecting",
+    taskId: existingTask?._id,
+    createdAt: now,
+    updatedAt: now,
+    completedAt: existingTask ? now : undefined,
+  });
+  if (existingTask && !existingTask.taskDraftId) {
+    await ctx.db.patch(existingTask._id, { taskDraftId: draftId });
+  }
+  return (await ctx.db.get(draftId))!;
+}
+
+async function insertExclusiveTaskAttachment(
+  ctx: MutationCtx,
+  args: {
+    taskId: Id<"tasks">;
+    fileId: string;
+    storageId: string;
+    filename: string;
+    mimeType: string;
+    size?: number;
+    taskDraftId?: Id<"taskDrafts">;
+    threadUploadedFileId?: Id<"threadUploadedFiles">;
+    trelloAttachmentId?: string;
+    trelloAttachmentUrl?: string;
+  },
+) {
+  const task = await ctx.db.get(args.taskId);
+  if (!task || task.convexStatus === "deleted") {
+    throw new Error("No se puede adjuntar un archivo a una task inexistente.");
+  }
+
+  // fileId identifica el blob físico y puede repetirse legítimamente porque el
+  // Agent deduplica archivos iguales. La identidad exclusiva es la fila de
+  // threadUploadedFiles, que representa una subida concreta del usuario.
+  const ownership = args.threadUploadedFileId
+    ? await ctx.db.get(args.threadUploadedFileId)
+    : null;
+  if (args.threadUploadedFileId && !ownership) {
+    throw new Error("Integridad inválida: no existe el registro de la subida.");
+  }
+
+  if (ownership) {
+    const draft = await ctx.db.get(ownership.draftId);
+    if (
+      !draft ||
+      draft.threadId !== ownership.threadId ||
+      draft.userId !== ownership.userId ||
+      ownership.fileId !== args.fileId ||
+      ownership.storageId !== args.storageId ||
+      ownership.filename !== args.filename ||
+      ownership.mimeType !== args.mimeType
+    ) {
+      throw new Error(
+        "Integridad inválida: los datos de la subida no coinciden con su archivo o borrador.",
+      );
+    }
+    if (
+      ownership.threadId !== task.threadId ||
+      (ownership.taskId && ownership.taskId !== task._id) ||
+      (draft.taskId && draft.taskId !== task._id) ||
+      (args.taskDraftId && ownership.draftId !== args.taskDraftId) ||
+      (task.taskDraftId && ownership.draftId !== task.taskDraftId) ||
+      (ownership.status === "attached" && ownership.taskId !== task._id) ||
+      (ownership.status === "pending" && ownership.taskId)
+    ) {
+      throw new Error(
+        "Integridad inválida: la subida pertenece a otra conversación, borrador o task.",
+      );
+    }
+
+    const attachmentsForUpload = await ctx.db
+      .query("taskAttachments")
+      .withIndex("by_thread_uploaded_file", (q) =>
+        q.eq("threadUploadedFileId", ownership._id),
+      )
+      .collect();
+    if (attachmentsForUpload.length > 1) {
+      throw new Error(
+        "Integridad inválida: una misma subida está asociada más de una vez.",
+      );
+    }
+    const existingForUpload = attachmentsForUpload[0];
+    if (existingForUpload) {
+      if (
+        existingForUpload.taskId !== task._id ||
+        existingForUpload.fileId !== ownership.fileId ||
+        existingForUpload.taskDraftId !== ownership.draftId
+      ) {
+        throw new Error(
+          "Integridad inválida: la subida ya está asociada a otra task.",
+        );
+      }
+      return existingForUpload._id;
+    }
+  }
+
+  const sameTaskAttachments = (
+    await ctx.db
+      .query("taskAttachments")
+      .withIndex("by_file", (q) => q.eq("fileId", args.fileId))
+      .collect()
+  ).filter((attachment) => attachment.taskId === args.taskId);
+
+  // Compatibilidad: un attachment antiguo puede existir sin referencia a la
+  // subida. Solo se adopta si hay exactamente uno y todavía no tiene origen.
+  const legacyCandidates = sameTaskAttachments.filter(
+    (attachment) => !attachment.threadUploadedFileId,
+  );
+  if (ownership && legacyCandidates.length > 1) {
+    throw new Error(
+      `Integridad inválida: hay múltiples attachments antiguos para ${args.fileId}.`,
+    );
+  }
+  const existingForTask = ownership
+    ? legacyCandidates[0]
+    : sameTaskAttachments[0];
+  if (existingForTask) {
+    if (
+      (existingForTask.taskDraftId &&
+        args.taskDraftId &&
+        existingForTask.taskDraftId !== args.taskDraftId)
+    ) {
+      throw new Error(
+        `Integridad inválida: el attachment de ${args.fileId} tiene otro origen.`,
+      );
+    }
+    if (
+      (!existingForTask.taskDraftId && args.taskDraftId) ||
+      (!existingForTask.threadUploadedFileId && args.threadUploadedFileId)
+    ) {
+      await ctx.db.patch(existingForTask._id, {
+        taskDraftId:
+          existingForTask.taskDraftId ?? ownership?.draftId ?? args.taskDraftId,
+        threadUploadedFileId:
+          existingForTask.threadUploadedFileId ?? ownership?._id,
+      });
+    }
+    return existingForTask._id;
+  }
+
+  const attachmentId = await ctx.db.insert("taskAttachments", {
+    taskId: args.taskId,
+    taskDraftId: ownership?.draftId ?? args.taskDraftId,
+    threadUploadedFileId: ownership?._id,
+    fileId: args.fileId,
+    storageId: args.storageId,
+    filename: args.filename,
+    mimeType: args.mimeType,
+    size: args.size,
+    trelloAttachmentId: args.trelloAttachmentId,
+    trelloAttachmentUrl: args.trelloAttachmentUrl,
+    trelloSyncStatus: args.trelloAttachmentId ? "synced" : undefined,
+    trelloSyncedAt: args.trelloAttachmentId ? Date.now() : undefined,
+    createdAt: Date.now(),
+  });
+  if (ownership && ownership.status === "pending") {
+    const attachedAt = Date.now();
+    await ctx.db.patch(ownership._id, {
+      status: "attached",
+      taskId: task._id,
+      attachedAt,
+    });
+  }
+  return attachmentId;
+}
 
 async function isExternalUser(ctx: any, userId: any) {
   const approvedExternalUser = await ctx.db
@@ -1219,76 +1456,300 @@ export const updateTaskStatus = mutation({
   },
 });
 
-// ==================== BACKGROUND JOB: Asociar archivos a task ====================
-// Esta acción se ejecuta en background después de crear una task
-// para buscar archivos del thread y crear registros en taskAttachments
+// Garantiza un único borrador por conversación. Se usa al crear threads nuevos
+// y como compatibilidad para conversaciones existentes previas a este schema.
+export const ensureTaskDraftForThread = internalMutation({
+  args: {
+    threadId: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const chatThread = await ctx.db
+      .query("chatThreads")
+      .withIndex("by_thread", (q) => q.eq("threadId", args.threadId))
+      .unique();
+    if (!chatThread) {
+      throw new Error(`No existe el thread ${args.threadId}.`);
+    }
+    const draft = await getOrCreateTaskDraft(ctx, {
+      threadId: args.threadId,
+      userId: chatThread.userId,
+    });
+    return draft._id;
+  },
+});
+
+// Registra los archivos originales del usuario en un ledger propio del draft.
+// Si la task del thread ya existe, los adjunta inmediatamente a esa misma task.
+export const registerThreadUploadedFiles = internalMutation({
+  args: {
+    threadId: v.string(),
+    messageId: v.string(),
+    files: v.array(
+      v.object({
+        fileId: v.string(),
+        storageId: v.string(),
+        filename: v.string(),
+        mimeType: v.string(),
+        size: v.optional(v.number()),
+      }),
+    ),
+  },
+  handler: async (ctx, args) => {
+    if (!args.messageId.trim()) {
+      throw new Error("Integridad inválida: la subida no tiene messageId.");
+    }
+    const chatThread = await ctx.db
+      .query("chatThreads")
+      .withIndex("by_thread", (q) => q.eq("threadId", args.threadId))
+      .unique();
+    if (!chatThread) {
+      throw new Error(`No existe el thread ${args.threadId}.`);
+    }
+
+    const draft = await getOrCreateTaskDraft(ctx, {
+      threadId: args.threadId,
+      userId: chatThread.userId,
+    });
+    const task = draft.taskId ? await ctx.db.get(draft.taskId) : null;
+    if (draft.status === "created" && !task) {
+      throw new Error(
+        `Integridad inválida: el borrador ${draft._id} no tiene una task válida.`,
+      );
+    }
+    if (task && task.threadId !== args.threadId) {
+      throw new Error(
+        "Integridad inválida: la task del borrador pertenece a otro thread.",
+      );
+    }
+
+    const uniqueFiles = new Map<string, ChatUploadedFileInput>();
+    for (const file of args.files) uniqueFiles.set(file.fileId, file);
+
+    let registered = 0;
+    let attached = 0;
+    for (const file of uniqueFiles.values()) {
+      // La idempotencia corresponde a la misma aparición en el mismo mensaje,
+      // no al fileId global (que puede ser compartido por blobs deduplicados).
+      let existingRecords = await ctx.db
+        .query("threadUploadedFiles")
+        .withIndex("by_thread_message_and_file", (q) =>
+          q
+            .eq("threadId", args.threadId)
+            .eq("messageId", args.messageId)
+            .eq("fileId", file.fileId),
+        )
+        .collect();
+
+      // Migración no destructiva de filas creadas antes de guardar messageId.
+      if (existingRecords.length === 0) {
+        const legacyRecords = (
+          await ctx.db
+            .query("threadUploadedFiles")
+            .withIndex("by_thread_and_file", (q) =>
+              q.eq("threadId", args.threadId).eq("fileId", file.fileId),
+            )
+            .collect()
+        ).filter(
+          (record) =>
+            record.draftId === draft._id && record.messageId === undefined,
+        );
+        if (legacyRecords.length === 1) {
+          await ctx.db.patch(legacyRecords[0]._id, {
+            messageId: args.messageId,
+          });
+          existingRecords = [
+            { ...legacyRecords[0], messageId: args.messageId },
+          ];
+        } else if (legacyRecords.length > 1) {
+          throw new Error(
+            `Integridad inválida: hay múltiples subidas antiguas sin mensaje para ${file.fileId}.`,
+          );
+        }
+      }
+
+      if (existingRecords.length > 1) {
+        throw new Error(
+          `Integridad inválida: la misma subida de ${file.fileId} está registrada más de una vez.`,
+        );
+      }
+
+      const existing = existingRecords[0];
+      if (existing) {
+        if (
+          existing.threadId !== args.threadId ||
+          existing.draftId !== draft._id ||
+          existing.userId !== chatThread.userId ||
+          existing.fileId !== file.fileId ||
+          existing.storageId !== file.storageId ||
+          existing.filename !== file.filename ||
+          existing.mimeType !== file.mimeType
+        ) {
+          throw new Error(
+            `Integridad inválida: la subida de ${file.fileId} no coincide con este mensaje o borrador.`,
+          );
+        }
+        if (existing.taskId && task && existing.taskId !== task._id) {
+          throw new Error(
+            `Integridad inválida: el archivo ${file.fileId} ya pertenece a otra task.`,
+          );
+        }
+        if (
+          (existing.status === "attached" &&
+            (!task || existing.taskId !== task._id)) ||
+          (existing.status === "pending" && existing.taskId)
+        ) {
+          throw new Error(
+            `Integridad inválida: el estado del archivo ${file.fileId} no coincide con su task.`,
+          );
+        }
+        if (task && existing.status === "pending") {
+          await insertExclusiveTaskAttachment(ctx, {
+            taskId: task._id,
+            taskDraftId: draft._id,
+            threadUploadedFileId: existing._id,
+            ...file,
+          });
+          const now = Date.now();
+          await ctx.db.patch(existing._id, {
+            status: "attached",
+            taskId: task._id,
+            attachedAt: now,
+          });
+          attached += 1;
+        }
+        continue;
+      }
+
+      const now = Date.now();
+      const uploadedFileId = await ctx.db.insert("threadUploadedFiles", {
+        draftId: draft._id,
+        threadId: args.threadId,
+        userId: chatThread.userId,
+        messageId: args.messageId,
+        fileId: file.fileId,
+        storageId: file.storageId,
+        filename: file.filename,
+        mimeType: file.mimeType,
+        size: file.size,
+        status: task ? "attached" : "pending",
+        taskId: task?._id,
+        uploadedAt: now,
+        attachedAt: task ? now : undefined,
+      });
+      registered += 1;
+
+      if (task) {
+        await insertExclusiveTaskAttachment(ctx, {
+          taskId: task._id,
+          taskDraftId: draft._id,
+          threadUploadedFileId: uploadedFileId,
+          ...file,
+        });
+        attached += 1;
+      }
+    }
+
+    if (task && attached > 0) {
+      if (task.corTaskId) {
+        await ctx.db.patch(task._id, {
+          corSyncStatus: "syncing",
+          corSyncAttempt: 0,
+          corSyncError: undefined,
+        });
+        await ctx.scheduler.runAfter(
+          0,
+          internal.data.tasks.syncEditToCORAction,
+          { taskId: task._id, changedFields: [], attempt: 0 },
+        );
+      }
+      if (task.trelloCardId) {
+        await ctx.scheduler.runAfter(
+          0,
+          (internal as any).data.trello.syncPendingTaskAttachmentsToTrello,
+          { taskId: task._id },
+        );
+      }
+    }
+
+    return {
+      draftId: draft._id,
+      taskId: task?._id,
+      registered,
+      attached,
+      total: uniqueFiles.size,
+    };
+  },
+});
+
+export const getTaskDraftFilesForCreation = internalQuery({
+  args: {
+    threadId: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const chatThread = await ctx.db
+      .query("chatThreads")
+      .withIndex("by_thread", (q) => q.eq("threadId", args.threadId))
+      .unique();
+    if (!chatThread) throw new Error(`No existe el thread ${args.threadId}.`);
+
+    const drafts = await ctx.db
+      .query("taskDrafts")
+      .withIndex("by_thread", (q) => q.eq("threadId", args.threadId))
+      .collect();
+    if (drafts.length !== 1) {
+      throw new Error(
+        `Integridad inválida: se esperaba un único borrador para ${args.threadId}.`,
+      );
+    }
+    const draft = drafts[0];
+    if (draft.userId !== chatThread.userId || draft.status !== "collecting") {
+      throw new Error("El borrador no está disponible para crear una task.");
+    }
+
+    const files = await ctx.db
+      .query("threadUploadedFiles")
+      .withIndex("by_draft_and_status", (q) =>
+        q.eq("draftId", draft._id).eq("status", "pending"),
+      )
+      .collect();
+    const prematurelyAttached = await ctx.db
+      .query("threadUploadedFiles")
+      .withIndex("by_draft_and_status", (q) =>
+        q.eq("draftId", draft._id).eq("status", "attached"),
+      )
+      .first();
+    if (prematurelyAttached) {
+      throw new Error(
+        "Integridad inválida: un borrador sin task contiene archivos ya adjuntados.",
+      );
+    }
+    const withUrls = await Promise.all(
+      files.map(async (file) => ({
+        ...file,
+        url: await ctx.storage.getUrl(file.storageId as any),
+      })),
+    );
+    return { draftId: draft._id, files: withUrls };
+  },
+});
+
+// Compatibilidad con invocaciones antiguas del background job. El ledger y la
+// validación thread -> draft -> task siguen siendo obligatorios.
 export const associateFilesToTask = internalAction({
   args: {
     taskId: v.string(),
     threadId: v.string(),
   },
   handler: async (ctx, args): Promise<void> => {
-    console.log(
-      `[AssociateFiles] Buscando archivos para task ${args.taskId}...`,
-    );
-
-    try {
-      // Obtener todos los mensajes del thread
-      const messagesResult = await listMessages(ctx, components.agent, {
-        threadId: args.threadId,
-        paginationOpts: { cursor: null, numItems: 20 },
-      });
-
-      const allFileIds: string[] = [];
-
-      // Buscar fileIds en cada mensaje
-      for (const msg of messagesResult.page) {
-        const msgAny = msg as any;
-        if (msgAny.fileIds && Array.isArray(msgAny.fileIds)) {
-          allFileIds.push(...msgAny.fileIds);
-        }
-      }
-
-      if (allFileIds.length === 0) {
-        console.log(`[AssociateFiles] No se encontraron archivos en el thread`);
-        return;
-      }
-
-      console.log(
-        `[AssociateFiles] Creando ${allFileIds.length} registros en taskAttachments...`,
+    const task = await ctx.runQuery(internal.data.tasks.getTaskByIdInternal, {
+      taskId: args.taskId,
+    });
+    if (!task || task.threadId !== args.threadId) {
+      throw new Error(
+        "No se pueden asociar archivos: la task no pertenece al thread indicado.",
       );
-
-      for (const fileId of allFileIds) {
-        try {
-          const fileInfo = await ctx.runQuery(
-            internal.data.tasks.getFileInfoInternal,
-            { fileId },
-          );
-          if (fileInfo) {
-            await ctx.runMutation(internal.data.tasks.createTaskAttachment, {
-              taskId: args.taskId as any,
-              fileId,
-              storageId: fileInfo.storageId,
-              filename: fileInfo.filename,
-              mimeType: fileInfo.mimeType,
-              size: fileInfo.size,
-            });
-            console.log(
-              `[AssociateFiles] ✅ Attachment creado: ${fileInfo.filename}`,
-            );
-          }
-        } catch (fileError) {
-          console.error(
-            `[AssociateFiles] ⚠️ Error con archivo ${fileId}:`,
-            fileError,
-          );
-        }
-      }
-
-      console.log(`[AssociateFiles] ✅ Archivos asociados exitosamente`);
-    } catch (error) {
-      console.error(`[AssociateFiles] Error:`, error);
     }
+    await registerLegacyThreadFilesForDraft(ctx, args.threadId);
   },
 });
 
@@ -1296,6 +1757,8 @@ export const associateFilesToTask = internalAction({
 export const createTaskAttachment = internalMutation({
   args: {
     taskId: v.id("tasks"),
+    taskDraftId: v.optional(v.id("taskDrafts")),
+    threadUploadedFileId: v.optional(v.id("threadUploadedFiles")),
     fileId: v.string(),
     storageId: v.string(),
     filename: v.string(),
@@ -1305,19 +1768,29 @@ export const createTaskAttachment = internalMutation({
     trelloAttachmentUrl: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    return await ctx.db.insert("taskAttachments", {
-      taskId: args.taskId,
-      fileId: args.fileId,
-      storageId: args.storageId,
-      filename: args.filename,
-      mimeType: args.mimeType,
-      size: args.size,
-      trelloAttachmentId: args.trelloAttachmentId,
-      trelloAttachmentUrl: args.trelloAttachmentUrl,
-      trelloSyncStatus: args.trelloAttachmentId ? "synced" : undefined,
-      trelloSyncedAt: args.trelloAttachmentId ? Date.now() : undefined,
-      createdAt: Date.now(),
-    });
+    const task = await ctx.db.get(args.taskId);
+    if (!task || task.convexStatus === "deleted") {
+      throw new Error("No se puede adjuntar un archivo a una task inexistente.");
+    }
+
+    if (args.threadUploadedFileId) {
+      const uploadedFile = await ctx.db.get(args.threadUploadedFileId);
+      if (!uploadedFile || uploadedFile.fileId !== args.fileId) {
+        throw new Error(
+          "Integridad inválida: el registro de archivo no corresponde al fileId.",
+        );
+      }
+      if (
+        uploadedFile.threadId !== task.threadId ||
+        (uploadedFile.taskId && uploadedFile.taskId !== task._id)
+      ) {
+        throw new Error(
+          "Integridad inválida: el archivo pertenece a otra conversación o task.",
+        );
+      }
+    }
+
+    return await insertExclusiveTaskAttachment(ctx, args);
   },
 });
 
@@ -1975,10 +2448,95 @@ export const createProjectAndTask = internalMutation({
     taskSubBrandName: v.optional(v.string()),
     // Shared
     threadId: v.string(),
+    taskDraftId: v.id("taskDrafts"),
+    expectedThreadUploadedFileIds: v.array(v.id("threadUploadedFiles")),
     existingProjectId: v.optional(v.id("projects")),
     externalTrelloAccessVerified: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
+    const chatThread = await ctx.db
+      .query("chatThreads")
+      .withIndex("by_thread", (q) => q.eq("threadId", args.threadId))
+      .unique();
+    if (!chatThread) {
+      throw new Error(`No existe el thread ${args.threadId}.`);
+    }
+
+    const draft = await ctx.db.get(args.taskDraftId);
+    if (
+      !draft ||
+      draft.threadId !== args.threadId ||
+      draft.userId !== chatThread.userId ||
+      draft.status !== "collecting" ||
+      draft.taskId
+    ) {
+      throw new Error(
+        "Integridad inválida: el borrador no está disponible para esta conversación.",
+      );
+    }
+    if (
+      args.taskCreatedBy &&
+      args.taskCreatedBy !== String(chatThread.userId)
+    ) {
+      throw new Error(
+        "Integridad inválida: el creador de la task no coincide con el dueño del borrador.",
+      );
+    }
+
+    const existingTaskForThread = await ctx.db
+      .query("tasks")
+      .withIndex("by_thread", (q) => q.eq("threadId", args.threadId))
+      .first();
+    if (existingTaskForThread) {
+      throw new Error(
+        `Ya existe un requerimiento para esta conversación: ${existingTaskForThread._id}.`,
+      );
+    }
+
+    const pendingFiles = await ctx.db
+      .query("threadUploadedFiles")
+      .withIndex("by_draft_and_status", (q) =>
+        q.eq("draftId", draft._id).eq("status", "pending"),
+      )
+      .collect();
+    const prematurelyAttached = await ctx.db
+      .query("threadUploadedFiles")
+      .withIndex("by_draft_and_status", (q) =>
+        q.eq("draftId", draft._id).eq("status", "attached"),
+      )
+      .first();
+    if (prematurelyAttached) {
+      throw new Error(
+        "Integridad inválida: un borrador sin task contiene archivos ya adjuntados.",
+      );
+    }
+    const expectedUploadIds = args.expectedThreadUploadedFileIds
+      .map(String)
+      .sort();
+    const pendingUploadIds = pendingFiles.map((file) => String(file._id)).sort();
+    if (
+      new Set(expectedUploadIds).size !== expectedUploadIds.length ||
+      expectedUploadIds.length !== pendingUploadIds.length ||
+      expectedUploadIds.some(
+        (uploadedFileId, index) => uploadedFileId !== pendingUploadIds[index],
+      )
+    ) {
+      throw new Error(
+        "Los archivos del requerimiento cambiaron durante la creación. Intenta guardar nuevamente.",
+      );
+    }
+    for (const file of pendingFiles) {
+      if (
+        file.threadId !== args.threadId ||
+        file.userId !== chatThread.userId ||
+        file.taskId
+      ) {
+        throw new Error(
+          `Integridad inválida: el archivo ${file.fileId} no pertenece exclusivamente a este borrador.`,
+        );
+      }
+    }
+
     const isExternalCreation =
       args.taskSource === "external" || args.projectSource === "external";
     const trelloRequired =
@@ -2068,6 +2626,7 @@ export const createProjectAndTask = internalMutation({
       deliverablesCount: args.taskDeliverablesCount,
       priority: args.taskPriority ?? 1,
       threadId: args.threadId,
+      taskDraftId: draft._id,
       status: args.taskStatus,
       convexStatus: "active",
       createdBy: args.taskCreatedBy,
@@ -2086,6 +2645,42 @@ export const createProjectAndTask = internalMutation({
     });
     console.log(`[CreateProjectAndTask] ✅ Task creada: ${taskId}`);
 
+    const attachedAt = Date.now();
+    for (const file of pendingFiles) {
+      await insertExclusiveTaskAttachment(ctx, {
+        taskId,
+        taskDraftId: draft._id,
+        threadUploadedFileId: file._id,
+        fileId: file.fileId,
+        storageId: file.storageId,
+        filename: file.filename,
+        mimeType: file.mimeType,
+        size: file.size,
+      });
+      await ctx.db.patch(file._id, {
+        status: "attached",
+        taskId,
+        attachedAt,
+      });
+    }
+
+    const createdAttachments = await ctx.db
+      .query("taskAttachments")
+      .withIndex("by_task", (q) => q.eq("taskId", taskId))
+      .collect();
+    if (createdAttachments.length !== pendingFiles.length) {
+      throw new Error(
+        `No se creó la task porque solo se asociaron ${createdAttachments.length} de ${pendingFiles.length} archivos.`,
+      );
+    }
+
+    await ctx.db.patch(draft._id, {
+      status: "created",
+      taskId,
+      updatedAt: attachedAt,
+      completedAt: attachedAt,
+    });
+
     try {
       await ctx.scheduler.runAfter(
         0,
@@ -2102,7 +2697,11 @@ export const createProjectAndTask = internalMutation({
       );
     }
 
-    return { projectId, taskId: taskId as string };
+    return {
+      projectId,
+      taskId: taskId as string,
+      attachmentCount: createdAttachments.length,
+    };
   },
 });
 
@@ -2426,71 +3025,113 @@ export const classifyAndUpdatePriority = internalAction({
 });
 
 /**
- * Helper para asociar archivos del thread a una task.
- * Se ejecuta directamente como función TypeScript (sin runAction).
- * Ref: https://docs.convex.dev/functions/actions#await-ctxrunaction-should-only-be-used-for-crossing-js-runtimes
+ * Compatibilidad para conversaciones creadas antes del ledger de archivos.
+ * Recorre todo el historial una sola vez de forma idempotente y registra los
+ * archivos originales en el draft. El flujo normal registra cada upload desde chat.ts.
+ */
+export async function registerLegacyThreadFilesForDraft(
+  ctx: ActionCtx,
+  threadId: string,
+): Promise<void> {
+  await ctx.runMutation(internal.data.tasks.ensureTaskDraftForThread, {
+    threadId,
+  });
+
+  const originalsByMessage = new Map<
+    string,
+    Map<string, ChatUploadedFileInput>
+  >();
+  let cursor: string | null = null;
+  do {
+    const messagesResult = await listMessages(ctx, components.agent, {
+      threadId,
+      paginationOpts: { cursor, numItems: 100 },
+    });
+
+    for (const msg of messagesResult.page as any[]) {
+      if (msg?.message?.role !== "user" || !Array.isArray(msg.fileIds)) {
+        continue;
+      }
+      const messageId = String(msg?._id ?? msg?.id ?? msg?.messageId ?? "");
+      if (!messageId) {
+        throw new Error(
+          `No se pudo identificar un mensaje histórico con archivos del thread ${threadId}.`,
+        );
+      }
+      const fileIds: string[] = Array.from(
+        new Set<string>(
+          (msg.fileIds as unknown[]).map((fileId: unknown) => String(fileId)),
+        ),
+      );
+      const resolved: ChatUploadedFileInput[] = [];
+      for (const fileId of fileIds) {
+        const fileInfo = await ctx.runQuery(
+          internal.data.tasks.getFileInfoInternal,
+          { fileId },
+        );
+        if (!fileInfo) {
+          throw new Error(
+            `No se pudo resolver el archivo histórico ${fileId} del thread ${threadId}.`,
+          );
+        }
+        resolved.push({
+          fileId,
+          storageId: fileInfo.storageId,
+          filename: fileInfo.filename,
+          mimeType: fileInfo.mimeType,
+          size: fileInfo.size,
+        });
+      }
+
+      const originals = resolved.filter(
+        (candidate) =>
+          !resolved.some(
+            (possibleOriginal) =>
+              possibleOriginal.fileId !== candidate.fileId &&
+              candidate.filename.startsWith(`${possibleOriginal.filename}-img-`),
+          ),
+      );
+      const originalsForMessage =
+        originalsByMessage.get(messageId) ??
+        new Map<string, ChatUploadedFileInput>();
+      for (const original of originals) {
+        originalsForMessage.set(original.fileId, original);
+      }
+      originalsByMessage.set(messageId, originalsForMessage);
+    }
+
+    if (messagesResult.isDone) break;
+    cursor = messagesResult.continueCursor;
+  } while (cursor);
+
+  for (const [messageId, originalsByFileId] of originalsByMessage) {
+    await ctx.runMutation(internal.data.tasks.registerThreadUploadedFiles, {
+      threadId,
+      messageId,
+      files: Array.from(originalsByFileId.values()),
+    });
+  }
+}
+
+/**
+ * @deprecated El flujo de creación usa taskDrafts + threadUploadedFiles.
+ * Se conserva temporalmente para llamadas antiguas, con exclusividad reforzada
+ * por createTaskAttachment.
  */
 export async function associateFilesHelper(
   ctx: ActionCtx,
   taskId: string,
   threadId: string,
 ): Promise<void> {
-  console.log(`[AssociateFiles] Buscando archivos para task ${taskId}...`);
-
-  try {
-    const messagesResult = await listMessages(ctx, components.agent, {
-      threadId,
-      paginationOpts: { cursor: null, numItems: 20 },
-    });
-
-    const allFileIds: string[] = [];
-    for (const msg of messagesResult.page) {
-      const msgAny = msg as any;
-      if (msgAny.fileIds && Array.isArray(msgAny.fileIds)) {
-        allFileIds.push(...msgAny.fileIds);
-      }
-    }
-
-    if (allFileIds.length === 0) {
-      console.log(`[AssociateFiles] No se encontraron archivos en el thread`);
-      return;
-    }
-
-    console.log(
-      `[AssociateFiles] Creando ${allFileIds.length} registros en taskAttachments...`,
+  const task = await ctx.runQuery(internal.data.tasks.getTaskByIdInternal, {
+    taskId,
+  });
+  if (!task || task.threadId !== threadId) {
+    throw new Error(
+      "No se pueden asociar archivos: la task no pertenece al thread indicado.",
     );
-
-    for (const fileId of allFileIds) {
-      try {
-        const fileInfo = await ctx.runQuery(
-          internal.data.tasks.getFileInfoInternal,
-          { fileId },
-        );
-        if (fileInfo) {
-          await ctx.runMutation(internal.data.tasks.createTaskAttachment, {
-            taskId: taskId as any,
-            fileId,
-            storageId: fileInfo.storageId,
-            filename: fileInfo.filename,
-            mimeType: fileInfo.mimeType,
-            size: fileInfo.size,
-          });
-          console.log(
-            `[AssociateFiles] ✅ Attachment creado: ${fileInfo.filename}`,
-          );
-        }
-      } catch (fileError) {
-        console.error(
-          `[AssociateFiles] ⚠️ Error con archivo ${fileId}:`,
-          fileError,
-        );
-      }
-    }
-
-    console.log(`[AssociateFiles] ✅ Archivos asociados exitosamente`);
-  } catch (error) {
-    console.error(`[AssociateFiles] Error:`, error);
   }
+  await registerLegacyThreadFilesForDraft(ctx, threadId);
 }
 
 // ==================== QUERIES ====================
