@@ -166,6 +166,7 @@ export default function AnalyticsPage() {
                   count: item.count,
                 }))}
                 total={analytics.summary.tasks}
+                scale="max"
               />
             </AnalyticsPanel>
 
@@ -177,6 +178,7 @@ export default function AnalyticsPage() {
                   count: item.count,
                 }))}
                 total={analytics.summary.tasks}
+                scale="max"
               />
             </AnalyticsPanel>
           </div>
@@ -193,6 +195,7 @@ export default function AnalyticsPage() {
                   count: item.count,
                 }))}
                 total={analytics.summary.tasks}
+                scale="max"
               />
             </AnalyticsPanel>
 
@@ -207,6 +210,7 @@ export default function AnalyticsPage() {
                   count: item.count,
                 }))}
                 total={analytics.evaluations.total}
+                scale="max"
               />
               <p className="text-xs text-muted-foreground mt-3">
                 Atribuido al usuario que creó la task evaluada.
@@ -318,18 +322,24 @@ function AnalyticsPanel({
 function BarList({
   items,
   total,
+  scale = "total",
 }: {
   items: Array<{ key: string; label: string; count: number }>;
   total: number;
+  scale?: "total" | "max";
 }) {
-  if (items.length === 0 || total === 0) {
+  const scaleMaximum =
+    scale === "max" ? Math.max(...items.map((item) => item.count), 0) : total;
+
+  if (items.length === 0 || scaleMaximum <= 0) {
     return <EmptyState />;
   }
 
   return (
     <div className="space-y-3">
       {items.map((item) => {
-        const percentage = Math.round((item.count / total) * 100);
+        const percentage = Math.min((item.count / scaleMaximum) * 100, 100);
+        const width = item.count > 0 ? Math.max(percentage, 2) : 0;
         return (
           <div key={item.key}>
             <div className="flex items-center justify-between gap-3 text-xs mb-1">
@@ -339,7 +349,7 @@ function BarList({
             <div className="h-2 rounded-full bg-muted overflow-hidden">
               <div
                 className="h-full rounded-full bg-primary"
-                style={{ width: `${Math.max(percentage, 2)}%` }}
+                style={{ width: `${width}%` }}
               />
             </div>
           </div>
