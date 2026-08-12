@@ -144,7 +144,11 @@ export default defineSchema({
     ),
     status: v.string(),
     convexStatus: v.optional(
-      v.union(v.literal("active"), v.literal("deleted")),
+      v.union(
+        v.literal("active"),
+        v.literal("archived"),
+        v.literal("deleted"),
+      ),
     ),
     // === Campos internos (no van a COR) ===
     threadId: v.string(),
@@ -204,6 +208,17 @@ export default defineSchema({
     trelloInboundSyncStatus: v.optional(v.string()), // "clean" | "pending_review" | "conflict" | "error"
     trelloInboundSyncError: v.optional(v.string()),
     trelloLastInboundAt: v.optional(v.number()),
+    // === Archivado local ===
+    archiveSyncStatus: v.optional(
+      v.union(
+        v.literal("syncing"),
+        v.literal("synced"),
+        v.literal("error"),
+      ),
+    ),
+    archiveSyncError: v.optional(v.string()),
+    archivedAt: v.optional(v.number()),
+    archivedBy: v.optional(v.string()),
   })
     .index("by_thread", ["threadId"])
     .index("by_taskDraftId", ["taskDraftId"])
@@ -656,7 +671,11 @@ export default defineSchema({
     endDate: v.optional(v.string()), // YYYY-MM-DD (deadline)
     status: v.string(), // "active" | "in_process" | "suspended" | "finished"
     convexStatus: v.optional(
-      v.union(v.literal("active"), v.literal("deleted")),
+      v.union(
+        v.literal("active"),
+        v.literal("archived"),
+        v.literal("deleted"),
+      ),
     ),
     estimatedTime: v.optional(v.number()), // Horas estimadas
     billable: v.optional(v.boolean()),
@@ -688,6 +707,8 @@ export default defineSchema({
     trelloSyncStatus: v.optional(v.string()),
     trelloSyncError: v.optional(v.string()),
     trelloSyncedAt: v.optional(v.number()),
+    archivedAt: v.optional(v.number()),
+    archivedBy: v.optional(v.string()),
   })
     .index("by_clientId", ["clientId"])
     .index("by_status", ["status"])
@@ -777,6 +798,7 @@ export default defineSchema({
     syncError: v.optional(v.string()),
     createdAt: v.number(),
     syncedAt: v.optional(v.number()),
+    archivedAt: v.optional(v.number()),
   })
     .index("by_task", ["taskId"])
     .index("by_project", ["projectId"])

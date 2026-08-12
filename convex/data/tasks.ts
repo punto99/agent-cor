@@ -3625,6 +3625,201 @@ export const softDeleteTask = mutation({
 });
 
 /**
+ * Inicia el archivado de una task que todavía no existe en COR.
+ * El trabajo externo de Trello se ejecuta en una action y el archivado local
+ * se confirma únicamente cuando esa operación termina correctamente.
+ */
+export const startArchiveUnpublishedTask: any = mutation({
+  args: {
+    taskId: v.id("tasks"),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) throw new Error("No autenticado");
+    if (await isExternalUser(ctx, userId)) {
+      throw new Error("Los usuarios externos no pueden archivar tareas desde el panel.");
+    }
+
+    const task = await ctx.db.get(args.taskId);
+    if (!task || task.convexStatus === "deleted") {
+      throw new Error("Tarea no encontrada.");
+    }
+    if (task.convexStatus === "archived") {
+      return {
+        success: true,
+        alreadyArchived: true,
+        archivesProject: false,
+        archivesTrello: Boolean(task.trelloCardId),
+      };
+    }
+    if (!(await hasTaskAccess(ctx, task, userId))) {
+      throw new Error("No tienes permisos para archivar esta tarea.");
+    }
+
+    const isPublishedInCOR =
+      task.corSyncStatus === "synced" || Boolean(task.corTaskId);
+    if (isPublishedInCOR) {
+      throw new Error("No se puede archivar una tarea que ya fue publicada en COR.");
+    }
+    if (task.corSyncStatus === "syncing" || task.corSyncStatus === "retrying") {
+      throw new Error(
+        "La tarea se está publicando en COR. Espera a que termine antes de archivarla.",
+      );
+    }
+    if (task.trelloSyncStatus === "syncing") {
+      throw new Error(
+        "La tarea se está publicando en Trello. Espera a que termine antes de archivarla.",
+      );
+    }
+    if (task.archiveSyncStatus === "syncing") {
+      throw new Error("La tarea ya se está archivando.");
+    }
+
+    const project = task.projectId ? await ctx.db.get(task.projectId) : null;
+    const projectExistsInCOR = Boolean(
+      task.corProjectId ||
+        project?.corProjectId ||
+        project?.corSyncStatus === "synced",
+    );
+    const archivesProject = Boolean(
+      project &&
+        project.convexStatus !== "deleted" &&
+        project.convexStatus !== "archived" &&
+        !projectExistsInCOR,
+    );
+
+    const trelloCard = await ctx.db
+      .query("trelloCards")
+      .withIndex("by_task", (q) => q.eq("taskId", task._id))
+      .first();
+    const trelloCardId =
+      task.trelloCardId || trelloCard?.trelloCardId || project?.trelloCardId;
+    const hasTrelloReference = Boolean(
+      task.trelloCardId ||
+        task.trelloCardUrl ||
+        task.trelloSyncStatus === "synced" ||
+        trelloCard?.trelloCardId ||
+        trelloCard?.trelloCardUrl ||
+        project?.trelloCardId ||
+        project?.trelloCardUrl,
+    );
+    if (hasTrelloReference && !trelloCardId) {
+      throw new Error(
+        "La tarea está vinculada a Trello, pero no se pudo identificar la card para archivarla.",
+      );
+    }
+
+    await ctx.db.patch(task._id, {
+      archiveSyncStatus: "syncing",
+      archiveSyncError: undefined,
+    });
+
+    await ctx.scheduler.runAfter(
+      0,
+      (internal as any).data.trello.archiveUnpublishedTask,
+      {
+        taskId: task._id,
+        projectId: task.projectId,
+        archiveProject: archivesProject,
+        trelloCardId,
+        archivedBy: String(userId),
+      },
+    );
+
+    return {
+      success: true,
+      alreadyArchived: false,
+      archivesProject,
+      archivesTrello: Boolean(trelloCardId),
+    };
+  },
+});
+
+export const completeArchiveUnpublishedTask = internalMutation({
+  args: {
+    taskId: v.id("tasks"),
+    projectId: v.optional(v.id("projects")),
+    archiveProject: v.boolean(),
+    archivedBy: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const task = await ctx.db.get(args.taskId);
+    if (!task || task.convexStatus === "deleted") {
+      throw new Error("Tarea no encontrada al completar el archivado.");
+    }
+    if (task.convexStatus === "archived") {
+      return { success: true, projectArchived: false };
+    }
+    if (task.corSyncStatus === "synced" || task.corTaskId) {
+      throw new Error(
+        "La tarea fue publicada en COR mientras se archivaba y no puede archivarse.",
+      );
+    }
+
+    const archivedAt = Date.now();
+    let projectArchived = false;
+
+    const projectId = args.projectId;
+    if (args.archiveProject && projectId && projectId === task.projectId) {
+      const project = await ctx.db.get(projectId);
+      const projectExistsInCOR = Boolean(
+        task.corProjectId ||
+          project?.corProjectId ||
+          project?.corSyncStatus === "synced",
+      );
+      if (
+        project &&
+        project.convexStatus !== "deleted" &&
+        project.convexStatus !== "archived" &&
+        !projectExistsInCOR
+      ) {
+        await ctx.db.patch(project._id, {
+          convexStatus: "archived",
+          archivedAt,
+          archivedBy: args.archivedBy,
+        });
+        const archivedProject = await ctx.db.get(project._id);
+        await applyProjectDeliverablesDelta(ctx, project, archivedProject);
+        projectArchived = true;
+      }
+    }
+
+    await ctx.db.patch(task._id, {
+      convexStatus: "archived",
+      archiveSyncStatus: "synced",
+      archiveSyncError: undefined,
+      archivedAt,
+      archivedBy: args.archivedBy,
+    });
+
+    const trelloCard = await ctx.db
+      .query("trelloCards")
+      .withIndex("by_task", (q) => q.eq("taskId", task._id))
+      .first();
+    if (trelloCard) {
+      await ctx.db.patch(trelloCard._id, { archivedAt });
+    }
+
+    return { success: true, projectArchived };
+  },
+});
+
+export const markArchiveUnpublishedTaskError = internalMutation({
+  args: {
+    taskId: v.id("tasks"),
+    error: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const task = await ctx.db.get(args.taskId);
+    if (!task || task.convexStatus === "archived") return;
+    await ctx.db.patch(task._id, {
+      archiveSyncStatus: "error",
+      archiveSyncError: args.error,
+    });
+  },
+});
+
+/**
  * Soft delete seguro para borradores internos que aún no fueron publicados
  * ni en COR ni en Trello. Si el proyecto propuesto ya no tiene otras tasks
  * activas, también marca el proyecto como deleted.
@@ -4772,6 +4967,13 @@ export const startPublishTaskToExternal = mutation({
     const task = await ctx.db.get(args.taskId);
     if (!task) {
       throw new Error("Task no encontrada");
+    }
+
+    if (task.convexStatus === "archived") {
+      throw new Error("No se puede publicar una tarea archivada.");
+    }
+    if (task.archiveSyncStatus === "syncing") {
+      throw new Error("La tarea se está archivando. Espera a que termine.");
     }
 
     // Verificar que la task no está ya sincronizada

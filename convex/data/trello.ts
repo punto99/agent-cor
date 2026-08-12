@@ -2139,6 +2139,12 @@ export const startPublishTaskToTrello = mutation({
     if (!task || task.convexStatus === "deleted") {
       throw new Error("Task no encontrada.");
     }
+    if (task.convexStatus === "archived") {
+      throw new Error("No se puede publicar en Trello una tarea archivada.");
+    }
+    if (task.archiveSyncStatus === "syncing") {
+      throw new Error("La tarea se está archivando. Espera a que termine.");
+    }
 
     if (!isTrelloEnabledForCorClientId(task.corClientId)) {
       throw new Error("Esta task no está habilitada para publicación en Trello.");
@@ -2206,6 +2212,46 @@ export const startPublishTaskToTrello = mutation({
       success: true,
       message: "Publicación en Trello iniciada.",
     };
+  },
+});
+
+export const archiveUnpublishedTask: any = internalAction({
+  args: {
+    taskId: v.id("tasks"),
+    projectId: v.optional(v.id("projects")),
+    archiveProject: v.boolean(),
+    trelloCardId: v.optional(v.string()),
+    archivedBy: v.string(),
+  },
+  handler: async (ctx, args) => {
+    try {
+      if (args.trelloCardId) {
+        const card = await trelloProvider.archiveCard(args.trelloCardId);
+        if (card.closed === false) {
+          throw new Error("Trello no confirmó el archivado de la card.");
+        }
+      }
+
+      return await ctx.runMutation(
+        internal.data.tasks.completeArchiveUnpublishedTask,
+        {
+          taskId: args.taskId,
+          projectId: args.projectId,
+          archiveProject: args.archiveProject,
+          archivedBy: args.archivedBy,
+        },
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      await ctx.runMutation(
+        internal.data.tasks.markArchiveUnpublishedTaskError,
+        {
+          taskId: args.taskId,
+          error: message,
+        },
+      );
+      return { success: false, error: message };
+    }
   },
 });
 
@@ -2986,6 +3032,10 @@ export const processWebhookEvent: any = internalAction({
         }
 
         if (Object.prototype.hasOwnProperty.call(oldValues, "closed")) {
+          const isExpectedLocalArchive =
+            card.closed === true &&
+            (context.task.archiveSyncStatus === "syncing" ||
+              context.task.convexStatus === "archived");
           await ctx.runMutation(internalTrello.recordInboundChange, {
             eventId: args.eventId,
             taskId: context.task._id,
@@ -2996,11 +3046,13 @@ export const processWebhookEvent: any = internalAction({
             oldValueJson: jsonValue(oldValues.closed),
             newValueJson: jsonValue(card.closed),
             applied: false,
-            requiresReview: true,
-            reviewStatus: "pending",
-            note: "Archivado/cierre en Trello requiere revisión.",
+            requiresReview: !isExpectedLocalArchive,
+            reviewStatus: isExpectedLocalArchive ? undefined : "pending",
+            note: isExpectedLocalArchive
+              ? "Archivado en Trello originado por el archivado local de la tarea."
+              : "Archivado/cierre en Trello requiere revisión.",
           });
-          reviewCount += 1;
+          if (!isExpectedLocalArchive) reviewCount += 1;
         }
 
         if (Object.keys(safeUpdates).length > 0) {

@@ -13,6 +13,7 @@ type TrelloCard = {
   url: string;
   shortUrl?: string;
   idList: string;
+  closed?: boolean;
 };
 
 type TrelloComment = {
@@ -288,6 +289,14 @@ export const trelloProvider = {
         desc: args.desc,
         due: args.due,
       },
+    );
+  },
+
+  async archiveCard(cardId: string): Promise<TrelloCard> {
+    return await trelloFetch<TrelloCard>(
+      `/cards/${cardId}`,
+      { method: "PUT" },
+      { closed: true },
     );
   },
 

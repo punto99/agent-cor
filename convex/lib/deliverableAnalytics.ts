@@ -6,7 +6,7 @@ type RollupScope = "global" | "client" | "brand" | "subBrand";
 
 type ProjectSnapshot = {
   _id?: unknown;
-  convexStatus?: "active" | "deleted";
+  convexStatus?: "active" | "archived" | "deleted";
   createdBy?: unknown;
   deliverables?: number;
   clientId?: unknown;
@@ -104,7 +104,13 @@ function getDimensions(project: ProjectSnapshot): RollupDimensions[] {
 }
 
 function getContributions(project?: ProjectSnapshot | null): RollupContribution[] {
-  if (!project || project.convexStatus === "deleted") return [];
+  if (
+    !project ||
+    project.convexStatus === "archived" ||
+    project.convexStatus === "deleted"
+  ) {
+    return [];
+  }
   if (isExcludedUserId(project.createdBy)) return [];
 
   const deliverables = positiveDeliverables(project.deliverables);
