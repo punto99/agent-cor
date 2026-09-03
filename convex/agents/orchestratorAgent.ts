@@ -6,7 +6,7 @@ import { google } from "@ai-sdk/google";
 import { agentConfig, getOrchestratorAgentInstructions } from "../lib/serverConfig";
 
 // Mismo modelo base que los demás agentes
-const languageModel = google("gemini-3.6-flash");
+const languageModel = google("gemini-3.7-flash");
 
 // ==================== ORCHESTRATOR AGENT ====================
 // - Sin tools — solo clasifica la intención del usuario

@@ -192,12 +192,50 @@ export const getDashboard = query({
         }
       }
       const accessibleBrands = Array.from(accessibleBrandsById.values());
-      const missingBoardCount = accessibleBrands.filter(
+      const invitedAccess = (approvedUser.preapprovedClientAccess ?? [])
+        .map((entry) => {
+          const client = clientsById.get(String(entry.clientId));
+          if (!client) return null;
+
+          const allClientBrands =
+            brandsByClientId.get(String(entry.clientId)) ?? [];
+          const hasSpecificBrands = Boolean(entry.brandIds?.length);
+          const invitedBrands = hasSpecificBrands
+            ? (entry.brandIds ?? [])
+                .map((brandId) => brandsById.get(String(brandId)))
+                .filter(
+                  (brand): brand is NonNullable<typeof brand> =>
+                    Boolean(
+                      brand && String(brand.clientId) === String(entry.clientId),
+                    ),
+                )
+            : allClientBrands;
+
+          return {
+            clientId: client._id,
+            clientName: client.name,
+            corClientId: client.corClientId,
+            allBrands: !hasSpecificBrands,
+            brands: invitedBrands.map((brand) => ({
+              _id: brand._id,
+              name: brand.name,
+              corBrandId: brand.corBrandId,
+              trelloBoardId: brand.trelloBoardId,
+              trelloEnabled: isTrelloEnabledForCorClientId(brand.corClientId),
+            })),
+          };
+        })
+        .filter((entry): entry is NonNullable<typeof entry> => entry !== null);
+
+      const relevantBrands = approvedUser.userId
+        ? accessibleBrands
+        : invitedAccess.flatMap((entry) => entry.brands);
+      const missingBoardCount = relevantBrands.filter(
         (brand) =>
           isTrelloEnabledForCorClientId(brand.corClientId) &&
           !brand.trelloBoardId,
       ).length;
-      const trelloRequired = accessibleBrands.some((brand) =>
+      const trelloRequired = relevantBrands.some((brand) =>
         isTrelloEnabledForCorClientId(brand.corClientId),
       );
 
@@ -216,12 +254,14 @@ export const getDashboard = query({
         trelloMemberSyncError: approvedUser.trelloMemberSyncError,
         trelloMemberVerifiedAt: approvedUser.trelloMemberVerifiedAt,
         assignments: assignmentDetails,
+        invitedAccess,
         assignedBrandCount: accessibleBrands.length,
         fullClientCount: assignments.filter((assignment) => !assignment.brandId)
           .length,
         brandCount: assignments.filter((assignment) => assignment.brandId)
           .length,
         missingBoardCount,
+        trelloRequired,
         status: getExternalStatus({
           hasUser: Boolean(approvedUser.userId),
           assignmentCount: assignments.length,
@@ -435,6 +475,31 @@ export const getExternalTrelloContext = internalQuery({
         .collect();
       for (const brand of clientBrands) {
         brandsById.set(String(brand._id), brand);
+      }
+    }
+
+    if (!approvedUser.userId) {
+      for (const access of approvedUser.preapprovedClientAccess ?? []) {
+        if (access.brandIds?.length) {
+          for (const brandId of access.brandIds) {
+            const brand = await ctx.db.get(brandId);
+            if (
+              brand?.clientId &&
+              String(brand.clientId) === String(access.clientId)
+            ) {
+              brandsById.set(String(brand._id), brand);
+            }
+          }
+          continue;
+        }
+
+        const clientBrands = await ctx.db
+          .query("clientBrands")
+          .withIndex("by_client", (q) => q.eq("clientId", access.clientId))
+          .collect();
+        for (const brand of clientBrands) {
+          brandsById.set(String(brand._id), brand);
+        }
       }
     }
 

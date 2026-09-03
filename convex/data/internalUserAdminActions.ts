@@ -32,6 +32,10 @@ function formatError(error: unknown) {
   return error instanceof Error ? error.message : String(error);
 }
 
+function getFirstName(name: string | undefined) {
+  return name?.trim().split(/\s+/)[0] ?? "";
+}
+
 async function resolveInternalUserInCORNowHandler(
   ctx: any,
   args: { targetUserId: any },
@@ -64,12 +68,19 @@ async function resolveInternalUserInCORNowHandler(
 
     const userName = userInfo.name?.trim();
     const userEmail = userInfo.email?.trim().toLowerCase();
-    const searchTerm = userName || userEmail || "";
+    const searchTerm = getFirstName(userName);
 
     if (!searchTerm) {
       return {
         ok: false,
-        error: "El usuario no tiene nombre ni email para buscar en COR.",
+        error: "El usuario no tiene nombre para buscar en COR.",
+      };
+    }
+
+    if (!userEmail) {
+      return {
+        ok: false,
+        error: "El usuario no tiene email para validar su identidad en COR.",
       };
     }
 
@@ -83,26 +94,14 @@ async function resolveInternalUserInCORNowHandler(
       };
     }
 
-    let match = userEmail
-      ? corUsers.find((u) => u.email.toLowerCase() === userEmail)
-      : null;
-
-    if (!match && userName) {
-      const nameLower = userName.toLowerCase();
-      match = corUsers.find((u) => {
-        const fullName = `${u.firstName} ${u.lastName}`.toLowerCase();
-        return fullName === nameLower;
-      });
-    }
-
-    if (!match && corUsers.length === 1) {
-      match = corUsers[0];
-    }
+    const match = corUsers.find(
+      (u) => u.email.trim().toLowerCase() === userEmail,
+    );
 
     if (!match) {
       return {
         ok: false,
-        error: `COR devolvió ${corUsers.length} resultado(s) para "${searchTerm}", pero ninguno coincide por email o nombre exacto.`,
+        error: `COR devolvió ${corUsers.length} resultado(s) para "${searchTerm}", pero ninguno coincide con el email ${userEmail}.`,
       };
     }
 
@@ -152,6 +151,7 @@ async function verifyInternalUserInCORNowHandler(
       corUserId: number;
       corFirstName: string;
       corLastName: string;
+      corEmail: string;
     } | null = await ctx.runQuery(internal.data.corUsers.getCorUserByUserId, {
       userId: args.targetUserId,
     });
@@ -164,14 +164,17 @@ async function verifyInternalUserInCORNowHandler(
     }
 
     const provider = getProjectManagementProvider();
-    const searchName = `${corUser.corFirstName} ${corUser.corLastName}`;
+    const searchName = getFirstName(corUser.corFirstName);
     const corUsers = await provider.searchUsersByName(searchName);
-    const match = corUsers.find((u) => u.id === corUser.corUserId);
+    const corEmail = corUser.corEmail.trim().toLowerCase();
+    const match = corUsers.find(
+      (u) => u.email.trim().toLowerCase() === corEmail,
+    );
 
     if (!match) {
       return {
         ok: false,
-        error: `COR no encontró el usuario "${searchName}" con ID ${corUser.corUserId}.`,
+        error: `COR no encontró el usuario "${searchName}" con email ${corEmail}.`,
       };
     }
 

@@ -333,13 +333,6 @@ export const searchTrelloMembersForExternalUser = action({
       if (!context) {
         return { ok: false, error: "No encontramos este usuario externo." };
       }
-      if (!context.approvedUser.userId || !context.user) {
-        return {
-          ok: false,
-          error:
-            "Esta persona todavía no ingresó a la plataforma. Podrás buscarla en Trello cuando lo haga por primera vez.",
-        };
-      }
       if (context.brands.length === 0) {
         return {
           ok: false,
@@ -372,7 +365,7 @@ export const searchTrelloMembersForExternalUser = action({
       let candidates = rankCandidates({
         members,
         email: context.approvedUser.email,
-        name: context.approvedUser.name || context.user.name,
+        name: context.approvedUser.name || context.user?.name,
       });
 
       if (candidates.length === 0 && members.length > 0) {
@@ -434,13 +427,6 @@ export const verifyExternalUserTrelloAccess = action({
 
       if (!context) {
         return { ok: false, error: "No encontramos este usuario externo." };
-      }
-      if (!context.approvedUser.userId) {
-        return {
-          ok: false,
-          error:
-            "Esta persona todavía no ingresó a la plataforma. Espera su primer ingreso antes de verificar Trello.",
-        };
       }
       if (context.brands.length === 0) {
         return {

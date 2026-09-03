@@ -90,11 +90,11 @@ const googleWithDiagnostics = createGoogleGenerativeAI({
   },
 });
 
-// Modelo principal: Gemini 3.6 Flash
+// Modelo principal: Gemini 3.7 Flash
 export const geminiConfig: LLMConfig = {
   provider: "gemini",
-  model: googleWithDiagnostics("gemini-3.6-flash"),
-  modelId: "gemini-3.6-flash",
+  model: googleWithDiagnostics("gemini-3.7-flash"),
+  modelId: "gemini-3.7-flash",
   providerOptions: {
     google: {
       thinkingConfig: {

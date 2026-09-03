@@ -13,6 +13,10 @@ import { internalAction } from "../_generated/server";
 import { internal } from "../_generated/api";
 import { getProjectManagementProvider } from "../integrations/registry";
 
+function getFirstName(name: string | undefined) {
+  return name?.trim().split(/\s+/)[0] ?? "";
+}
+
 /**
  * Resuelve un usuario de Convex en COR.
  * 
@@ -51,10 +55,15 @@ export const resolveUserInCOR = internalAction({
 
       // 2. Buscar en COR por nombre
       const provider = getProjectManagementProvider();
-      const searchTerm = userName || userEmail || "";
+      const searchTerm = getFirstName(userName);
 
       if (!searchTerm) {
         console.warn(`[corUsers] ⚠️ Sin término de búsqueda para usuario ${args.userId}`);
+        return;
+      }
+
+      if (!userEmail) {
+        console.warn(`[corUsers] ⚠️ El usuario ${args.userId} no tiene email para validar su identidad en COR.`);
         return;
       }
 
@@ -65,29 +74,14 @@ export const resolveUserInCOR = internalAction({
         return;
       }
 
-      // 3. Buscar coincidencia por email (más confiable que nombre)
-      let match = userEmail
-        ? corUsers.find((u) => u.email.toLowerCase() === userEmail!.toLowerCase())
-        : null;
-
-      // Si no hay match por email, intentar por nombre completo
-      if (!match && userName) {
-        const nameLower = userName.toLowerCase();
-        match = corUsers.find((u) => {
-          const fullName = `${u.firstName} ${u.lastName}`.toLowerCase();
-          return fullName === nameLower;
-        });
-      }
-
-      // Si aún no hay match, tomar el primer resultado como fallback
-      // (solo si hay un único resultado, para evitar ambigüedades)
-      if (!match && corUsers.length === 1) {
-        match = corUsers[0];
-        console.log(`[corUsers] Único resultado en COR, usando como match: ${match.firstName} ${match.lastName}`);
-      }
+      // 3. Buscar siempre coincidencia exacta por email.
+      const normalizedUserEmail = userEmail.trim().toLowerCase();
+      const match = corUsers.find(
+        (u) => u.email.trim().toLowerCase() === normalizedUserEmail,
+      );
 
       if (!match) {
-        console.log(`[corUsers] ${corUsers.length} resultados en COR para "${searchTerm}" pero ninguno coincide por email/nombre exacto.`);
+        console.log(`[corUsers] ${corUsers.length} resultados en COR para "${searchTerm}" pero ninguno coincide con el email ${normalizedUserEmail}.`);
         return;
       }
 
@@ -131,15 +125,17 @@ export const verifyUserInCOR = internalAction({
 
       // 2. Buscar en COR por nombre
       const provider = getProjectManagementProvider();
-      const searchName = `${corUser.corFirstName} ${corUser.corLastName}`;
+      const searchName = getFirstName(corUser.corFirstName);
       const corUsers = await provider.searchUsersByName(searchName);
 
-      // 3. Verificar que nuestro usuario sigue en los resultados
-      const stillExists = corUsers.some((u) => u.id === corUser.corUserId);
+      // 3. Verificar por email exacto que nuestro usuario sigue en los resultados
+      const corEmail = corUser.corEmail.trim().toLowerCase();
+      const updatedData = corUsers.find(
+        (u) => u.email.trim().toLowerCase() === corEmail,
+      );
 
-      if (stillExists) {
+      if (updatedData) {
         // Re-upsert para actualizar lastVerifiedAt y datos que pudieron cambiar
-        const updatedData = corUsers.find((u) => u.id === corUser.corUserId)!;
         await ctx.runMutation(internal.data.corUsers.upsertCorUser, {
           userId: args.userId,
           corUserId: updatedData.id,
@@ -149,9 +145,9 @@ export const verifyUserInCOR = internalAction({
           corRoleId: updatedData.roleId,
           corPositionName: updatedData.positionName,
         });
-        console.log(`[corUsers] ✅ Usuario verificado en COR: ${searchName} (ID: ${corUser.corUserId})`);
+        console.log(`[corUsers] ✅ Usuario verificado en COR: ${searchName} (${corEmail})`);
       } else {
-        console.warn(`[corUsers] ⚠️ Usuario ${searchName} (COR ID: ${corUser.corUserId}) ya no se encuentra en COR.`);
+        console.warn(`[corUsers] ⚠️ Usuario ${searchName} (${corEmail}) ya no se encuentra en COR.`);
       }
     } catch (error) {
       console.error(`[corUsers] ❌ Error verificando usuario en COR:`, error);

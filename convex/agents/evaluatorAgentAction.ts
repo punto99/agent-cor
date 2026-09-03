@@ -19,7 +19,7 @@ import {
 import { prepareEvaluatorArgsForGemini } from "./evaluatorFilePreparation";
 
 // Usar modelo flash que es más eficiente en memoria
-const languageModel = google("gemini-3.6-flash");
+const languageModel = google("gemini-3.7-flash");
 
 // Tool para obtener la información de la task del thread
 const getTaskInfoTool = createTool({

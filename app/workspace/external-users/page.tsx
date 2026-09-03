@@ -12,6 +12,7 @@ import {
   AlertTriangle,
   ChevronDown,
   CheckCircle2,
+  Clock3,
   ExternalLink,
   LinkIcon,
   Mail,
@@ -58,10 +59,24 @@ type ExternalUser = {
     brandName?: string;
     trelloBoardId?: string;
   }>;
+  invitedAccess: Array<{
+    clientId: Id<"corClients">;
+    clientName: string;
+    corClientId: number;
+    allBrands: boolean;
+    brands: Array<{
+      _id: Id<"clientBrands">;
+      name: string;
+      corBrandId: number;
+      trelloBoardId?: string;
+      trelloEnabled: boolean;
+    }>;
+  }>;
   assignedBrandCount: number;
   fullClientCount: number;
   brandCount: number;
   missingBoardCount: number;
+  trelloRequired: boolean;
   status: ExternalStatus;
 };
 
@@ -797,17 +812,16 @@ export default function ExternalUsersAdminPage() {
                   </div>
 
                   {!selectedUser.userId && (
-                    <div className="mt-4 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-200">
+                    <div className="mt-4 rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-sm text-blue-800 dark:border-blue-900 dark:bg-blue-950/40 dark:text-blue-200">
                       Este correo ya puede ingresar con código. El cliente
-                      preasignado se habilitará automáticamente cuando la
-                      persona entre por primera vez.
+                      y las marcas que aparecen debajo se habilitarán
+                      automáticamente cuando la persona entre por primera vez.
                     </div>
                   )}
                 </section>
 
-                {selectedUser.userId && (
-                  <>
-                    <section className="rounded-lg border border-border bg-card">
+                {selectedUser.userId ? (
+                  <section className="rounded-lg border border-border bg-card">
                       <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border bg-muted/30 px-4 py-3 dark:bg-muted/20">
                         <div>
                           <div className="flex items-center gap-2">
@@ -1030,18 +1044,21 @@ export default function ExternalUsersAdminPage() {
                           </div>
                         </div>
                       )}
-                    </section>
+                  </section>
+                ) : (
+                  <InvitedAccessPanel user={selectedUser} />
+                )}
 
-                    <TrelloPanel
-                      user={selectedUser}
-                      trelloResult={trelloResult}
-                      searching={searchingTrello}
-                      verifying={verifyingTrello}
-                      onSearch={handleSearchTrello}
-                      onVerify={handleVerifyTrello}
-                      onSelectCandidate={handleSelectTrelloCandidate}
-                    />
-                  </>
+                {(selectedUser.userId || selectedUser.trelloRequired) && (
+                  <TrelloPanel
+                    user={selectedUser}
+                    trelloResult={trelloResult}
+                    searching={searchingTrello}
+                    verifying={verifyingTrello}
+                    onSearch={handleSearchTrello}
+                    onVerify={handleVerifyTrello}
+                    onSelectCandidate={handleSelectTrelloCandidate}
+                  />
                 )}
               </div>
             )}
@@ -1398,14 +1415,37 @@ function BoardAssociationDialog({
 
 function StatusIcon({ status }: { status: ExternalStatus }) {
   if (status === "ready") {
-    return <CheckCircle2 className="h-4 w-4 text-emerald-500" />;
+    return (
+      <CheckCircle2
+        className="h-4 w-4 text-emerald-500"
+        aria-label="Usuario listo"
+      />
+    );
   }
-  return <AlertTriangle className="h-4 w-4 text-amber-500" />;
+  if (status === "pending_registration") {
+    return (
+      <Clock3
+        className="h-4 w-4 text-blue-500"
+        aria-label="Invitado pendiente de primer ingreso"
+      />
+    );
+  }
+  return (
+    <AlertTriangle
+      className="h-4 w-4 text-amber-500"
+      aria-label="Usuario con configuración pendiente"
+    />
+  );
 }
 
 function StatusBadge({ status }: { status: ExternalStatus }) {
   const config = getStatusConfig(status);
-  const Icon = status === "ready" ? CheckCircle2 : AlertTriangle;
+  const Icon =
+    status === "ready"
+      ? CheckCircle2
+      : status === "pending_registration"
+        ? Clock3
+        : AlertTriangle;
   return (
     <div
       className={`inline-flex items-center gap-2 rounded-md border px-3 py-2 text-sm ${config.className}`}
@@ -1429,7 +1469,11 @@ function getStatusConfig(status: ExternalStatus) {
     };
   }
   if (status === "pending_registration") {
-    return { label: "Esperando primer ingreso", className: neutral };
+    return {
+      label: "Invitado · esperando primer ingreso",
+      className:
+        "border-blue-200 bg-blue-50 text-blue-800 dark:border-blue-900 dark:bg-blue-950/40 dark:text-blue-200",
+    };
   }
   if (status === "missing_categories") {
     return { label: "Faltan permisos", className: neutral };
@@ -1444,6 +1488,66 @@ function getStatusConfig(status: ExternalStatus) {
     return { label: "Revisar Trello", className: error };
   }
   return { label: "Verificar Trello", className: neutral };
+}
+
+function InvitedAccessPanel({ user }: { user: ExternalUser }) {
+  return (
+    <section className="rounded-lg border border-border bg-card">
+      <div className="border-b border-border bg-muted/30 px-4 py-3 dark:bg-muted/20">
+        <div className="flex items-center gap-2">
+          <ShieldCheck className="h-4 w-4 text-primary" />
+          <h3 className="text-sm font-semibold text-foreground">
+            Cliente y marcas de la invitación
+          </h3>
+        </div>
+        <p className="mt-1 text-xs text-muted-foreground">
+          Esta preasignación es informativa. El acceso se activará en el primer
+          ingreso.
+        </p>
+      </div>
+
+      {user.invitedAccess.length === 0 ? (
+        <div className="px-4 py-6 text-sm text-muted-foreground">
+          Esta invitación no tiene un cliente preasignado.
+        </div>
+      ) : (
+        <div className="divide-y divide-border">
+          {user.invitedAccess.map((access) => (
+            <div key={access.clientId} className="px-4 py-4">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <div className="text-sm font-medium text-foreground">
+                    {access.clientName}
+                  </div>
+                  <div className="text-xs text-muted-foreground">
+                    COR {access.corClientId}
+                  </div>
+                </div>
+                <span className="rounded-full border border-blue-200 bg-blue-50 px-2.5 py-1 text-xs font-medium text-blue-700 dark:border-blue-900 dark:bg-blue-950/40 dark:text-blue-200">
+                  {access.allBrands
+                    ? "Todas las marcas"
+                    : `${access.brands.length} marca${access.brands.length !== 1 ? "s" : ""}`}
+                </span>
+              </div>
+
+              {access.brands.length > 0 && (
+                <div className="mt-3 flex flex-wrap gap-2">
+                  {access.brands.map((brand) => (
+                    <span
+                      key={brand._id}
+                      className="rounded-md border border-border bg-background px-3 py-2 text-sm text-foreground"
+                    >
+                      {brand.name}
+                    </span>
+                  ))}
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </section>
+  );
 }
 
 function TrelloPanel({
@@ -1473,7 +1577,7 @@ function TrelloPanel({
           </div>
           <p className="mt-1 text-xs text-muted-foreground">
             Vincula a la persona con Trello y verifica que esté en los tableros
-            necesarios.
+            necesarios, incluso antes de su primer ingreso.
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -1484,7 +1588,11 @@ function TrelloPanel({
             onClick={onSearch}
             disabled={searching}
           >
-            {searching ? "Buscando..." : "Buscar en Trello"}
+            {searching
+              ? "Buscando..."
+              : user.userId
+                ? "Buscar en Trello"
+                : "Relacionar con Trello"}
           </Button>
           <Button
             type="button"
