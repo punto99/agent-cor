@@ -67,6 +67,7 @@ type ExternalUser = {
     brands: Array<{
       _id: Id<"clientBrands">;
       name: string;
+      corClientId: number;
       corBrandId: number;
       trelloBoardId?: string;
       trelloEnabled: boolean;

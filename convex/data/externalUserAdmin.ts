@@ -219,6 +219,7 @@ export const getDashboard = query({
             brands: invitedBrands.map((brand) => ({
               _id: brand._id,
               name: brand.name,
+              corClientId: brand.corClientId,
               corBrandId: brand.corBrandId,
               trelloBoardId: brand.trelloBoardId,
               trelloEnabled: isTrelloEnabledForCorClientId(brand.corClientId),
