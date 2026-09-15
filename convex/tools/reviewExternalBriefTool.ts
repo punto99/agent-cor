@@ -31,7 +31,10 @@ VOCABULARIO:
 
 CAMPOS OBLIGATORIOS PARA APROBAR:
 - Tipo de requerimiento: debe estar claro que tipo de proyecto es.
-- Categoria/marca validada: debe estar claro para que categoria autorizada se creara el requerimiento; si la categoria tiene marcas, debe estar elegida la marca.
+- Cliente validado: debe estar claro para que cliente autorizado se creara el requerimiento.
+- Categoria validada: obligatoria solo si requiresCategory es true.
+- Marca elegida: obligatoria solo si requiresSubBrand es true.
+- Si requiresCategory o requiresSubBrand es false, no rechaces el brief ni pidas ese dato por su ausencia. No uses el nombre del cliente como sustituto de categoria o marca.
 - Entregables: debe especificarse que se debe entregar concretamente.
 - Fecha de lanzamiento: debe estar indicada por el cliente. Puede ser exacta o aproximada.
 
@@ -49,7 +52,7 @@ INFORMACION OPCIONAL:
 - Objetivo, mensaje clave, KPIs, presupuesto, aprobadores, referencias, links, archivos y detalles adicionales.
 
 CRITERIOS:
-1. Si falta tipo de requerimiento, categoria/marca requerida, entregables o fecha de lanzamiento, aprobado DEBE ser false.
+1. Si falta cliente validado, tipo de requerimiento, categoria/marca requerida segun sus indicadores, entregables o fecha de lanzamiento, aprobado DEBE ser false.
 2. Si la fecha de lanzamiento es aproximada pero clara y futura, aprobado puede ser true.
 3. La informacion debe ser clara y especifica, no vaga.
 4. Si hay contradicciones, senalalas.
@@ -74,11 +77,25 @@ export const reviewExternalBriefTool = createTool({
     requestType: z
       .string()
       .describe("Tipo de requerimiento recolectado - OBLIGATORIO"),
+    clientName: z
+      .string()
+      .describe("Nombre del cliente autorizado tras validateExternalUserForBrand - OBLIGATORIO"),
+    requiresCategory: z
+      .boolean()
+      .describe("Si el cliente validado requiere categoria. Usa requiresCategory de la validacion; si devuelve clientBrandId, es true."),
+    requiresSubBrand: z
+      .boolean()
+      .describe("Indicador requiresSubBrand devuelto por validateExternalUserForBrand. No lo infieras del brief."),
     brand: z
       .string()
+      .optional()
       .describe(
-        "Categoria validada y, si aplica, marca elegida por el usuario externo - OBLIGATORIO",
+        "Nombre de la categoria validada. Obligatorio solo si requiresCategory es true; omitir si no hay categorias.",
       ),
+    subBrand: z
+      .string()
+      .optional()
+      .describe("Nombre de la marca elegida entre las subBrands de la categoria validada. Obligatorio solo si requiresSubBrand es true."),
     launchDate: z
       .string()
       .describe(
@@ -116,7 +133,11 @@ export const reviewExternalBriefTool = createTool({
     const briefSummary = [
       `Fecha actual para validar lanzamiento: ${currentDateContext}`,
       `Tipo de requerimiento: ${args.requestType}`,
-      `Categoria/marca: ${args.brand}`,
+      `Cliente validado: ${args.clientName}`,
+      `requiresCategory: ${args.requiresCategory}`,
+      `Categoria: ${args.brand || "No proporcionada"}`,
+      `requiresSubBrand: ${args.requiresSubBrand}`,
+      `Marca: ${args.subBrand || "No proporcionada"}`,
       `Fecha de lanzamiento: ${args.launchDate}`,
       `Entregables: ${args.deliverables}`,
       `Objetivo: ${args.objective || "No proporcionado"}`,
@@ -144,15 +165,21 @@ export const reviewExternalBriefTool = createTool({
       );
 
       const camposObligatoriosCompletos = !!(
-        args.requestType &&
-        args.brand &&
-        args.deliverables &&
+        args.clientName.trim() &&
+        args.requestType.trim() &&
+        (!args.requiresCategory || args.brand?.trim()) &&
+        (!args.requiresSubBrand || args.subBrand?.trim()) &&
+        args.deliverables.trim() &&
         args.launchDate.trim()
       );
       const sugerencias: string[] = [];
-      if (!args.requestType) sugerencias.push("Falta el tipo de requerimiento");
-      if (!args.brand) sugerencias.push("Falta la categoria o marca validada");
-      if (!args.deliverables)
+      if (!args.clientName.trim()) sugerencias.push("Falta el cliente validado");
+      if (!args.requestType.trim()) sugerencias.push("Falta el tipo de requerimiento");
+      if (args.requiresCategory && !args.brand?.trim())
+        sugerencias.push("Falta la categoria validada");
+      if (args.requiresSubBrand && !args.subBrand?.trim())
+        sugerencias.push("Falta la marca elegida");
+      if (!args.deliverables.trim())
         sugerencias.push("Faltan los entregables concretos");
       if (!args.launchDate.trim())
         sugerencias.push("Falta la fecha de lanzamiento exacta o aproximada");
