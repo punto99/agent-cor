@@ -1,6 +1,7 @@
 import { createTool } from "@convex-dev/agent";
 import { z } from "zod";
 import { internal } from "../_generated/api";
+import { usesDirectExternalComments } from "../lib/directExternalComments";
 
 const FIELD_LABELS: Record<string, string> = {
   comment: "comentario",
@@ -29,6 +30,9 @@ export const editExternalTaskTool = createTool({
       .string()
       .optional()
       .describe("Comentario para agregar al requerimiento con la solicitud del usuario."),
+    includePendingFiles: z.boolean().optional().describe(
+      "Solo para requerimientos sin categoría ni Trello: true únicamente cuando el usuario pide o confirma agregar archivos subidos en mensajes anteriores que aún no se incluyeron en un comentario. Omitir para comentarios de solo texto. Los archivos del mensaje actual se incluyen automáticamente. No tiene efecto en Trello.",
+    ),
   }),
   handler: async (ctx, args): Promise<string> => {
     const threadId = ctx.threadId;
@@ -36,12 +40,24 @@ export const editExternalTaskTool = createTool({
       return "No pude identificar la conversación para aplicar el cambio.";
     }
 
+    const context = await ctx.runQuery(
+      internal.data.tasks.getExternalEditableTaskContext,
+      { threadId, taskId: args.taskId },
+    );
+    const direct = context?.ok && usesDirectExternalComments(context.task);
+    const requestMessageId = (ctx as typeof ctx & { promptMessageId?: string }).promptMessageId ?? ctx.messageId;
+    if (direct && !requestMessageId) {
+      return "No pude identificar el mensaje de este pedido. Intenta nuevamente.";
+    }
     const result = await ctx.runAction(
-      (internal as any).data.trello.editExternalTaskFromAgent,
+      direct
+        ? (internal as any).data.externalComments.submit
+        : (internal as any).data.trello.editExternalTaskFromAgent,
       {
         threadId,
         taskId: args.taskId,
         comment: args.comment,
+        ...(direct ? { requestMessageId, includePendingFiles: args.includePendingFiles } : {}),
       },
     );
 

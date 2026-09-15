@@ -110,6 +110,8 @@ export default defineSchema({
     taskId: v.optional(v.id("tasks")),
     uploadedAt: v.number(),
     attachedAt: v.optional(v.number()),
+    commentOnly: v.optional(v.boolean()),
+    commentMessageId: v.optional(v.id("taskMessages")),
   })
     .index("by_file", ["fileId"])
     .index("by_thread_and_file", ["threadId", "fileId"])
@@ -325,6 +327,12 @@ export default defineSchema({
       v.literal("internal"),
     ),
     message: v.string(),
+    // Idempotency and file ownership for the external route without Trello.
+    directExternalComment: v.optional(v.boolean()),
+    directDeliveryAttempt: v.optional(v.number()),
+    requestThreadId: v.optional(v.string()),
+    requestMessageId: v.optional(v.string()),
+    commentFileIds: v.optional(v.array(v.id("threadUploadedFiles"))),
     trelloCardId: v.optional(v.string()),
     trelloCommentId: v.optional(v.string()),
     trelloSyncStatus: v.optional(v.string()),
@@ -340,6 +348,7 @@ export default defineSchema({
     .index("by_task", ["taskId"])
     .index("by_user", ["userId"])
     .index("by_trello_comment", ["trelloCommentId"])
+    .index("by_request", ["requestThreadId", "requestMessageId"])
     .index("by_cor_status", ["corMessageSyncStatus"]),
 
   corInboundSyncState: defineTable({

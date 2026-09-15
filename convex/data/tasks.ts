@@ -32,6 +32,7 @@ import {
 import { applyProjectDeliverablesDelta } from "../lib/deliverableAnalytics";
 import { formatTrelloCommentForCOR } from "../lib/trelloCommentFormat";
 import { isTrelloEnabledForCorClientId } from "../lib/trelloPolicy";
+import { usesDirectExternalComments } from "../lib/directExternalComments";
 import type { ActionCtx, MutationCtx } from "../_generated/server";
 import type { Id } from "../_generated/dataModel";
 
@@ -1522,6 +1523,10 @@ export const registerThreadUploadedFiles = internalMutation({
       );
     }
 
+    // Post-creation files in the no-Trello route are staged for a comment.
+    // Initial brief attachments and all Trello uploads retain their behavior.
+    const commentOnly = usesDirectExternalComments(task);
+
     const uniqueFiles = new Map<string, ChatUploadedFileInput>();
     for (const file of args.files) uniqueFiles.set(file.fileId, file);
 
@@ -1602,7 +1607,7 @@ export const registerThreadUploadedFiles = internalMutation({
             `Integridad inválida: el estado del archivo ${file.fileId} no coincide con su task.`,
           );
         }
-        if (task && existing.status === "pending") {
+        if (task && existing.status === "pending" && !existing.commentOnly) {
           await insertExclusiveTaskAttachment(ctx, {
             taskId: task._id,
             taskDraftId: draft._id,
@@ -1635,10 +1640,11 @@ export const registerThreadUploadedFiles = internalMutation({
         taskId: task?._id,
         uploadedAt: now,
         attachedAt: task ? now : undefined,
+        ...(commentOnly ? { commentOnly: true } : {}),
       });
       registered += 1;
 
-      if (task) {
+      if (task && !commentOnly) {
         await insertExclusiveTaskAttachment(ctx, {
           taskId: task._id,
           taskDraftId: draft._id,
@@ -5554,6 +5560,19 @@ export const publishTaskToExternalAction = internalAction({
           "[PublishTask] ⚠️ Error publicando comentarios pendientes (task ya publicada):",
           messageError,
         );
+      }
+
+      // Independent queue for external tasks created without taxonomy/Trello.
+      // The Trello comment sender above is unchanged.
+      if (usesDirectExternalComments(task)) {
+        try {
+          await ctx.runMutation(
+            (internal as any).data.externalComments.scheduleForTask,
+            { taskId: args.taskId },
+          );
+        } catch (error) {
+          console.error("[PublishTask] Comentarios sin Trello pendientes de envío:", error);
+        }
       }
 
       // 7. Subir archivos pendientes a COR (no-fatal: la task ya está publicada)
