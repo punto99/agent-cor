@@ -15,3 +15,4 @@ export { validateExternalUserForBrandTool } from "./validateExternalUserForBrand
 export { createExternalTaskTool } from "./createExternalTaskTool";
 export { editExternalTaskTool } from "./editExternalTaskTool";
 export { getClientKnowledgeTool } from "./getClientKnowledgeTool";
+export { getExternalTaskStatusTool } from "./getExternalTaskStatusTool";

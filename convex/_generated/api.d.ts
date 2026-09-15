@@ -32,6 +32,7 @@ import type * as data_corUsers from "../data/corUsers.js";
 import type * as data_corUsersActions from "../data/corUsersActions.js";
 import type * as data_evaluation from "../data/evaluation.js";
 import type * as data_externalComments from "../data/externalComments.js";
+import type * as data_externalTaskStatus from "../data/externalTaskStatus.js";
 import type * as data_externalUserAdmin from "../data/externalUserAdmin.js";
 import type * as data_externalUserAdminActions from "../data/externalUserAdminActions.js";
 import type * as data_files from "../data/files.js";
@@ -85,6 +86,7 @@ import type * as tools_editExternalTaskTool from "../tools/editExternalTaskTool.
 import type * as tools_editProjectTool from "../tools/editProjectTool.js";
 import type * as tools_editTaskTool from "../tools/editTaskTool.js";
 import type * as tools_getClientKnowledgeTool from "../tools/getClientKnowledgeTool.js";
+import type * as tools_getExternalTaskStatusTool from "../tools/getExternalTaskStatusTool.js";
 import type * as tools_getProjectTool from "../tools/getProjectTool.js";
 import type * as tools_getTaskFromCORTool from "../tools/getTaskFromCORTool.js";
 import type * as tools_getTaskTool from "../tools/getTaskTool.js";
@@ -129,6 +131,7 @@ declare const fullApi: ApiFromModules<{
   "data/corUsersActions": typeof data_corUsersActions;
   "data/evaluation": typeof data_evaluation;
   "data/externalComments": typeof data_externalComments;
+  "data/externalTaskStatus": typeof data_externalTaskStatus;
   "data/externalUserAdmin": typeof data_externalUserAdmin;
   "data/externalUserAdminActions": typeof data_externalUserAdminActions;
   "data/files": typeof data_files;
@@ -182,6 +185,7 @@ declare const fullApi: ApiFromModules<{
   "tools/editProjectTool": typeof tools_editProjectTool;
   "tools/editTaskTool": typeof tools_editTaskTool;
   "tools/getClientKnowledgeTool": typeof tools_getClientKnowledgeTool;
+  "tools/getExternalTaskStatusTool": typeof tools_getExternalTaskStatusTool;
   "tools/getProjectTool": typeof tools_getProjectTool;
   "tools/getTaskFromCORTool": typeof tools_getTaskFromCORTool;
   "tools/getTaskTool": typeof tools_getTaskTool;
