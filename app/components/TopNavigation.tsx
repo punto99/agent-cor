@@ -42,6 +42,12 @@ export function TopNavigation() {
       isActive: pathname === "/workspace/control-panel",
     },
     {
+      label: "Mis tareas",
+      href: "/workspace/requests",
+      icon: LayoutDashboard,
+      isActive: pathname.startsWith("/workspace/requests"),
+    },
+    {
       label: "Analytics",
       href: "/workspace/analytics",
       icon: BarChart3,
@@ -60,6 +66,7 @@ export function TopNavigation() {
       isActive: pathname === "/workspace/external-users",
     },
   ].filter((tab) => {
+    if (tab.href === "/workspace/requests") return isExternalUser && accessProfile?.canAccessExternalRequests === true;
     if (isExternalUser && tab.href === "/workspace/control-panel") return false;
     if (tab.href === "/workspace/analytics") {
       return analyticsAccess?.canAccess === true;
@@ -83,7 +90,7 @@ export function TopNavigation() {
               key={tab.href}
               href={tab.href}
               className={`
-                ${tab.href === "/workspace" ? "flex" : "hidden md:flex"}
+                ${tab.href === "/workspace" || tab.href === "/workspace/requests" ? "flex" : "hidden md:flex"}
                 relative items-center gap-2 px-4 py-3 text-sm font-medium transition-colors
                 ${
                   tab.isActive

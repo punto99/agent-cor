@@ -1,6 +1,7 @@
 import { v } from "convex/values";
 import { query } from "../_generated/server";
 import { getAuthUserId } from "@convex-dev/auth/server";
+import { createBoardLabelReader } from "../lib/boardLabel";
 
 async function isExternalUser(ctx: any, userId: any) {
   const approvedExternalUser = await ctx.db
@@ -167,6 +168,7 @@ export const listMyClientProjects = query({
         tasksById.set(String(task._id), task);
     }
 
+    const readBoardLabel = createBoardLabelReader(ctx);
     const tasksByClient = new Map<string, any[]>();
     const projectsById = new Map<string, any>();
     const creatorInfoById = new Map<
@@ -212,6 +214,7 @@ export const listMyClientProjects = query({
       const taskWithCreator = {
         ...task,
         ...(await getCreatorInfo(task.createdBy)),
+        boardLabel: await readBoardLabel(task.subBrandId),
       };
 
       if (!tasksByClient.has(clientId)) tasksByClient.set(clientId, []);

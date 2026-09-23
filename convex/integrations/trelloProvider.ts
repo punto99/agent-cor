@@ -370,6 +370,14 @@ export const trelloProvider = {
     );
   },
 
+  // Read-only metadata for the external task panel; downloads remain authenticated.
+  async listCardAttachments(cardId: string): Promise<Array<{
+    id: string; name: string; url: string; mimeType?: string;
+    bytes?: number; date?: string; isUpload?: boolean;
+  }>> {
+    return await trelloFetch(`/cards/${encodeURIComponent(cardId)}/attachments`);
+  },
+
   async downloadAttachment(args: {
     cardId: string;
     attachmentId: string;

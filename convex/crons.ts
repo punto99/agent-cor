@@ -19,4 +19,8 @@ crons.cron(
   {}
 );
 
+crons.interval("sync manual task panel entries", { minutes: 1 }, internal.data.taskPanelSync.sweep, {});
+
+crons.interval("send new external task emails", { minutes: 1 }, internal.data.taskCreationNotifications.sweep, {});
+
 export default crons;

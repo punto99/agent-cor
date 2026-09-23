@@ -1,0 +1,72 @@
+/* Shared board palette. Prefixed tokens do not change the rest of the app. */
+:root {
+  --trello-bg-page: #f7f8f9;
+  --trello-bg-list: #f1f2f4;
+  --trello-bg-card: #fff;
+  --trello-text-primary: #172b4d;
+  --trello-text-secondary: #44546f;
+  --trello-text-subtle: #626f86;
+  --trello-blue: #0c66e4;
+  --trello-blue-hover: #0055cc;
+  --trello-blue-light: #e9f2ff;
+  --trello-border: #091e4224;
+  --trello-success: #22a06b;
+  --trello-success-bg: #dcfff1;
+  --trello-warning: #cf9f02;
+  --trello-warning-bg: #fff7d6;
+  --trello-danger: #ca3521;
+  --trello-danger-bg: #ffeceb;
+}
+.dark {
+  --trello-bg-page: #1d2125;
+  --trello-bg-list: #161a1d;
+  --trello-bg-card: #22272b;
+  --trello-text-primary: #b6c2cf;
+  --trello-text-secondary: #9fadbc;
+  --trello-text-subtle: #8c9bab;
+  --trello-blue: #579dff;
+  --trello-blue-hover: #85b8ff;
+  --trello-blue-light: #1c2b41;
+  --trello-border: #a6c5e229;
+  --trello-success: #4bce97;
+  --trello-success-bg: #164b35;
+  --trello-warning: #f5cd47;
+  --trello-warning-bg: #533f04;
+  --trello-danger: #f87168;
+  --trello-danger-bg: #5d1f1a;
+}
+[data-board-theme] {
+  --background: 210 14% 97%;
+  --foreground: 218 54% 20%;
+  --card: 0 0% 100%;
+  --card-foreground: 218 54% 20%;
+  --popover: 0 0% 100%;
+  --popover-foreground: 218 54% 20%;
+  --primary: 215 90% 47%;
+  --primary-foreground: 0 0% 100%;
+  --muted: 220 12% 95%;
+  --muted-foreground: 218 16% 45%;
+  --accent: 215 100% 96%;
+  --accent-foreground: 215 90% 47%;
+  --border: 218 76% 15% / 14%;
+  --input: 218 76% 15% / 24%;
+  --ring: 215 90% 47%;
+  color: var(--trello-text-primary);
+}
+.dark [data-board-theme] {
+  --background: 210 12% 13%;
+  --foreground: 211 21% 76%;
+  --card: 207 12% 15%;
+  --card-foreground: 211 21% 76%;
+  --popover: 207 12% 15%;
+  --popover-foreground: 211 21% 76%;
+  --primary: 215 100% 67%;
+  --primary-foreground: 218 54% 20%;
+  --muted: 210 14% 10%;
+  --muted-foreground: 211 19% 68%;
+  --accent: 216 40% 18%;
+  --accent-foreground: 215 100% 67%;
+  --border: 209 51% 77% / 16%;
+  --input: 209 51% 77% / 24%;
+  --ring: 215 100% 67%;
+}

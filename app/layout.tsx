@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import "./globals.css";
+import "./components/board/boardTheme.css";
 import { ConvexClientProvider } from "./ConvexClientProvider";
 import UserContextProvider from "./UserContextProvider";
 import { ConvexAuthNextjsServerProvider } from "@convex-dev/auth/nextjs/server";

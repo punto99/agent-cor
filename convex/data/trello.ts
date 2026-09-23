@@ -1294,6 +1294,7 @@ export const editExternalTaskFromAgent: any = internalAction({
     description: v.optional(v.string()),
     deadline: v.optional(v.string()),
     comment: v.optional(v.string()),
+    userQuote: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const description =
@@ -1374,9 +1375,11 @@ export const editExternalTaskFromAgent: any = internalAction({
       };
     }
 
+    const userQuote = args.userQuote?.trim().slice(0, 2000);
+    const remoteComment = [finalComment, userQuote ? `> ${userQuote}` : ""].filter(Boolean).join("\n\n");
     const trelloComment = await trelloProvider.addCommentToCard({
       cardId: trelloCardId,
-      text: finalComment,
+      text: remoteComment,
     });
 
     const corTaskId = task.corTaskId ? Number(task.corTaskId) : undefined;
@@ -1390,6 +1393,7 @@ export const editExternalTaskFromAgent: any = internalAction({
         userId: context.userId,
         source: "external_agent",
         message: finalComment,
+        userQuote,
         trelloCardId,
         trelloCommentId: trelloComment.id,
         trelloSyncStatus: "synced",
@@ -1404,8 +1408,8 @@ export const editExternalTaskFromAgent: any = internalAction({
         taskId: corTaskId!,
         message:
           fileLinks.length > 0
-            ? formatTrelloCommentForCOR(finalComment)
-            : finalComment,
+            ? formatTrelloCommentForCOR(remoteComment)
+            : remoteComment,
       });
 
       await ctx.runMutation(
@@ -1990,7 +1994,7 @@ export const syncClientAttachmentsFromCORToTrello: any = internalAction({
       { taskId: args.taskId },
     );
     const clientAttachments = attachments.filter((attachment: any) =>
-      isClientFacingAttachmentFilename(attachment.filename),
+      !attachment.panelEntryId && isClientFacingAttachmentFilename(attachment.filename),
     );
     const pendingAttachments = clientAttachments.filter(
       (attachment: any) => !attachment.trelloAttachmentId,

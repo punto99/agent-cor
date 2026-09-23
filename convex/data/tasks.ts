@@ -1,3 +1,6 @@
+import { canViewExternalRequest, hasExternalRequestsAccess, isRequestsClientTask } from "../lib/externalRequestsAccess";
+import { notifyExternalTaskCreated } from "../lib/taskCreationNotifications";
+import { notifyTaskComment } from "../lib/commentNotifications";
 // convex/data/tasks.ts
 // Funciones Convex para manejar tasks/requerimientos
 // (mutations, queries, internalActions, publish flow, sync flow)
@@ -33,8 +36,9 @@ import { applyProjectDeliverablesDelta } from "../lib/deliverableAnalytics";
 import { formatTrelloCommentForCOR } from "../lib/trelloCommentFormat";
 import { isTrelloEnabledForCorClientId } from "../lib/trelloPolicy";
 import { usesDirectExternalComments } from "../lib/directExternalComments";
+import { createBoardLabelReader } from "../lib/boardLabel";
 import type { ActionCtx, MutationCtx } from "../_generated/server";
-import type { Id } from "../_generated/dataModel";
+import type { Doc, Id } from "../_generated/dataModel";
 
 const STRATEGIC_PRIORITY_LABEL_IDS: Record<StrategicPriority, number> = {
   I_NU: 370185,
@@ -133,10 +137,11 @@ async function getOrCreateTaskDraft(
   return (await ctx.db.get(draftId))!;
 }
 
-async function insertExclusiveTaskAttachment(
+export async function insertExclusiveTaskAttachment(
   ctx: MutationCtx,
   args: {
     taskId: Id<"tasks">;
+    panelEntryId?: Id<"taskPanelEntries">;
     fileId: string;
     storageId: string;
     filename: string;
@@ -223,7 +228,7 @@ async function insertExclusiveTaskAttachment(
       .query("taskAttachments")
       .withIndex("by_file", (q) => q.eq("fileId", args.fileId))
       .collect()
-  ).filter((attachment) => attachment.taskId === args.taskId);
+  ).filter((attachment) => attachment.taskId === args.taskId && attachment.panelEntryId === args.panelEntryId);
 
   // Compatibilidad: un attachment antiguo puede existir sin referencia a la
   // subida. Solo se adopta si hay exactamente uno y todavía no tiene origen.
@@ -263,6 +268,7 @@ async function insertExclusiveTaskAttachment(
   }
 
   const attachmentId = await ctx.db.insert("taskAttachments", {
+    panelEntryId: args.panelEntryId,
     taskId: args.taskId,
     taskDraftId: ownership?.draftId ?? args.taskDraftId,
     threadUploadedFileId: ownership?._id,
@@ -1203,6 +1209,7 @@ export const createTaskMessageInternal = internalMutation({
       v.literal("internal"),
     ),
     message: v.string(),
+    userQuote: v.optional(v.string()),
     trelloCardId: v.optional(v.string()),
     trelloCommentId: v.optional(v.string()),
     trelloSyncStatus: v.optional(v.string()),
@@ -1211,7 +1218,7 @@ export const createTaskMessageInternal = internalMutation({
   },
   handler: async (ctx, args) => {
     const now = Date.now();
-    return await ctx.db.insert("taskMessages", {
+    const messageId = await ctx.db.insert("taskMessages", {
       ...args,
       trelloSyncedAt:
         args.trelloSyncStatus === "synced" ? now : undefined,
@@ -1220,6 +1227,8 @@ export const createTaskMessageInternal = internalMutation({
       createdAt: now,
       updatedAt: now,
     });
+    await notifyTaskComment(ctx, messageId);
+    return messageId;
   },
 });
 
@@ -1301,6 +1310,23 @@ export const listPendingTaskMessagesForCORInternal = internalQuery({
   },
 });
 
+// Read-only comments for the internal task dialog, using existing task access.
+export const listInternalTaskComments = query({
+  args: { taskId: v.id("tasks") },
+  handler: async (ctx, { taskId }) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) throw new Error("No autenticado");
+    if (await isExternalUser(ctx, userId)) return [];
+    const task = await ctx.db.get(taskId);
+    if (!task || !(await isRequestsClientTask(ctx, task)) || task.convexStatus === "deleted" || !(await hasTaskAccess(ctx, task, userId))) return [];
+    const messages = await ctx.db.query("taskMessages").withIndex("by_task", q => q.eq("taskId", taskId)).collect();
+    return await Promise.all(messages.sort((a, b) => b.createdAt - a.createdAt).map(async message => ({
+      id: message._id, text: message.message, createdAt: message.createdAt,
+      author: message.userId === userId ? "Vos" : message.userId ? (await ctx.db.get(message.userId))?.name ?? "Comentario" : "Comentario",
+    })));
+  },
+});
+
 export const listPendingExternalTaskMessages = query({
   args: {
     taskId: v.id("tasks"),
@@ -1378,6 +1404,10 @@ export const updateTaskFields = mutation({
 
     const task = await ctx.db.get(args.taskId);
     if (!task) throw new Error("Task no encontrada");
+
+    if (task.corTaskId || task.corSyncStatus === "synced") {
+      throw new Error("Las tareas publicadas en COR son de solo lectura.");
+    }
 
     // ─── Bloquear edición durante sincronización ───
     if (task.corSyncStatus === "syncing" || task.corSyncStatus === "retrying") {
@@ -1917,7 +1947,7 @@ export const getPendingAttachments = internalQuery({
       .query("taskAttachments")
       .withIndex("by_task", (q) => q.eq("taskId", args.taskId))
       .collect();
-    return attachments.filter((a) => !a.corAttachmentId);
+    return attachments.filter((a) => !a.corAttachmentId && !a.panelEntryId);
   },
 });
 
@@ -1954,10 +1984,11 @@ export const getTaskAttachmentsForTrello = internalQuery({
     taskId: v.id("tasks"),
   },
   handler: async (ctx, args) => {
-    return await ctx.db
+    const attachments = await ctx.db
       .query("taskAttachments")
       .withIndex("by_task", (q) => q.eq("taskId", args.taskId))
       .collect();
+    return attachments.filter((attachment) => !attachment.panelEntryId);
   },
 });
 
@@ -2649,6 +2680,7 @@ export const createProjectAndTask = internalMutation({
       corClientId: args.taskCorClientId,
       corClientName: args.taskCorClientName,
     });
+    await notifyExternalTaskCreated(ctx, taskId);
     console.log(`[CreateProjectAndTask] ✅ Task creada: ${taskId}`);
 
     const attachedAt = Date.now();
@@ -3184,6 +3216,24 @@ export const getTask = query({
  * Devuelve la selección efectiva que se mostrará en el panel.
  * Una selección propia de la task siempre prevalece sobre los defaults del cliente.
  */
+export const getBoardDialogDetails = query({
+  args: { taskId: v.id("tasks") },
+  handler: async (ctx, { taskId }) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return null;
+    const task = await ctx.db.get(taskId);
+    if (!task || task.convexStatus === "deleted") return null;
+    const external = await isExternalUser(ctx, userId);
+    if (external ? !(await canViewExternalRequest(ctx, userId, task)) : !(await hasTaskAccess(ctx, task, userId))) return null;
+    const userIds: Id<"users">[] = await getTaskCollaboratorUserIdsForDisplay(ctx, task);
+    const members = await Promise.all(userIds.map(async id => {
+      const user = await ctx.db.get(id);
+      return { id: String(id), name: user?.name?.trim() || "Miembro" };
+    }));
+    return { label: await createBoardLabelReader(ctx)(task.subBrandId), members };
+  },
+});
+
 export const getTaskCorCollaborators = query({
   args: {
     taskId: v.id("tasks"),
@@ -3519,6 +3569,55 @@ export const listByThread = query({
       if (await hasTaskAccess(ctx, task, userId)) visibleTasks.push(task);
     }
     return visibleTasks;
+  },
+});
+
+// Read-only external panel. Keep internal visibility and creation paths untouched.
+export const listMyExternalRequests = query({
+  args: {},
+  handler: async (ctx) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId || !(await hasExternalRequestsAccess(ctx, userId))) return [];
+
+    const creator = await ctx.db.get(userId);
+    const readBoardLabel = createBoardLabelReader(ctx);
+
+    const tasks = await ctx.db
+      .query("tasks")
+      .withIndex("by_createdBy", (q) => q.eq("createdBy", String(userId)))
+      .order("desc")
+      .collect();
+
+    const authorized = await Promise.all(tasks.map(async task => await canViewExternalRequest(ctx, userId, task) ? task : null));
+    return await Promise.all(
+      authorized.filter((task): task is Doc<"tasks"> => task !== null)
+        .filter((task) => task.source === "external" && task.convexStatus !== "deleted")
+        .map(async (task) => {
+          const thread = await ctx.db
+            .query("chatThreads")
+            .withIndex("by_thread", (q) => q.eq("threadId", task.threadId))
+            .first();
+          // Explicit projection: never expose evaluations or internal sync metadata.
+          return {
+            _id: task._id,
+            createdAt: task._creationTime,
+            createdByName: creator?.name,
+            deliverablesCount: task.deliverablesCount,
+            boardLabel: await readBoardLabel(task.subBrandId),
+            title: task.title,
+            description: task.description,
+            status: task.status,
+            deadline: task.deadline,
+            clientKey: String(task.clientId ?? task.corClientId ?? task.corClientName ?? "unknown"),
+            clientName: task.corClientName ?? "Cliente sin nombre",
+            brandKey: String(task.clientBrandId ?? task.brandId ?? task.brandName ?? "unknown"),
+            brandName: task.brandName,
+            subBrandKey: String(task.subBrandId ?? task.productId ?? task.subBrandName ?? "unknown"),
+            subBrandName: task.subBrandName,
+            threadId: thread?.userId === userId ? task.threadId : null,
+          };
+        }),
+    );
   },
 });
 
@@ -3960,7 +4059,7 @@ async function hasFullClientAccess(ctx: any, clientId: any, userId: any) {
   );
 }
 
-async function hasTaskAccess(ctx: any, task: any, userId: any) {
+export async function hasTaskAccess(ctx: any, task: any, userId: any) {
   if (task.clientBrandId) {
     const brand = await ctx.db.get(task.clientBrandId);
     if (!brand?.clientId) return false;
@@ -4892,12 +4991,13 @@ async function publishPendingTaskMessagesToCOR(
 
   for (const message of pendingMessages) {
     try {
+      const messageWithQuote = [message.message, message.userQuote ? `> ${message.userQuote}` : ""].filter(Boolean).join("\n\n");
       const corMessage =
         message.source === "trello" ||
         (message.source === "external_agent" &&
-          MARKDOWN_LINK_PATTERN.test(message.message))
-          ? formatTrelloCommentForCOR(message.message)
-          : message.message;
+          MARKDOWN_LINK_PATTERN.test(messageWithQuote))
+          ? formatTrelloCommentForCOR(messageWithQuote)
+          : messageWithQuote;
 
       const result = await provider.postTaskMessage({
         taskId: corTaskId,

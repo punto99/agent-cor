@@ -1,0 +1,67 @@
+.fields {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 150px), 1fr));
+  align-items: start;
+  gap: 1rem 1.25rem;
+  padding: .25rem 0;
+}
+
+/* Keep the existing editors, with a lighter presentation only in this dialog. */
+.fields > div {
+  min-width: 0;
+  padding: 0;
+  border-width: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.fields > div > div > span:first-child { display: none; }
+.fields p:global(.uppercase) {
+  text-transform: none;
+  letter-spacing: normal;
+  font-size: .6875rem;
+  font-weight: 600;
+  line-height: 1rem;
+  margin-bottom: .375rem;
+}
+.fields p:global(.truncate) { white-space: normal; overflow-wrap: anywhere; }
+.fields button[title^="Editar"] {
+  opacity: 1;
+  padding: .25rem;
+  margin-top: 1.25rem;
+  border-radius: .375rem;
+  background: var(--muted);
+}
+.fields > div:global(.border-red-400) {
+  padding: .375rem;
+  border-width: 1px;
+  border-radius: .375rem;
+}
+
+/* Published task summary; editable field buttons keep their existing layout. */
+.fields.readOnly {
+  align-items: stretch;
+  grid-auto-rows: 1fr;
+  gap: .625rem;
+  padding: 0;
+}
+.fields.readOnly > div {
+  min-height: 4.25rem;
+  padding: .625rem .75rem;
+  border: 1px solid hsl(var(--border));
+  border-radius: .75rem;
+  background: hsl(var(--card));
+}
+.fields.readOnly p:global(.uppercase) {
+  color: hsl(var(--muted-foreground));
+  font-weight: 500;
+  margin-bottom: .375rem;
+}
+.readOnly [data-field-value] {
+  height: auto;
+  min-height: 1.5rem;
+  font-weight: 500;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}

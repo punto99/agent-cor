@@ -1,0 +1,21 @@
+.page { background: var(--trello-bg-page, #f7f8f9); color: var(--trello-text-primary, #172b4d); }
+.grid { display: grid; height: 100%; grid-auto-columns: 280px; grid-auto-flow: column; align-items: start; gap: 12px; }
+.column { display: flex; flex-direction: column; min-height: 0; max-height: 100%; border-radius: 12px; border: 1px solid var(--trello-border, #091e4224); background: var(--trello-bg-list, #f1f2f4); box-shadow: 0 1px 1px var(--trello-border, #091e4224); }
+.header { flex-shrink: 0; padding: 12px 12px 6px; }
+.heading { display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 600; }
+.count { margin-left: auto; padding: 1px 6px; border-radius: 4px; color: var(--trello-text-subtle, #626f86); font-size: 12px; font-weight: 400; }
+.subtitle { margin-top: 4px; color: var(--trello-text-subtle, #626f86); font-size: 11px; }
+.cards { display: flex; flex-direction: column; min-height: 0; gap: 8px; padding: 8px; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; scrollbar-color: var(--trello-border, #091e4224) transparent; }
+.dot { width: 8px; height: 8px; flex-shrink: 0; border-radius: 50%; background: var(--trello-text-subtle, #626f86); }
+.dot[data-stage=nueva] { background: #579dff; }
+.dot[data-stage=en_proceso] { background: #f5cd47; }
+.dot[data-stage=en_revision] { background: #9f8fef; }
+.dot[data-stage=en_diseno] { background: #fea362; }
+.dot[data-stage=finalizada] { background: #4bce97; }
+.controls { flex-shrink: 0; }
+.controls select, .controls label:has(input) { border-radius: 6px; }
+.controls select:hover, .controls label:has(input):hover { border-color: var(--trello-text-subtle, #626f86); }
+.controls button[aria-pressed=true] { background: var(--trello-blue-light, #e9f2ff); color: var(--trello-blue, #0c66e4); }
+.controls button:focus-visible, .controls select:focus-visible { outline: 2px solid var(--trello-blue, #0c66e4); outline-offset: 2px; }
+.primary { background: var(--trello-blue, #0c66e4); }
+.primary:hover:not(:disabled) { background: var(--trello-blue-hover, #0055cc); }

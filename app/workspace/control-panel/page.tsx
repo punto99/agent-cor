@@ -1,9 +1,12 @@
 "use client";
 
-import { useMemo, useState, useEffect } from "react";
+import boardStyles from "../../components/board/BoardLayout.module.css";
+import { Suspense, useMemo, useState, useEffect } from "react";
 import { useMutation, usePaginatedQuery, useQuery } from "convex/react";
-import { useRouter } from "next/navigation";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { api } from "@/convex/_generated/api";
+import { InternalTasksBoard } from "../../components/control-panel/InternalTasksBoard";
+import { isTaskInCOR } from "../../components/control-panel/internalBoard";
 import { ControlPanelHeader } from "../../components/control-panel/ControlPanelHeader";
 import { ControlPanelSidebar } from "../../components/control-panel/ControlPanelSidebar";
 import { ControlPanelTaskSections } from "../../components/control-panel/ControlPanelTaskSections";
@@ -24,6 +27,13 @@ const PANEL_PROJECT_PAGE_SIZE = 10;
 const PANEL_TASK_PAGE_SIZE = 10;
 
 export default function ControlPanelPage() {
+  return <Suspense fallback={<LoadingScreen />}><ControlPanelContent /></Suspense>;
+}
+
+function ControlPanelContent() {
+  const params = useSearchParams();
+  const pathname = usePathname();
+  const taskId = params.get("taskId");
   const router = useRouter();
   const [statusFilter, setStatusFilter] = useState<string | undefined>(
     undefined,
@@ -34,7 +44,24 @@ export default function ControlPanelPage() {
   const [viewMode, setViewMode] = useState<ControlPanelView>("cards");
   const [publicationTab, setPublicationTab] =
     useState<ControlPanelPublicationTab>("all");
-  const [selectedTask, setSelectedTask] = useState<FullTask | null>(null);
+  const linkedTaskClients = useQuery(
+    api.data.controlPanel.listMyClientProjects,
+    taskId ? {} : "skip",
+  ) as ControlPanelClient[] | undefined;
+  // Resolve the URL against all authorized tasks, independently of board filters.
+  const selectedTask = linkedTaskClients?.flatMap(entry => entry.projects)
+    .flatMap(group => group.tasks).find(task => String(task._id) === taskId);
+  const openTask = (task: FullTask) => {
+    const next = new URLSearchParams(params.toString());
+    next.set("taskId", String(task._id));
+    router.push(`${pathname}?${next}`, { scroll: false });
+  };
+  const closeTask = () => {
+    const next = new URLSearchParams(params.toString());
+    next.delete("taskId");
+    next.delete("tab");
+    router.replace(`${pathname}${next.size ? `?${next}` : ""}`, { scroll: false });
+  };
   const [expandedProjectIds, setExpandedProjectIds] = useState<Set<string>>(
     () => new Set(),
   );
@@ -69,7 +96,8 @@ export default function ControlPanelPage() {
 
   useEffect(() => {
     if (preferences === undefined) return;
-    setViewMode(preferences?.controlPanelView ?? "cards");
+    // Keep legacy list preferences stored, but show cards while that option is hidden.
+    setViewMode(preferences?.controlPanelView === "board" ? "board" : "cards");
   }, [preferences?.controlPanelView, preferences]);
 
   const handlePublishResult = (result: {
@@ -140,7 +168,7 @@ export default function ControlPanelPage() {
     () =>
       filteredProjects
         .flatMap(({ tasks }) => tasks)
-        .filter((task) => task.corSyncStatus !== "synced")
+        .filter((task) => !isTaskInCOR(task))
         .sort((a, b) => getTaskUpdatedAt(b) - getTaskUpdatedAt(a)),
     [filteredProjects],
   );
@@ -150,7 +178,7 @@ export default function ControlPanelPage() {
       filteredProjects
         .map(({ project, tasks }) => ({
           project,
-          tasks: tasks.filter((task) => task.corSyncStatus === "synced"),
+          tasks: tasks.filter((task) => isTaskInCOR(task)),
         }))
         .filter(({ tasks }) => tasks.length > 0),
     [filteredProjects],
@@ -282,7 +310,7 @@ export default function ControlPanelPage() {
       onSelectThread={handleSelectThread}
     >
       <div className="h-full flex flex-col bg-background">
-        <div className="flex-1 min-h-0 grid grid-cols-[280px_1fr] bg-background">
+        <div className="flex-1 min-h-0 grid grid-cols-[220px_minmax(0,1fr)] bg-background">
           <ControlPanelSidebar
             panelClients={panelClients}
             visibleClients={visibleClients}
@@ -292,7 +320,7 @@ export default function ControlPanelPage() {
             onSelectClient={setSelectedClientId}
           />
 
-          <section className="min-h-0 overflow-y-auto">
+          <section data-board-theme={viewMode === "board" ? "" : undefined} className={`${viewMode === "board" ? boardStyles.page : ""} min-h-0 min-w-0 overflow-hidden`}>
             {!panelClients ? (
               <div className="flex items-center justify-center h-full">
                 <div className="animate-pulse text-muted-foreground">
@@ -310,8 +338,8 @@ export default function ControlPanelPage() {
                 </p>
               </div>
             ) : (
-              <div className="p-6 max-w-7xl">
-                <ControlPanelHeader
+              <div className="flex h-full min-h-0 flex-col p-4">
+                <div className={viewMode === "board" ? boardStyles.controls : undefined}><ControlPanelHeader
                   selectedClient={selectedClient}
                   selectedBrandId={selectedBrandId}
                   statusFilter={statusFilter}
@@ -324,9 +352,9 @@ export default function ControlPanelPage() {
                   onStatusFilterChange={setStatusFilter}
                   onViewModeChange={handleViewModeChange}
                   onPublicationTabChange={setPublicationTab}
-                />
+                /></div>
 
-                <ControlPanelTaskSections
+                {viewMode === "board" ? <InternalTasksBoard projects={filteredProjects} publicationTab={publicationTab} onSelectTask={openTask} /> : <div className="min-h-0 overflow-y-auto"><ControlPanelTaskSections
                   filteredProjectsLength={filteredProjects.length}
                   hasVisibleTasksForTab={hasVisibleTasksForTab}
                   showUnpublishedSection={showUnpublishedSection}
@@ -360,18 +388,25 @@ export default function ControlPanelPage() {
                     setIsUnpublishedSectionOpen((open) => !open)
                   }
                   onToggleProjectExpanded={toggleProjectExpanded}
-                  onSelectTask={setSelectedTask}
-                />
+                  onSelectTask={openTask}
+                /></div>}
               </div>
             )}
           </section>
         </div>
       </div>
 
+      {taskId && !selectedTask && (
+        <div role="status" className="absolute bottom-6 right-6 z-50 max-w-sm rounded-xl border border-border bg-card p-4 text-sm shadow-lg">
+          <p>{linkedTaskClients === undefined ? "Cargando tarea…" : "Esta tarea no está disponible o no tenés permiso para verla."}</p>
+          <button type="button" onClick={closeTask} className="mt-2 text-primary hover:underline">Volver al panel</button>
+        </div>
+      )}
       {selectedTask && (
         <TaskDetailDialog
+          key={selectedTask._id}
           task={selectedTask}
-          onClose={() => setSelectedTask(null)}
+          onClose={closeTask}
           onPublishResult={handlePublishResult}
         />
       )}

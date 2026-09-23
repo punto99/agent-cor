@@ -15,7 +15,7 @@ export const editExternalTaskTool = createTool({
 
   Reglas obligatorias:
   - Usar solo después de que el usuario confirme el cambio.
-  - Enviar solo el texto del comentario.
+  - Enviar en comment el resumen del pedido, sin citas. En userQuote enviar una cita textual breve y exacta del usuario, sin inventar ni parafrasear. Omitir userQuote si no hay una cita pertinente. No repetir la cita dentro de comment.
   - Si el usuario subió archivos en su último mensaje, usa esta herramienta igual; el sistema agregará links a esos archivos dentro del comentario.
   - Para solicitudes de cambios, usar "comment" con un texto claro de lo que el usuario pidió.
   - El backend rechazará cualquier edición directa de campos.`,
@@ -30,6 +30,7 @@ export const editExternalTaskTool = createTool({
       .string()
       .optional()
       .describe("Comentario para agregar al requerimiento con la solicitud del usuario."),
+    userQuote: z.string().max(2000).optional().describe("Cita textual del pedido del usuario, separada del resumen. No incluir comillas envolventes."),
     includePendingFiles: z.boolean().optional().describe(
       "Solo para requerimientos sin categoría ni Trello: true únicamente cuando el usuario pide o confirma agregar archivos subidos en mensajes anteriores que aún no se incluyeron en un comentario. Omitir para comentarios de solo texto. Los archivos del mensaje actual se incluyen automáticamente. No tiene efecto en Trello.",
     ),
@@ -57,6 +58,7 @@ export const editExternalTaskTool = createTool({
         threadId,
         taskId: args.taskId,
         comment: args.comment,
+        ...(args.userQuote ? { userQuote: args.userQuote } : {}),
         ...(direct ? { requestMessageId, includePendingFiles: args.includePendingFiles } : {}),
       },
     );

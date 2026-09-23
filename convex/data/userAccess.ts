@@ -1,3 +1,4 @@
+import { hasExternalRequestsAccess } from "../lib/externalRequestsAccess";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { v } from "convex/values";
 import { internalQuery, query } from "../_generated/server";
@@ -18,6 +19,7 @@ export const viewerAccessProfile = query({
     const approvedExternalUser = await getApprovedExternalUser(ctx, userId);
     return {
       isAuthenticated: true,
+      canAccessExternalRequests: Boolean(approvedExternalUser) && await hasExternalRequestsAccess(ctx, userId),
       userId,
       kind: approvedExternalUser ? ("external" as const) : ("internal" as const),
       approvedExternalUserId: approvedExternalUser?._id,

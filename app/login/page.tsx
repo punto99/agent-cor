@@ -77,7 +77,8 @@ export default function LoginPage() {
 
   useEffect(() => {
     if (!isLoading && isAuthenticated) {
-      router.replace("/workspace");
+      const taskId = new URLSearchParams(window.location.search).get("taskId");
+      router.replace(taskId ? `/workspace/requests?taskId=${encodeURIComponent(taskId)}` : "/workspace");
     }
   }, [isAuthenticated, isLoading, router]);
 

@@ -67,7 +67,7 @@ export const ensureDefaultPreferences = internalMutation({
 // Actualizar la vista preferida del panel de control
 export const setControlPanelView = mutation({
   args: {
-    view: v.union(v.literal("cards"), v.literal("list")),
+    view: v.union(v.literal("cards"), v.literal("board"), v.literal("list")),
   },
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);

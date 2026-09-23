@@ -1,9 +1,13 @@
 "use client";
 
+import { useSearchParams } from "next/navigation";
+import { CommentUnreadBadge } from "../notifications/CommentNotifications";
 import { useState, useEffect, useMemo, useRef } from "react";
 import { useMutation, useQuery, useAction, useConvex } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
+import { useReadTaskCreation } from "../notifications/useReadTaskCreation";
+import { InternalTaskComments } from "./InternalTaskComments";
 import { TaskBriefContent } from "../task/TaskBriefContent";
 import { ProjectBriefContent } from "../task/ProjectBriefContent";
 import { EvaluationMessageList } from "../task/EvaluationMessages";
@@ -368,6 +372,8 @@ export function TaskDetailDialog({
   onPublishResult,
 }: TaskDetailDialogProps) {
   const convex = useConvex();
+  const params = useSearchParams();
+  const viewer = useQuery(api.data.userAccess.viewerAccessProfile);
   const startPublish = useMutation(api.data.tasks.startPublishTaskToExternal);
   const retryTask = useMutation(api.data.tasks.retryTaskSync);
   const retryTaskCollaborators = useMutation(
@@ -430,9 +436,17 @@ export function TaskDetailDialog({
   const [draftBrandId, setDraftBrandId] = useState<string>("");
   const [draftSubBrandId, setDraftSubBrandId] = useState<string>("");
   const [taxonomyError, setTaxonomyError] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<"task" | "project" | "evaluation">(
-    "task",
+  const commentsEnabled = useQuery(api.data.taskPanel.canAccessComments, { taskId: task._id }) === true;
+  const [selectedTab, setActiveTab] = useState<"task" | "project" | "evaluation" | "comments">(
+    params.get("tab") === "comments" ? "comments" : "task",
   );
+  const activeTab = selectedTab === "comments" && !commentsEnabled ? "task" : selectedTab;
+
+  useEffect(() => {
+    const tab = params.get("tab");
+    if (tab === "comments" || tab === "task") setActiveTab(tab);
+  }, [params]);
+  useReadTaskCreation(task._id, activeTab === "task");
 
   // === Evaluation state ===
   const [evaluationThreadId, setEvaluationThreadId] = useState<string | null>(
@@ -528,10 +542,6 @@ export function TaskDetailDialog({
   const liveTaskDeadline = (liveTask as any)?.deadline ?? task.deadline;
   const isDeadlineMissing = !liveTaskDeadline?.trim();
   const publishDeadlineError = getPublishDeadlineError(liveTaskDeadline);
-  const pendingExternalMessages = useQuery(
-    api.data.tasks.listPendingExternalTaskMessages,
-    !isPublishedInCOR ? { taskId: task._id } : "skip",
-  );
   const liveCorTaskId = (liveTask as any)?.corTaskId ?? task.corTaskId;
   const archiveSyncStatus =
     (liveTask as any)?.archiveSyncStatus ?? task.archiveSyncStatus;
@@ -540,7 +550,10 @@ export function TaskDetailDialog({
   const liveConvexStatus =
     (liveTask as any)?.convexStatus ?? task.convexStatus ?? "active";
   const canEditFromDialog =
-    !isPublishedInCOR && syncStatus !== "syncing" && syncStatus !== "retrying";
+    viewer?.kind === "internal" && !isPublishedInCOR && syncStatus !== "syncing" && syncStatus !== "retrying";
+  const canEditTaskContent = canEditFromDialog && viewer?.kind === "internal" &&
+    (liveTask ?? task).source === "internal" &&
+    String((liveTask ?? task).createdBy) === String(viewer.userId);
   const canArchiveUnpublishedTask =
     !isPublishedInCOR &&
     liveConvexStatus !== "archived" &&
@@ -597,10 +610,6 @@ export function TaskDetailDialog({
     (liveTask as any)?.corProjectMissingInCOR ??
     task.corProjectMissingInCOR,
   );
-  const pendingExternalMessageList = pendingExternalMessages || [];
-  const showPendingExternalMessages =
-    !isPublishedInCOR && pendingExternalMessageList.length > 0;
-
   // Detectar cuando la publicación finaliza (synced o error)
   useEffect(() => {
     if (syncStatus === "synced") {
@@ -1153,7 +1162,7 @@ export function TaskDetailDialog({
       />
 
       {/* Dialog */}
-      <div className="relative bg-card border border-border rounded-2xl shadow-xl w-full max-w-2xl max-h-[85vh] flex flex-col mx-4 animate-in fade-in zoom-in-95 duration-200">
+      <div role="dialog" aria-modal="true" aria-label="Detalle de tarea" className="relative bg-card border border-border rounded-2xl shadow-xl w-full max-w-5xl h-[92dvh] max-h-[92dvh] flex flex-col mx-4 animate-in fade-in zoom-in-95 duration-200">
         {/* Header */}
         <div className="flex items-center justify-between px-6 py-4 border-b border-border flex-shrink-0">
           <div className="flex items-center gap-3">
@@ -1169,6 +1178,7 @@ export function TaskDetailDialog({
           </div>
           <button
             onClick={onClose}
+            aria-label="Cerrar detalle de tarea"
             className="p-2 hover:bg-muted rounded-lg transition-colors text-muted-foreground hover:text-foreground cursor-pointer"
           >
             <X className="h-5 w-5" />
@@ -1176,7 +1186,7 @@ export function TaskDetailDialog({
         </div>
 
         {/* Tabs */}
-        <div className="flex border-b border-border flex-shrink-0 px-6">
+        <div className="flex flex-wrap border-b border-border flex-shrink-0 px-4 sm:px-6">
           <button
             onClick={() => setActiveTab("task")}
             className={`px-4 py-2.5 text-sm font-medium transition-colors relative cursor-pointer ${
@@ -1219,17 +1229,25 @@ export function TaskDetailDialog({
                 : "text-muted-foreground hover:text-foreground"
             }`}
           >
-            ✨ Evaluar
+            ✨ Evaluación
             {activeTab === "evaluation" && (
               <span className="absolute bottom-0 left-0 right-0 h-0.5 bg-primary rounded-full" />
             )}
           </button>
+          {commentsEnabled && <button type="button" onClick={() => setActiveTab("comments")}
+            aria-pressed={activeTab === "comments"}
+            className={`inline-flex items-center gap-2 px-4 py-2.5 text-sm font-medium transition-colors relative cursor-pointer ${activeTab === "comments" ? "text-primary" : "text-muted-foreground hover:text-foreground"}`}>
+            <MessageCircle className="h-4 w-4" aria-hidden="true" />Comentarios <CommentUnreadBadge taskId={task._id} />
+            {activeTab === "comments" && <span className="absolute bottom-0 left-0 right-0 h-0.5 bg-primary rounded-full" />}
+          </button>}
         </div>
 
         {/* Body — Tab content */}
         <div
           className={`flex-1 min-h-0 ${
-            activeTab === "evaluation"
+            activeTab === "comments"
+              ? "flex flex-col overflow-hidden"
+              : activeTab === "evaluation"
               ? "flex flex-col overflow-hidden"
               : "overflow-y-auto"
           }`}
@@ -1289,42 +1307,9 @@ export function TaskDetailDialog({
                       )}
                     </button>
                   </div>
-                  {showPendingExternalMessages && (
-                    <section className="mx-6 mb-3 rounded-lg border border-amber-200 bg-amber-50/80 p-3 text-sm dark:border-amber-900/50 dark:bg-amber-950/20">
-                      <div className="mb-2 flex items-center gap-2 text-amber-800 dark:text-amber-300">
-                        <MessageCircle className="h-4 w-4 flex-shrink-0" />
-                        <span className="font-medium">
-                          {pendingExternalMessageList.length === 1
-                            ? "1 comentario pendiente para COR"
-                            : `${pendingExternalMessageList.length} comentarios pendientes para COR`}
-                        </span>
-                      </div>
-                      <div className="space-y-2">
-                        {pendingExternalMessageList.map((message) => (
-                          <article
-                            key={message._id}
-                            className="rounded-md border border-amber-200/80 bg-background/70 px-3 py-2 dark:border-amber-900/50"
-                          >
-                            <div className="mb-1 flex items-center justify-between gap-2 text-xs text-muted-foreground">
-                              <span>
-                                {message.source === "trello"
-                                  ? "Comentario desde Trello"
-                                  : "Comentario desde agente externo"}
-                              </span>
-                              <time dateTime={new Date(message.createdAt).toISOString()}>
-                                {formatMessageTimestamp(message.createdAt)}
-                              </time>
-                            </div>
-                            <p className="whitespace-pre-wrap break-words text-foreground">
-                              {message.message}
-                            </p>
-                          </article>
-                        ))}
-                      </div>
-                    </section>
-                  )}
                   <TaskBriefContent
                     task={liveTask ?? task}
+                    contentEditable={canEditTaskContent}
                     editable={canEditFromDialog}
                     syncStatus={syncStatus}
                     afterTitleItems={taxonomyItems}
@@ -1432,6 +1417,7 @@ export function TaskDetailDialog({
             </div>
           )}
 
+          {activeTab === "comments" && <InternalTaskComments taskId={task._id} />}
           {activeTab === "evaluation" && (
             <>
               <EvaluationMessageList
@@ -1452,8 +1438,8 @@ export function TaskDetailDialog({
         </div>
 
         {/* Footer — Publish action (hidden on evaluation tab) */}
-        {showPublishButton && activeTab !== "evaluation" && (
-          <div className="px-6 py-4 border-t border-border flex-shrink-0 bg-muted/30">
+        {showPublishButton && (activeTab === "task" || activeTab === "project") && (
+          <div className="max-h-[35dvh] overflow-y-auto px-6 py-4 border-t border-border flex-shrink-0 bg-muted/30">
             {/* Sync status info */}
             {syncStatus === "synced" && (
               <div className="flex items-center gap-2 text-sm text-emerald-600 dark:text-emerald-400 mb-3">

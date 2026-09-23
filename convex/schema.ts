@@ -6,6 +6,25 @@ import { v } from "convex/values";
 export default defineSchema({
   ...authTables,
 
+  commentNotifications: defineTable({
+    userId: v.id("users"), taskId: v.id("tasks"), messageId: v.id("taskMessages"),
+    read: v.boolean(), createdAt: v.number(),
+  }).index("by_user_read", ["userId", "read"])
+    .index("by_user_created", ["userId", "createdAt"])
+    .index("by_user_task_read", ["userId", "taskId", "read"])
+    .index("by_user_message", ["userId", "messageId"]),
+
+  taskCreationNotifications: defineTable({
+    userId: v.id("users"), taskId: v.id("tasks"), read: v.boolean(), createdAt: v.number(),
+    emailState: v.union(v.literal("pending"), v.literal("sending"), v.literal("sent"), v.literal("failed"), v.literal("cancelled")),
+    attempts: v.number(), nextAttemptAt: v.number(), firstAttemptAt: v.optional(v.number()),
+    emailPayload: v.optional(v.string()), emailError: v.optional(v.string()),
+    resendId: v.optional(v.string()), emailSentAt: v.optional(v.number()),
+  }).index("by_user_read", ["userId", "read"])
+    .index("by_user_created", ["userId", "createdAt"])
+    .index("by_user_task", ["userId", "taskId"])
+    .index("by_email_due", ["emailState", "nextAttemptAt"]),
+
   // Workspaces - uno por usuario
   workspaces: defineTable({
     ownerId: v.id("users"),
@@ -19,7 +38,7 @@ export default defineSchema({
       v.union(v.literal("light"), v.literal("dark"), v.literal("system")),
     ),
     controlPanelView: v.optional(
-      v.union(v.literal("cards"), v.literal("list")),
+      v.union(v.literal("cards"), v.literal("board"), v.literal("list")),
     ),
     updatedAt: v.number(),
   }).index("by_user", ["userId"]),
@@ -288,6 +307,7 @@ export default defineSchema({
   // Estructura espejada con COR para sincronización directa.
   // Reemplaza el campo fileIds[] de tasks con una tabla dedicada.
   taskAttachments: defineTable({
+    panelEntryId: v.optional(v.id("taskPanelEntries")),
     taskId: v.id("tasks"),
     taskDraftId: v.optional(v.id("taskDrafts")),
     threadUploadedFileId: v.optional(v.id("threadUploadedFiles")),
@@ -317,11 +337,36 @@ export default defineSchema({
     .index("by_task_and_trello", ["taskId", "trelloAttachmentId"])
     .index("by_trelloSyncStatus", ["trelloSyncStatus"]),
 
+  // Manual panel uploads are owned by an authenticated user and a specific task.
+  taskPanelUploads: defineTable({
+    userId: v.id("users"), taskId: v.id("tasks"), key: v.string(),
+    filename: v.string(), mimeType: v.string(), size: v.number(),
+    state: v.union(v.literal("pending"), v.literal("uploading"), v.literal("ready"), v.literal("failed")),
+    fileId: v.optional(v.string()), storageId: v.optional(v.string()),
+    entryId: v.optional(v.id("taskPanelEntries")), createdAt: v.number(),
+  }).index("by_user_key", ["userId", "key"]),
+
+  taskPanelEntries: defineTable({
+    replyTo: v.optional(v.id("taskMessages")),
+    userId: v.id("users"), taskId: v.id("tasks"), key: v.string(),
+    text: v.string(), uploadIds: v.array(v.id("taskPanelUploads")),
+    messageId: v.optional(v.id("taskMessages")), createdAt: v.number(),
+    trelloState: v.string(), corState: v.string(),
+    trelloError: v.optional(v.string()), corError: v.optional(v.string()),
+    leaseUntil: v.optional(v.number()), nextCheckAt: v.number(),
+  }).index("by_user_key", ["userId", "key"])
+    .index("by_task", ["taskId"]).index("by_next_check", ["nextCheckAt"]),
+
   taskMessages: defineTable({
+    userQuote: v.optional(v.string()),
+    replyTo: v.optional(v.id("taskMessages")),
+    panelEntryId: v.optional(v.id("taskPanelEntries")),
     taskId: v.id("tasks"),
     userId: v.optional(v.id("users")),
     source: v.union(
       v.literal("external_agent"),
+      v.literal("external_panel"),
+      v.literal("internal_panel"),
       v.literal("trello"),
       v.literal("cor"),
       v.literal("internal"),

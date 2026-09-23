@@ -28,6 +28,7 @@ export interface FullTask {
   projectId?: Id<"projects">;
   source?: "internal" | "external";
   brandName?: string;
+  boardLabel?: { name: string; color?: string };
   clientBrandId?: Id<"clientBrands">;
   brandId?: number;
   subBrandId?: Id<"subBrands">;
@@ -70,7 +71,7 @@ export interface ControlPanelProjectGroup {
   tasks: FullTask[];
 }
 
-export type ControlPanelView = "cards" | "list";
+export type ControlPanelView = "cards" | "board" | "list";
 export type ControlPanelPublicationTab = "all" | "cor" | "unpublished";
 
 export type ControlPanelToastState = {

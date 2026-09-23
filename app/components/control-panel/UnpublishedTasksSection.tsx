@@ -1,3 +1,4 @@
+import styles from "./TaskSections.module.css";
 import { AlertCircle, ChevronDown, ChevronRight } from "lucide-react";
 import { TaskCard } from "./TaskCard";
 import type { ControlPanelView, FullTask } from "./types";
@@ -29,7 +30,7 @@ export function UnpublishedTasksSection({
   onSelectTask,
 }: UnpublishedTasksSectionProps) {
   return (
-    <section className="overflow-hidden rounded-lg border border-amber-200/80 bg-amber-50/35 dark:border-amber-900/60 dark:bg-amber-950/10">
+    <section className={`${styles.section} ${styles.pending} overflow-hidden rounded-lg border border-amber-200/80 bg-amber-50/35 dark:border-amber-900/60 dark:bg-amber-950/10`}>
       <button
         type="button"
         onClick={onToggleOpen}

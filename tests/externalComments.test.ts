@@ -209,3 +209,11 @@ test("stale delivery callbacks cannot change a later attempt", async () => {
   assert.equal(f.rows.get(result.id).corMessageSyncStatus, "direct_sending");
   assert.equal(f.rows.get(result.id).directDeliveryAttempt, 2);
 });
+
+test("agent quotes are stored separately without changing the summary", async () => {
+  const f = fixture();
+  const result = await f.save({ comment: "Cambiar la imagen", userQuote: "Usá esta foto" });
+  const message = f.rows.get(result.id);
+  assert.equal(message.message, "Cambiar la imagen");
+  assert.equal(message.userQuote, "Usá esta foto");
+});

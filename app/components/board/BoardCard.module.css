@@ -1,0 +1,36 @@
+.card {
+  display: block;
+  width: 100%;
+  flex-shrink: 0;
+  position: relative;
+  border: 1px solid var(--trello-border, #091e4224);
+  border-radius: 9px;
+  background: var(--trello-bg-card, #fff);
+  color: var(--trello-text-primary, #172b4d);
+  padding: 8px 12px;
+  text-align: left;
+  text-decoration: none;
+  cursor: pointer;
+  box-shadow: 0 1px 1px #091e4240;
+}
+.card:hover { border-color: #8590a2; }
+.card:focus-visible { outline: 2px solid var(--trello-blue, #0c66e4); outline-offset: 2px; }
+.label { display: block; width: 40px; height: 8px; border-radius: 4px; margin-bottom: 4px; }
+.title { display: block; margin: 0; font-size: 15px; font-weight: 400; line-height: 20px; overflow-wrap: anywhere; }
+.badges { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-top: 6px; color: var(--trello-text-secondary, #44546f); }
+.deadline { display: inline-flex; align-items: center; gap: 4px; border-radius: 4px; padding: 2px 4px; font-size: 12px; line-height: 20px; }
+.overdue { color: var(--trello-danger, #ca3521); background: var(--trello-danger-bg, #ffeceb); }
+.completed { color: var(--trello-success, #22a06b); background: var(--trello-success-bg, #dcfff1); }
+.fields { display: flex; flex-direction: column; gap: 10px; padding: 6px 6px 0; color: var(--trello-text-secondary, #44546f); font-size: 12px; line-height: 18px; }
+.field { display: block; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.footer { display: flex; justify-content: flex-end; margin-top: 8px; }
+.avatar { display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; border-radius: 50%; background: #172b4d; color: white; font-size: 11px; font-weight: 500; }
+.sync { display: block; margin-top: 8px; font-size: 11px; color: var(--trello-blue, #0c66e4); }
+.error { color: var(--trello-danger, #ca3521); }
+:global(.dark) .card { background: var(--trello-bg-card, #fff); color: var(--trello-text-primary, #172b4d); border-color: var(--trello-border, #091e4224); box-shadow: 0 1px 1px #0006; }
+:global(.dark) .card:hover { border-color: #8c9bab; }
+:global(.dark) .badges, :global(.dark) .fields { color: var(--trello-text-secondary, #44546f); }
+:global(.dark) .overdue { color: var(--trello-danger-bg, #ffeceb); background: var(--trello-danger-bg, #ffeceb); }
+:global(.dark) .completed { color: var(--trello-success, #22a06b); background: var(--trello-success-bg, #dcfff1); }
+:global(.dark) .sync { color: var(--trello-blue, #0c66e4); }
+:global(.dark) .error { color: var(--trello-danger, #ca3521); }

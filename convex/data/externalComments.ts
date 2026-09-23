@@ -1,3 +1,4 @@
+import { notifyTaskComment } from "../lib/commentNotifications";
 import { v } from "convex/values";
 import { internalAction, internalMutation } from "../_generated/server";
 import { components, internal } from "../_generated/api";
@@ -39,7 +40,7 @@ async function requireTask(ctx: any, threadId: string, taskId?: string) {
 }
 
 export const save = internalMutation({
-  args: { threadId: v.string(), taskId: v.optional(v.string()), requestMessageId: v.string(), comment: v.optional(v.string()), includePendingFiles: v.optional(v.boolean()) },
+  args: { threadId: v.string(), taskId: v.optional(v.string()), requestMessageId: v.string(), comment: v.optional(v.string()), userQuote: v.optional(v.string()), includePendingFiles: v.optional(v.boolean()) },
   handler: async (ctx, args) => {
     const { task, userId } = await requireTask(ctx, args.threadId, args.taskId);
     const [request] = await ctx.runQuery(components.agent.messages.getMessagesByIds, { messageIds: [args.requestMessageId] });
@@ -73,11 +74,12 @@ export const save = internalMutation({
     const status = corTaskId ? "direct_pending" : "direct_pending_task";
     const now = Date.now();
     const id = await ctx.db.insert("taskMessages", {
-      taskId: task._id, userId, source: "external_agent", message,
+      taskId: task._id, userId, source: "external_agent", message, userQuote: args.userQuote?.trim().slice(0, 2000),
       directExternalComment: true, requestThreadId: args.threadId,
       requestMessageId: args.requestMessageId, commentFileIds: files.map(f => f._id),
       corTaskId, corMessageSyncStatus: status, createdAt: now, updatedAt: now,
     });
+    await notifyTaskComment(ctx, id);
     for (const file of files) await ctx.db.patch(file._id, { commentMessageId: id });
     if (corTaskId) await ctx.scheduler.runAfter(0, refs().send, { id });
     return { id, status };
@@ -85,7 +87,7 @@ export const save = internalMutation({
 });
 
 export const submit = internalAction({
-  args: { threadId: v.string(), taskId: v.optional(v.string()), requestMessageId: v.string(), comment: v.optional(v.string()), includePendingFiles: v.optional(v.boolean()) },
+  args: { threadId: v.string(), taskId: v.optional(v.string()), requestMessageId: v.string(), comment: v.optional(v.string()), userQuote: v.optional(v.string()), includePendingFiles: v.optional(v.boolean()) },
   handler: async (ctx, args): Promise<any> => {
     try {
       const result = await ctx.runMutation(refs().save, args);
@@ -171,7 +173,7 @@ export async function deliverComment(
   if (!message) return;
   let result: { success: boolean; error?: string };
   try {
-    result = await provider.postTaskMessage({ taskId: message.corTaskId, message: formatTrelloCommentForCOR(message.message) });
+    result = await provider.postTaskMessage({ taskId: message.corTaskId, message: formatTrelloCommentForCOR([message.message, message.userQuote ? `> ${message.userQuote}` : ""].filter(Boolean).join("\n\n")) });
   } catch (error) {
     result = { success: false, error: error instanceof Error ? error.message : String(error) };
   }

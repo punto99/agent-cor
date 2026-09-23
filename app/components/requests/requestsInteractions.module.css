@@ -1,0 +1,11 @@
+/* Scoped to the task board and its portaled detail dialog. */
+.interactiveControls :is(button, select):not(:disabled),
+.interactiveControls a[href],
+.interactiveControls [role="button"]:not([aria-disabled="true"]) {
+  cursor: pointer;
+}
+
+.interactiveControls :is(button, select):disabled,
+.interactiveControls [aria-disabled="true"] {
+  cursor: default;
+}

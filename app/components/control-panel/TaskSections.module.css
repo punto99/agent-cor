@@ -1,0 +1,22 @@
+/* Scope theme corrections to accordion surfaces, leaving TaskCard untouched. */
+:global(.dark) .section {
+  background: #080f1d;
+  border-color: #283447;
+}
+:global(.dark) .pending { --section-accent: #f2c56c; --section-tint: #292318; }
+:global(.dark) .published { --section-accent: #75d7b5; --section-tint: #122b29; }
+:global(.dark) .section > :first-child {
+  background: #111b2a;
+  border-color: #283447;
+}
+:global(.dark) .pending > button:hover { background: #172235; }
+:global(.dark) .section > :first-child > div:first-child > span:first-child {
+  background: var(--section-tint);
+  color: var(--section-accent);
+}
+:global(.dark) .pending > button > div:last-child > span {
+  background: var(--section-tint);
+  color: var(--section-accent);
+  border-color: #655132;
+}
+:global(.dark) .pending > button > div:last-child > svg { color: var(--section-accent); }

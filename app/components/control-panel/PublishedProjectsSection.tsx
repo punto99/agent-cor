@@ -1,3 +1,4 @@
+import styles from "./TaskSections.module.css";
 import {
   CalendarDays,
   CheckCircle2,
@@ -49,7 +50,7 @@ export function PublishedProjectsSection({
   onSelectTask,
 }: PublishedProjectsSectionProps) {
   return (
-    <section className="overflow-hidden rounded-lg border border-emerald-200/80 bg-emerald-50/30 dark:border-emerald-900/60 dark:bg-emerald-950/10">
+    <section className={`${styles.section} ${styles.published} overflow-hidden rounded-lg border border-emerald-200/80 bg-emerald-50/30 dark:border-emerald-900/60 dark:bg-emerald-950/10`}>
       <div className="flex flex-col gap-3 border-b border-emerald-200/70 bg-emerald-50/60 px-4 py-4 dark:border-emerald-900/50 dark:bg-emerald-950/20 sm:flex-row sm:items-center sm:justify-between">
         <div className="flex min-w-0 items-center gap-3">
           <span className="inline-flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-md bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300">

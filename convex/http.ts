@@ -3,7 +3,15 @@ import { httpAction } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { auth } from "./auth";
 
+import { upload as uploadTaskPanelFile, preflight as taskPanelPreflight } from "./taskPanelUpload";
+
+import { media as taskPanelMedia, preflight as taskPanelMediaPreflight } from "./taskPanelMediaHttp";
+
 const http = httpRouter();
+http.route({ path: "/task-panel/media", method: "GET", handler: taskPanelMedia });
+http.route({ path: "/task-panel/media", method: "OPTIONS", handler: taskPanelMediaPreflight });
+http.route({ path: "/task-panel/upload", method: "POST", handler: uploadTaskPanelFile });
+http.route({ path: "/task-panel/upload", method: "OPTIONS", handler: taskPanelPreflight });
 
 auth.addHttpRoutes(http);
 

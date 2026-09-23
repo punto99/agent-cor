@@ -7,6 +7,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
+    "test:task-panel": "node --conditions=import --import tsx --test tests/taskPanel.test.ts tests/taskMedia.test.ts tests/commentEditor.test.ts",
     "convex": "convex dev",
     "convex:deploy": "convex deploy",
     "process-pdf": "tsx scripts/process-pdf-multimodal.ts",

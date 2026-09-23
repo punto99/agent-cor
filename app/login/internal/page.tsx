@@ -39,7 +39,8 @@ export default function InternalLoginPage() {
 
   useEffect(() => {
     if (!isLoading && !signingIn && isAuthenticated) {
-      router.replace("/workspace");
+      const taskId = new URLSearchParams(window.location.search).get("taskId");
+      router.replace(taskId ? `/workspace/control-panel?taskId=${encodeURIComponent(taskId)}` : "/workspace");
     }
   }, [isAuthenticated, isLoading, signingIn, router]);
 
@@ -47,7 +48,10 @@ export default function InternalLoginPage() {
     try {
       setError(null);
       setSigningIn(true);
-      await signIn("google");
+      const taskId = new URLSearchParams(window.location.search).get("taskId");
+      await signIn("google", taskId
+        ? { redirectTo: `/workspace/control-panel?taskId=${encodeURIComponent(taskId)}` }
+        : undefined);
     } catch (error) {
       console.error("Error during sign in:", error);
       setError("No se pudo iniciar sesión con Google.");

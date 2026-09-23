@@ -22,9 +22,8 @@ import {
 } from "../_generated/server";
 import type { Id } from "../_generated/dataModel";
 import { paginationOptsValidator } from "convex/server";
-import { internal, components } from "../_generated/api";
+import { internal } from "../_generated/api";
 import { getAuthUserId } from "@convex-dev/auth/server";
-import { storeFile } from "@convex-dev/agent";
 import { getProjectManagementProvider } from "../integrations/registry";
 import { CORNotFoundError } from "../integrations/corProvider";
 import { hashText } from "../lib/briefFormat";
@@ -41,8 +40,6 @@ const SCHEDULED_WORKERS_PER_DELAY_BATCH = 100;
 const SCHEDULED_WORKER_BATCH_STAGGER_MS = 250;
 const SCHEDULED_DISPATCHER_CONTINUE_DELAY_MS = 1_000;
 const SCHEDULED_ATTACHMENT_DELAY_MS = 30_000;
-const MAX_COR_ATTACHMENT_BYTES = 25 * 1024 * 1024;
-const MAX_COR_ATTACHMENTS_PER_TASK = 5;
 
 const SCHEDULED_TASK_BUCKETS = [
   { key: "active-dated", convexStatus: "active", includeUndated: false },
@@ -168,145 +165,6 @@ async function resolveInboundProjectTaxonomy(
     subBrandId: subBrand?._id,
     subBrandName: subBrand?.name,
   };
-}
-
-async function syncTaskAttachmentsFromCOR(
-  ctx: any,
-  taskId: Id<"tasks">,
-  corTaskId: number,
-): Promise<void> {
-  const provider = getProjectManagementProvider();
-  const allRemoteAttachments = await provider.getTaskAttachments(corTaskId);
-  const remoteAttachments = allRemoteAttachments.slice(
-    0,
-    MAX_COR_ATTACHMENTS_PER_TASK,
-  );
-  if (allRemoteAttachments.length > MAX_COR_ATTACHMENTS_PER_TASK) {
-    console.log(
-      `[InboundSync][Attachments] Task ${taskId} tiene ${allRemoteAttachments.length} attachments en COR; se sincronizan solo los primeros ${MAX_COR_ATTACHMENTS_PER_TASK}`,
-    );
-  }
-  const localAttachments = await ctx.runQuery(
-    internal.data.tasks.getTaskAttachments,
-    {
-      taskId,
-    },
-  );
-
-  const remoteById = new Map<number, (typeof remoteAttachments)[number]>();
-  for (const remote of remoteAttachments) {
-    if (Number.isFinite(remote.id)) remoteById.set(remote.id, remote);
-  }
-
-  const localByCorId = new Map<number, (typeof localAttachments)[number]>();
-  for (const local of localAttachments) {
-    if (typeof local.corAttachmentId === "number") {
-      localByCorId.set(local.corAttachmentId, local);
-    }
-  }
-
-  let deletedCount = 0;
-  for (const [corAttachmentId, localAttachment] of localByCorId.entries()) {
-    if (!remoteById.has(corAttachmentId)) {
-      await ctx.runMutation(internal.data.tasks.deleteTaskAttachment, {
-        attachmentId: localAttachment._id,
-      });
-      deletedCount += 1;
-    }
-  }
-
-  let addedCount = 0;
-  for (const [corAttachmentId, remoteAttachment] of remoteById.entries()) {
-    if (localByCorId.has(corAttachmentId)) continue;
-    if (!remoteAttachment.url) {
-      console.warn(
-        `[InboundSync][Attachments] ⚠️ Attachment ${corAttachmentId} sin URL en COR, se omite`,
-      );
-      continue;
-    }
-    if (
-      remoteAttachment.size !== undefined &&
-      remoteAttachment.size > MAX_COR_ATTACHMENT_BYTES
-    ) {
-      console.warn(
-        `[InboundSync][Attachments] ⚠️ Attachment ${corAttachmentId} pesa ${remoteAttachment.size} bytes y supera el límite seguro de sync, se omite`,
-      );
-      continue;
-    }
-
-    try {
-      const response = await fetch(remoteAttachment.url);
-      if (!response.ok) {
-        console.warn(
-          `[InboundSync][Attachments] ⚠️ No se pudo descargar attachment ${corAttachmentId} (${response.status})`,
-        );
-        continue;
-      }
-      const contentLength = response.headers.get("content-length");
-      const contentBytes = contentLength ? Number(contentLength) : null;
-      if (
-        contentBytes !== null &&
-        Number.isFinite(contentBytes) &&
-        contentBytes > MAX_COR_ATTACHMENT_BYTES
-      ) {
-        console.warn(
-          `[InboundSync][Attachments] ⚠️ Attachment ${corAttachmentId} pesa ${contentBytes} bytes y supera el límite seguro de sync, se omite`,
-        );
-        continue;
-      }
-
-      const buffer = await response.arrayBuffer();
-      if (buffer.byteLength > MAX_COR_ATTACHMENT_BYTES) {
-        console.warn(
-          `[InboundSync][Attachments] ⚠️ Attachment ${corAttachmentId} pesa ${buffer.byteLength} bytes y supera el límite seguro de sync, se omite`,
-        );
-        continue;
-      }
-      const mimeType =
-        remoteAttachment.mimeType ||
-        response.headers.get("content-type") ||
-        "application/octet-stream";
-      const filename = remoteAttachment.name || `attachment_${corAttachmentId}`;
-
-      const { file } = await storeFile(
-        ctx,
-        components.agent,
-        new Blob([buffer], { type: mimeType }),
-        { filename },
-      );
-
-      const attachmentId = await ctx.runMutation(
-        internal.data.tasks.createTaskAttachment,
-        {
-          taskId,
-          fileId: file.fileId,
-          storageId: String(file.storageId),
-          filename,
-          mimeType,
-          size: remoteAttachment.size ?? buffer.byteLength,
-        },
-      );
-
-      await ctx.runMutation(internal.data.tasks.updateAttachmentCORSync, {
-        attachmentId,
-        corAttachmentId,
-        corUrl: remoteAttachment.url,
-      });
-
-      addedCount += 1;
-    } catch (error) {
-      console.warn(
-        `[InboundSync][Attachments] ⚠️ Error sincronizando attachment ${corAttachmentId}:`,
-        error,
-      );
-    }
-  }
-
-  if (addedCount > 0 || deletedCount > 0) {
-    console.log(
-      `[InboundSync][Attachments] ✅ Task ${taskId}: +${addedCount} / -${deletedCount}`,
-    );
-  }
 }
 
 // ==================== ENTRY POINT (pública) ====================
@@ -468,7 +326,7 @@ export const pullFromCORAction = internalAction({
           );
         }
 
-        await syncTaskAttachmentsFromCOR(ctx, args.taskId, corTaskId);
+        // COR attachments are not imported; outbound uploads remain independent.
       }
 
       // 3. Traer proyecto de COR (si la task tiene corProjectId)
@@ -1389,7 +1247,8 @@ export const pullTaskFromCORWorker = internalAction({
 
 /**
  * Worker separado para attachments del cron.
- * Mantiene los archivos sincronizados sin cargar attachments dentro del worker principal.
+ * Conserva el envío a Trello de archivos ya guardados en Convex.
+ * No importa ni elimina adjuntos locales a partir de COR.
  */
 export const pullTaskAttachmentsFromCORWorker = internalAction({
   args: {
@@ -1425,8 +1284,6 @@ export const pullTaskAttachmentsFromCORWorker = internalAction({
       );
       return;
     }
-
-    await syncTaskAttachmentsFromCOR(ctx, args.taskId, args.corTaskId);
 
     try {
       await ctx.runAction(

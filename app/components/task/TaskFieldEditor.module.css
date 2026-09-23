@@ -1,0 +1,13 @@
+.panel input, .panel select, .panel textarea {
+  min-height: 2.5rem;
+  border-radius: .5rem;
+  padding: .5rem .75rem;
+  font-size: .875rem;
+}
+.panel select { cursor: pointer; }
+.panel p { line-height: 1.5; }
+.panel button { cursor: pointer; }
+.panel button:disabled { cursor: default; }
+.panel > div > div > div:last-child { margin-top: 1rem; gap: .5rem; }
+.panel > div > div > div:last-child > button { min-height: 2.25rem; padding: .375rem .75rem; border-radius: .5rem; }
+

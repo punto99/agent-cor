@@ -1,6 +1,7 @@
 "use client";
 
-import { useState, useCallback, useEffect } from "react";
+import { Suspense, useState, useCallback, useEffect, useRef } from "react";
+import { useSearchParams } from "next/navigation";
 import { useMutation, useQuery, usePaginatedQuery } from "convex/react";
 import { api } from "../../convex/_generated/api";
 import { WorkspaceLayout } from "../components/WorkspaceLayout";
@@ -11,6 +12,16 @@ import ChatInterface from "../ChatInterface";
 // import { clientConfig } from "@/config/tenant.config";
 
 export default function WorkspacePage() {
+  return <Suspense fallback={<LoadingScreen />}><WorkspaceChat /></Suspense>;
+}
+
+function WorkspaceChat() {
+  const requestedThreadId = useSearchParams().get("threadId");
+  const handledThreadId = useRef<string | null>(null);
+  const requestedThread = useQuery(
+    api.messaging.threads.getThread,
+    requestedThreadId ? { threadId: requestedThreadId } : "skip",
+  );
   const [currentThreadId, setCurrentThreadId] = useState<string | null>(null);
   // COMENTADO: TaskPanel movido a Panel de Control
   // const [isTaskPanelOpen, setIsTaskPanelOpen] = useState(false);
@@ -48,6 +59,18 @@ export default function WorkspacePage() {
   useEffect(() => {
     if (threadsStatus === "LoadingFirstPage") return; // Aún cargando
 
+    // Open the requested conversation only after verifying ownership. Apply it
+    // once so subsequent sidebar selections are not overridden by the URL.
+    if (requestedThreadId && handledThreadId.current !== requestedThreadId) {
+      if (requestedThread === undefined) return;
+      handledThreadId.current = requestedThreadId;
+      if (requestedThread) {
+        setCurrentThreadId(requestedThread.threadId);
+        setIsInitialized(true);
+        return;
+      }
+    }
+
     if (threads.length > 0 && !currentThreadId) {
       // Usuario tiene threads, seleccionar el primero
       setCurrentThreadId(threads[0].threadId);
@@ -63,7 +86,7 @@ export default function WorkspacePage() {
       // Ya tiene thread seleccionado
       setIsInitialized(true);
     }
-  }, [threads, currentThreadId, hasAutoCreated, createThread]);
+  }, [threads, threadsStatus, currentThreadId, hasAutoCreated, createThread, requestedThreadId, requestedThread]);
 
   // COMENTADO: TaskPanel movido a Panel de Control
   // useEffect(() => {
@@ -126,10 +149,13 @@ export default function WorkspacePage() {
   // ═══════════════════════════════════════════════════════════════════════════
   return (
     <WorkspaceLayout
+      sidebarDefaultOpen
       currentThreadId={currentThreadId}
       onSelectThread={handleSelectThread}
       onNewThread={handleNewThread}
-      threads={threads}
+      threads={requestedThread && !threads.some(thread => thread.threadId === requestedThread.threadId)
+        ? [requestedThread, ...threads]
+        : threads}
       threadsStatus={threadsStatus}
       loadMoreThreads={loadMore}
     >
