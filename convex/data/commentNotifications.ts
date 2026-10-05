@@ -1,3 +1,4 @@
+import { getAuthorName } from "../lib/authorName";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { v } from "convex/values";
 import { query, mutation } from "../_generated/server";
@@ -16,7 +17,7 @@ export const unread = query({
       const message = await ctx.db.get(row.messageId);
       if (!task || !message || !(await canReceiveComment(ctx, userId, task, message))) continue;
       const current = groups.get(String(task._id));
-      const author = message.userId ? (await ctx.db.get(message.userId))?.name || "Alguien" : message.source === "trello" ? "Trello" : message.source === "cor" ? "COR" : "Alguien";
+      const author = await getAuthorName(ctx, message.userId, message.source === "trello" ? "Trello" : message.source === "cor" ? "COR" : "Autor sin nombre");
       groups.set(String(task._id), { taskId: task._id, title: task.title, count: (current?.count ?? 0) + 1, createdAt: Math.max(current?.createdAt ?? 0, row.createdAt), author: current && current.createdAt > row.createdAt ? current.author : author, messageIds: [...(current?.messageIds ?? []), row.messageId], external });
     }
     return [...groups.values()].sort((a,b) => b.createdAt - a.createdAt);

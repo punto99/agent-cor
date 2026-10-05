@@ -13,6 +13,7 @@ type TaskCollaborator = {
   email?: string;
   source?: "client_default" | "task";
   availableInCOR?: boolean;
+  hasClientAccess?: boolean;
 };
 
 type CollaboratorCandidate = {
@@ -167,7 +168,9 @@ export function TaskCollaboratorsSection({
             <p className="mt-0.5 text-xs text-muted-foreground">
               {published
                 ? "Asignación actual de la tarea publicada."
-                : "Esta selección se aplicará al proyecto y a la tarea al publicar."}
+                : selection?.customized
+                  ? "Selección personalizada para esta tarea. Se aplicará al proyecto y a la tarea al publicar."
+                  : "Agregamos los usuarios internos con acceso a este cliente y categoría. Puedes editar la selección antes de publicar."}
             </p>
           </div>
         </div>
@@ -204,6 +207,11 @@ export function TaskCollaboratorsSection({
               {!published && collaborator.source === "client_default" && (
                 <span className="rounded-full bg-primary/10 px-1.5 py-0.5 text-[10px] font-medium text-primary">
                   Cliente
+                </span>
+              )}
+              {!published && collaborator.hasClientAccess === false && (
+                <span className="text-[10px] font-medium text-red-700 dark:text-red-300">
+                  Sin acceso · quitar para publicar
                 </span>
               )}
               {!published && collaborator.availableInCOR === false && (

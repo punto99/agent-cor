@@ -1,3 +1,4 @@
+import { getAuthorName } from "../lib/authorName";
 import { canViewExternalRequest, isRequestsClientTask } from "../lib/externalRequestsAccess";
 import { notifyTaskComment } from "../lib/commentNotifications";
 import { resolvePanelComment } from "../lib/taskPanelComment";
@@ -130,7 +131,7 @@ export const detail = query({
     return {
       viewerIsExternal: Boolean(external),
       attachments: await Promise.all(attachments.map(async a => ({ id: a._id, filename: a.filename, size: a.size, mimeType: a.mimeType, createdAt: a.createdAt, trelloAttachmentId: a.trelloAttachmentId, trelloUrl: a.trelloAttachmentUrl, corUrl: a.corUrl, url: await ctx.storage.getUrl(a.storageId as Id<"_storage">), entryId: a.panelEntryId }))),
-      comments: await Promise.all(messages.filter(m => !external || ["external_panel", "internal_panel", "external_agent", "trello"].includes(m.source)).sort((a,b) => b.createdAt-a.createdAt).map(async m => ({ id: m._id, replyTo: m.replyTo, quote: m.userQuote, text: m.message, createdAt: m.createdAt, own: m.userId === userId, isClient: !external && (m.source === "external_agent" || Boolean(m.userId && await ctx.db.query("approvedExternalUsers").withIndex("by_user", q => q.eq("userId", m.userId!)).unique())), authorName: m.userId ? (await ctx.db.get(m.userId))?.name : undefined }))),
+      comments: await Promise.all(messages.filter(m => !external || ["external_panel", "internal_panel", "external_agent", "trello"].includes(m.source)).sort((a,b) => b.createdAt-a.createdAt).map(async m => ({ id: m._id, replyTo: m.replyTo, quote: m.userQuote, text: m.message, createdAt: m.createdAt, own: m.userId === userId, isClient: !external && (m.source === "external_agent" || Boolean(m.userId && await ctx.db.query("approvedExternalUsers").withIndex("by_user", q => q.eq("userId", m.userId!)).unique())), authorName: await getAuthorName(ctx, m.userId) }))),
       entries: entries.map(e => ({ id: e._id, createdAt: e.createdAt, trelloState: e.trelloState, corState: e.corState })),
     };
   },

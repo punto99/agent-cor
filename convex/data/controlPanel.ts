@@ -2,6 +2,7 @@ import { v } from "convex/values";
 import { query } from "../_generated/server";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { createBoardLabelReader } from "../lib/boardLabel";
+import { getAuthorName } from "../lib/authorName";
 
 async function isExternalUser(ctx: any, userId: any) {
   const approvedExternalUser = await ctx.db
@@ -185,7 +186,7 @@ export const listMyClientProjects = query({
         ? ((await ctx.db.get(userId)) as Record<string, unknown> | null)
         : null;
       const info = {
-        createdByName: formatUserName(user),
+        createdByName: await getAuthorName(ctx, userId, formatUserName(user) || "Usuario"),
         createdByEmail:
           typeof user?.email === "string" ? user.email.trim() : undefined,
       };

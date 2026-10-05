@@ -4,6 +4,7 @@ import { getFunctionName } from "convex/server";
 import * as panel from "../convex/data/taskPanel";
 import * as sender from "../convex/data/taskPanelSync";
 import * as tasks from "../convex/data/tasks";
+import * as threads from "../convex/messaging/threads";
 import { hasExternalRequestsAccess, canViewExternalRequest } from "../convex/lib/externalRequestsAccess";
 import * as history from "../convex/data/notificationHistory";
 import * as notifications from "../convex/data/commentNotifications";
@@ -333,6 +334,8 @@ test("board dialog exposes only the authorized task label and member names", asy
   const result = await f.call(tasks.getBoardDialogDetails, { taskId: "task1" });
   assert.deepEqual(result, { label: { name: "Marca Corporativa", color: "orange" }, members: [{ id: "member1", name: "Ximena Torres" }] });
   f.rows.get("task1").createdBy = "another-user";
+  assert.deepEqual(await f.call(tasks.getBoardDialogDetails, { taskId: "task1" }), result);
+  f.rows.delete("assignment-user1");
   assert.equal(await f.call(tasks.getBoardDialogDetails, { taskId: "task1" }), null);
 });
 
@@ -551,10 +554,12 @@ test("external notification history retains read comments only for the external 
   assert.deepEqual((await f.call(history.list, args)).page, []);
 });
 
-test("external requests and notifications require the configured client, regardless of category", async () => {
+test("external requests require an enabled client and matching brand permissions", async () => {
   const f = notificationFixture();
   f.rows.get("assignment-user1").brandId = "brand2";
   assert.equal(await hasExternalRequestsAccess(f.ctx, "user1" as any), true);
+  assert.equal(await canViewExternalRequest(f.ctx, "user1" as any, f.rows.get("task1")), false);
+  f.rows.get("assignment-user1").brandId = "brand1";
   assert.equal(await canViewExternalRequest(f.ctx, "user1" as any, f.rows.get("task1")), true);
   f.as("internal1"); await f.post("enabled-client");
   f.as("user1"); assert.equal((await f.unread()).length, 1);
@@ -599,7 +604,7 @@ test("internal comments tab requires the enabled task client and existing task p
   assert.equal(await f.call(panel.canAccessComments, { taskId: "task1" }), false);
 });
 
-test("multiple enabled clients preserve per-client assignment, task ownership and notification access", async () => {
+test("multiple enabled clients preserve per-client assignment and notification access", async () => {
   const f = notificationFixture();
   clientConfig.ui.externalRequestsClientIds = ["client1", " client2 ", "client1", ""];
   f.put("corClients", { _id: "client2", corClientId: 100 });
@@ -609,7 +614,7 @@ test("multiple enabled clients preserve per-client assignment, task ownership an
   assert.equal(await hasExternalRequestsAccess(f.ctx, "user1" as any), true);
   assert.equal(await canViewExternalRequest(f.ctx, "user1" as any, f.rows.get("task1")), true);
   assert.equal(await canViewExternalRequest(f.ctx, "user1" as any, f.rows.get("task2")), false);
-  f.put("clientUserAssignments", { _id: "external-client2", clientId: "client2", userId: "user1", brandId: "any-category" });
+  f.put("clientUserAssignments", { _id: "external-client2", clientId: "client2", userId: "user1" });
   assert.equal(await canViewExternalRequest(f.ctx, "user1" as any, f.rows.get("task2")), true);
   f.as("internal1");
   assert.equal(await f.call(panel.canAccessComments, { taskId: "task1" }), true);
@@ -623,4 +628,254 @@ test("multiple enabled clients preserve per-client assignment, task ownership an
   clientConfig.ui.externalRequestsClientIds = [];
   assert.equal(await hasExternalRequestsAccess(f.ctx, "user1" as any), false);
   f.as("internal1"); assert.equal(await f.call(panel.canAccessComments, { taskId: "task1" }), false);
+});
+
+// Collaborators use client/category permissions, independently of task origin.
+function collaboratorFixture() {
+  const f = fixture();
+  f.ctx.auth.getUserIdentity = async () => ({ subject: "viewer|session" });
+  const member = (id: string, clientId = "client1", brandId?: string, resolved = true) => {
+    f.put("users", { _id: id, name: `Member ${id}`, email: `${id}@example.com` });
+    f.put("clientUserAssignments", { _id: `access-${id}`, userId: id, clientId, brandId });
+    if (resolved) f.put("corUsers", { _id: `cor-${id}`, userId: id, corUserId: id.length + 100, corEmail: `${id}@example.com`, corFirstName: "Member", corLastName: id });
+  };
+  member("viewer");
+  member("full");
+  member("category-a", "client1", "category1");
+  member("category-b", "client1", "category2");
+  member("foreign", "client2");
+  member("external");
+  member("unresolved", "client1", undefined, false);
+  f.put("approvedExternalUsers", { _id: "external-member", userId: "external" });
+  f.put("clientUserAssignments", { _id: "duplicate-full", userId: "full", clientId: "client1", brandId: "category1" });
+  f.put("clientUserAssignments", { _id: "deleted-user", userId: "deleted", clientId: "client1" });
+  f.put("clientBrands", { _id: "category1", clientId: "client1" });
+  f.put("clientBrands", { _id: "category2", clientId: "client1" });
+  f.rows.get("task1").clientBrandId = "category1";
+  return { ...f, member };
+}
+
+test("automatic collaborators include only internal users with full client or matching category access for either origin", async () => {
+  const f = collaboratorFixture();
+  for (const source of ["external", "internal"]) {
+    f.rows.get("task1").source = source;
+    const result = await f.call(tasks.getTaskCorCollaborators, { taskId: "task1" });
+    assert.deepEqual(result.collaborators.map((c: any) => c.userId).sort(), ["category-a", "full", "unresolved", "viewer"]);
+    assert.equal(result.customized, false);
+    assert.equal(result.collaborators.find((c: any) => c.userId === "unresolved").availableInCOR, false);
+  }
+  // Client resolution also works when the task only carries COR's client ID.
+  delete f.rows.get("task1").clientBrandId;
+  delete f.rows.get("task1").clientId;
+  const result = await f.call(tasks.getTaskCorCollaborators, { taskId: "task1" });
+  assert.deepEqual(result.collaborators.map((c: any) => c.userId).sort(), ["full", "unresolved", "viewer"]);
+});
+
+test("collaborator search and mutation cannot select external, foreign, or other-category users", async () => {
+  const f = collaboratorFixture();
+  f.rows.get("task1").corCollaboratorUserIds = [];
+  const candidates = await f.call(tasks.searchTaskCorCollaboratorCandidates, { taskId: "task1", search: "Member" });
+  assert.deepEqual(candidates.map((c: any) => c.userId).sort(), ["category-a", "full", "viewer"]);
+  for (const userId of ["external", "foreign", "category-b", "deleted"]) {
+    await assert.rejects(f.call(tasks.setTaskCorCollaborators, { taskId: "task1", userIds: [userId] }), /sin acceso/);
+  }
+  assert.deepEqual(f.rows.get("task1").corCollaboratorUserIds, []);
+});
+
+test("edited and empty collaborator selections persist without being refilled from assignments", async () => {
+  const f = collaboratorFixture();
+  await f.call(tasks.setTaskCorCollaborators, { taskId: "task1", userIds: ["full", "full"] });
+  f.member("new-member");
+  let result = await f.call(tasks.getTaskCorCollaborators, { taskId: "task1" });
+  assert.deepEqual(result.collaborators.map((c: any) => c.userId), ["full"]);
+  assert.equal(result.customized, true);
+  await f.call(tasks.setTaskCorCollaborators, { taskId: "task1", userIds: [] });
+  result = await f.call(tasks.getTaskCorCollaborators, { taskId: "task1" });
+  assert.deepEqual(result.collaborators, []);
+  assert.deepEqual(await f.call(tasks.getTaskCollaboratorSelectionInternal, { taskId: "task1" }), { collaboratorUserIds: [], requiredCorUserIds: [] });
+});
+
+test("publishing collaborator resolution revalidates revoked access and category changes", async () => {
+  const f = collaboratorFixture();
+  await f.call(tasks.setTaskCorCollaborators, { taskId: "task1", userIds: ["category-a"] });
+  assert.deepEqual((await f.call(tasks.getTaskCollaboratorSelectionInternal, { taskId: "task1" })).collaboratorUserIds, ["category-a"]);
+  f.rows.get("task1").clientBrandId = "category2";
+  await assert.rejects(f.call(tasks.getTaskCollaboratorSelectionInternal, { taskId: "task1" }), /sin acceso/);
+  f.rows.get("task1").clientBrandId = "category1";
+  f.rows.delete("access-category-a");
+  const result = await f.call(tasks.getTaskCorCollaborators, { taskId: "task1" });
+  assert.equal(result.collaborators[0].hasClientAccess, false);
+  await assert.rejects(f.call(tasks.getTaskCollaboratorSelectionInternal, { taskId: "task1" }), /sin acceso/);
+  await f.call(tasks.setTaskCorCollaborators, { taskId: "task1", userIds: [] });
+});
+
+test("automatic defaults stay current until edited and surface missing COR mappings and collaborator limits", async () => {
+  const f = collaboratorFixture();
+  await assert.rejects(f.call(tasks.getTaskCollaboratorSelectionInternal, { taskId: "task1" }), /no resuelto/);
+  f.rows.delete("access-unresolved");
+  f.member("new-member");
+  const resolved = await f.call(tasks.getTaskCollaboratorSelectionInternal, { taskId: "task1" });
+  assert.ok(resolved.collaboratorUserIds.includes("new-member"));
+  for (let i = 0; i < 21; i++) f.member(`extra-${i}`);
+  await assert.rejects(f.call(tasks.getTaskCollaboratorSelectionInternal, { taskId: "task1" }), /máximo de 20/);
+});
+
+test("published tasks receive no assignment defaults and keep their stored collaborators and retry selection", async () => {
+  const f = collaboratorFixture();
+  for (const published of [{ corTaskId: "123", corSyncStatus: "error" }, { corTaskId: undefined, corSyncStatus: "synced" }]) {
+    Object.assign(f.rows.get("task1"), published);
+    delete f.rows.get("task1").corCollaboratorUserIds;
+    assert.deepEqual((await f.call(tasks.getTaskCorCollaborators, { taskId: "task1" })).collaborators, []);
+    assert.deepEqual((await f.call(tasks.getTaskCollaboratorSelectionInternal, { taskId: "task1" })).collaboratorUserIds, []);
+    f.rows.get("task1").corCollaboratorUserIds = ["foreign"];
+    assert.deepEqual((await f.call(tasks.getTaskCollaboratorSelectionInternal, { taskId: "task1" })).collaboratorUserIds, ["foreign"]);
+    await assert.rejects(f.call(tasks.setTaskCorCollaborators, { taskId: "task1", userIds: ["full"] }), /después de publicar/);
+  }
+  assert.equal(f.scheduled.length, 0);
+});
+
+
+test("users can remove automatic collaborators incrementally despite unresolved COR users or an oversized list", async () => {
+  const f = collaboratorFixture();
+  f.member("unresolved-two", "client1", undefined, false);
+  for (let i = 0; i < 21; i++) f.member(`extra-${i}`);
+  const result = await f.call(tasks.getTaskCorCollaborators, { taskId: "task1" });
+  const remaining = result.collaborators.map((c: any) => c.userId).filter((id: string) => id !== "unresolved");
+  await f.call(tasks.setTaskCorCollaborators, { taskId: "task1", userIds: remaining });
+  assert.deepEqual(f.rows.get("task1").corCollaboratorUserIds, remaining);
+  await assert.rejects(f.call(tasks.getTaskCollaboratorSelectionInternal, { taskId: "task1" }), /máximo de 20/);
+});
+
+test("multiple revoked collaborators can be removed individually but cannot be published or re-added", async () => {
+  const f = collaboratorFixture();
+  await f.call(tasks.setTaskCorCollaborators, { taskId: "task1", userIds: ["category-a", "full", "viewer"] });
+  f.rows.delete("access-category-a");
+  f.rows.delete("access-full");
+  f.rows.delete("duplicate-full");
+  await f.call(tasks.setTaskCorCollaborators, { taskId: "task1", userIds: ["full", "viewer"] });
+  await assert.rejects(f.call(tasks.getTaskCollaboratorSelectionInternal, { taskId: "task1" }), /sin acceso/);
+  await assert.rejects(f.call(tasks.setTaskCorCollaborators, { taskId: "task1", userIds: ["category-a", "full", "viewer"] }), /sin acceso/);
+  await f.call(tasks.setTaskCorCollaborators, { taskId: "task1", userIds: ["viewer"] });
+  assert.deepEqual((await f.call(tasks.getTaskCollaboratorSelectionInternal, { taskId: "task1" })).collaboratorUserIds, ["viewer"]);
+});
+
+test("external profile names appear in both comment views, notifications, history and email", async () => {
+  const f = notificationFixture();
+  f.rows.get("external1").name = "  Julia Pérez  ";
+  // Auth profiles may contain a different name or no name at all.
+  f.rows.get("user1").name = "Nombre desactualizado";
+  await f.post("named-comment");
+  const detail = () => f.call(panel.detail, { taskId: "task1" });
+  assert.equal((await detail()).comments[0].authorName, "Julia Pérez");
+  delete f.rows.get("user1").name;
+  f.as("internal1");
+  assert.equal((await detail()).comments[0].authorName, "Julia Pérez");
+  assert.equal((await f.call(tasks.listInternalTaskComments, { taskId: "task1" }))[0].author, "Julia Pérez");
+  assert.equal((await f.unread())[0].author, "Julia Pérez");
+  await notifyExternalTaskCreated(f.ctx, "task1" as any);
+  assert.equal((await f.call(taskNotifications.unread, {}))[0].author, "Julia Pérez");
+  const historyRows = (await f.call(history.list, { paginationOpts: { numItems: 10, cursor: null } })).page;
+  assert.equal(historyRows.length, 2);
+  assert.ok(historyRows.every((row: any) => row.author === "Julia Pérez"));
+  const row = [...f.rows.values()].find(r => r._table === "taskCreationNotifications" && r.userId === "internal1");
+  f.rows.get("internal1").email = "internal@example.com";
+  const env = { APP_URL: process.env.APP_URL, RESEND_API_KEY: process.env.RESEND_API_KEY };
+  try {
+    process.env.APP_URL = "https://app.example.com";
+    process.env.RESEND_API_KEY = "test-only";
+    const claim = await f.call(taskNotifications.claimEmail, { id: row._id });
+    const email = JSON.parse(claim.payload);
+    assert.ok(email.text.includes("Julia Pérez creó una nueva tarea."));
+    assert.ok(email.html.includes("Julia Pérez creó una nueva tarea."));
+    assert.ok(email.html.includes("<h2>Nueva tarea</h2>"));
+    assert.ok(!/usuario externo|tarea externa/i.test(email.html));
+  } finally {
+    for (const [key, value] of Object.entries(env)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; }
+  }
+  await f.post("internal-named-comment");
+  assert.ok((await detail()).comments.some((comment: any) => comment.authorName === "Interno"));
+  f.as("user1");
+  assert.ok((await detail()).comments.some((comment: any) => comment.authorName === "Interno"));
+  assert.equal((await f.unread())[0].author, "Interno");
+});
+
+test("three external users share brand tasks, comments and uploads while chats remain private", async () => {
+  const f = notificationFixture();
+  f.put("approvedExternalUsers", { _id: "external3", userId: "thirdExternal", name: "Tercera persona" });
+  f.put("clientUserAssignments", { _id: "assignment-third", userId: "thirdExternal", clientId: "client1", brandId: "brand1" });
+  f.rows.get("assignment-user1").brandId = "brand1";
+  f.rows.get("assignment-otherExternal").brandId = "brand1";
+  f.rows.get("external1").name = "Creadora";
+  f.put("chatThreads", { _id: "chat1", threadId: "thread1", userId: "user1" });
+  for (const id of ["user1", "otherExternal", "thirdExternal"]) {
+    f.as(id);
+    const board = await f.call(tasks.listMyExternalRequests, {});
+    assert.equal(board.length, 1); // Deduplicates matches across client, COR and brand indexes.
+    assert.equal(board[0].createdByName, "Creadora");
+    assert.equal(board[0].threadId, id === "user1" ? "thread1" : null);
+    const chat = await f.call(threads.getThread, { threadId: "thread1" });
+    assert.equal(Boolean(chat), id === "user1");
+    assert.ok(await f.call(tasks.getBoardDialogDetails, { taskId: "task1" }));
+    assert.equal(await f.call(panel.canAccessComments, { taskId: "task1" }), true);
+    f.upload(`file-${id}`, { userId: id });
+    await f.call(panel.submit, { taskId: "task1", key: `shared-${id}`, text: `Comentario de ${id}`, uploadIds: [`file-${id}`] });
+  }
+  const detail = await f.call(panel.detail, { taskId: "task1" });
+  assert.equal(detail.comments.length, 3);
+  assert.equal(detail.attachments.length, 3);
+  assert.equal(detail.comments.find((c: any) => c.own).authorName, "Tercera persona");
+  // Even a mismatched task/thread ownership must not reveal the chat link.
+  f.rows.get("task1").createdBy = "otherExternal";
+  f.as("user1");
+  assert.equal((await f.call(tasks.listMyExternalRequests, {}))[0].threadId, null);
+});
+
+test("external board enforces client and brand access on reads, comments and file uploads", async () => {
+  const f = notificationFixture();
+  f.as("otherExternal");
+  f.rows.get("assignment-otherExternal").brandId = "brand2";
+  const denied = async () => {
+    assert.deepEqual(await f.call(tasks.listMyExternalRequests, {}), []);
+    assert.equal(await f.call(tasks.getBoardDialogDetails, { taskId: "task1" }), null);
+    assert.equal(await f.call(panel.canAccessComments, { taskId: "task1" }), false);
+    await assert.rejects(f.call(panel.detail, { taskId: "task1" }), /acceso/);
+    await assert.rejects(f.post("forbidden"), /acceso/);
+    await assert.rejects(f.call(panel.prepareUpload, { taskId: "task1", key: "forbidden", filename: "file.pdf", mimeType: "application/pdf", size: 4 }), /acceso/);
+  };
+  await denied();
+  // A second matching assignment qualifies even if the first one doesn't.
+  f.put("clientUserAssignments", { _id: "matching-brand", userId: "otherExternal", clientId: "client1", brandId: "brand1" });
+  assert.equal((await f.call(tasks.listMyExternalRequests, {})).length, 1);
+  f.upload("ready-before-revocation", { userId: "otherExternal" });
+  f.rows.delete("matching-brand");
+  await assert.rejects(f.call(panel.submit, { taskId: "task1", key: "revoked", text: "File", uploadIds: ["ready-before-revocation"] }), /acceso/);
+  f.rows.get("assignment-otherExternal").clientId = "client2";
+  delete f.rows.get("assignment-otherExternal").brandId;
+  clientConfig.ui.externalRequestsClientIds = ["client1", "client2"];
+  await denied();
+  f.rows.get("assignment-otherExternal").clientId = "client1";
+  assert.equal((await f.call(tasks.listMyExternalRequests, {})).length, 1);
+  f.rows.get("task1").source = "internal";
+  await denied();
+  f.rows.get("task1").source = "external";
+  f.rows.get("task1").convexStatus = "deleted";
+  await denied();
+});
+
+test("external board includes legacy client and brand links without granting brand-only access to unbranded tasks", async () => {
+  const f = notificationFixture(); f.as("otherExternal");
+  const task = f.rows.get("task1");
+  delete task.clientId; delete task.corClientId;
+  assert.equal((await f.call(tasks.listMyExternalRequests, {})).length, 1); // Brand-only task.
+  delete task.clientBrandId;
+  task.corClientId = 99;
+  assert.equal((await f.call(tasks.listMyExternalRequests, {})).length, 1); // COR-only task.
+  delete task.corClientId;
+  task.clientId = "client1";
+  assert.equal((await f.call(tasks.listMyExternalRequests, {})).length, 1); // Client-only task.
+  f.rows.get("assignment-otherExternal").brandId = "brand1";
+  assert.deepEqual(await f.call(tasks.listMyExternalRequests, {}), []);
+  task.clientBrandId = "missing-brand";
+  delete f.rows.get("assignment-otherExternal").brandId;
+  assert.deepEqual(await f.call(tasks.listMyExternalRequests, {}), []);
 });

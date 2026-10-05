@@ -200,7 +200,7 @@ export default defineSchema({
     corDescriptionHash: v.optional(v.string()),
     lastLocalEditAt: v.optional(v.number()),
     // Selección final de colaboradores COR propia de la task.
-    // undefined = usar defaults del cliente (solo para tasks externas).
+    // undefined = calcular internos autorizados por cliente/categoría antes de publicar.
     // [] = selección explícitamente vacía.
     corCollaboratorUserIds: v.optional(v.array(v.id("users"))),
     // Indica que una publicación con colaboradores debe poder reanudarse sin
@@ -606,15 +606,6 @@ export default defineSchema({
   })
     .index("by_userId", ["userId"])
     .index("by_corUserId", ["corUserId"]),
-
-  // Configuración por cliente para publicaciones de tasks creadas por externos.
-  // Es independiente de los permisos internos de clientUserAssignments.
-  clientCorPublishingSettings: defineTable({
-    clientId: v.id("corClients"),
-    externalTaskCollaboratorUserIds: v.array(v.id("users")),
-    updatedAt: v.number(),
-    updatedBy: v.optional(v.id("users")),
-  }).index("by_client", ["clientId"]),
 
   // =====================================================
   // COR Clients — Clientes sincronizados desde COR

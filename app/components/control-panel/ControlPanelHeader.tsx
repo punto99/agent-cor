@@ -58,20 +58,6 @@ export function ControlPanelHeader({
           <div className="inline-flex h-9 rounded-lg border border-border bg-card p-1">
             <button
               type="button"
-              onClick={() => onViewModeChange("cards")}
-              className={`inline-flex cursor-pointer items-center gap-1.5 rounded-md px-2.5 text-xs font-medium transition-colors ${
-                viewMode === "cards"
-                  ? "bg-primary text-primary-foreground"
-                  : "text-muted-foreground hover:bg-accent hover:text-foreground"
-              }`}
-              title="Ver como tarjetas"
-              aria-pressed={viewMode === "cards"}
-            >
-              <LayoutGrid className="h-3.5 w-3.5" />
-              Cards
-            </button>
-            <button
-              type="button"
               onClick={() => onViewModeChange("board")}
               className={`inline-flex cursor-pointer items-center gap-1.5 rounded-md px-2.5 text-xs font-medium transition-colors ${
                 viewMode === "board"
@@ -83,6 +69,20 @@ export function ControlPanelHeader({
             >
               <Columns3 className="h-3.5 w-3.5" />
               Board
+            </button>
+            <button
+              type="button"
+              onClick={() => onViewModeChange("cards")}
+              className={`inline-flex cursor-pointer items-center gap-1.5 rounded-md px-2.5 text-xs font-medium transition-colors ${
+                viewMode === "cards"
+                  ? "bg-primary text-primary-foreground"
+                  : "text-muted-foreground hover:bg-accent hover:text-foreground"
+              }`}
+              title="Ver como tarjetas"
+              aria-pressed={viewMode === "cards"}
+            >
+              <LayoutGrid className="h-3.5 w-3.5" />
+              Cards
             </button>
           </div>
 

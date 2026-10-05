@@ -61,6 +61,7 @@ import type * as integrations_registry from "../integrations/registry.js";
 import type * as integrations_trelloProvider from "../integrations/trelloProvider.js";
 import type * as integrations_types from "../integrations/types.js";
 import type * as lib_analyticsAccess from "../lib/analyticsAccess.js";
+import type * as lib_authorName from "../lib/authorName.js";
 import type * as lib_boardLabel from "../lib/boardLabel.js";
 import type * as lib_briefFormat from "../lib/briefFormat.js";
 import type * as lib_commentNotifications from "../lib/commentNotifications.js";
@@ -173,6 +174,7 @@ declare const fullApi: ApiFromModules<{
   "integrations/trelloProvider": typeof integrations_trelloProvider;
   "integrations/types": typeof integrations_types;
   "lib/analyticsAccess": typeof lib_analyticsAccess;
+  "lib/authorName": typeof lib_authorName;
   "lib/boardLabel": typeof lib_boardLabel;
   "lib/briefFormat": typeof lib_briefFormat;
   "lib/commentNotifications": typeof lib_commentNotifications;

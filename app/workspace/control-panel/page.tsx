@@ -41,7 +41,7 @@ function ControlPanelContent() {
   const [clientSearch, setClientSearch] = useState("");
   const [selectedClientId, setSelectedClientId] = useState<string | null>(null);
   const [selectedBrandId, setSelectedBrandId] = useState<string | null>(null);
-  const [viewMode, setViewMode] = useState<ControlPanelView>("cards");
+  const [viewMode, setViewMode] = useState<ControlPanelView>("board");
   const [publicationTab, setPublicationTab] =
     useState<ControlPanelPublicationTab>("all");
   const linkedTaskClients = useQuery(
@@ -96,8 +96,8 @@ function ControlPanelContent() {
 
   useEffect(() => {
     if (preferences === undefined) return;
-    // Keep legacy list preferences stored, but show cards while that option is hidden.
-    setViewMode(preferences?.controlPanelView === "board" ? "board" : "cards");
+    // Default to board, including legacy list preferences while that option is hidden.
+    setViewMode(preferences?.controlPanelView === "cards" ? "cards" : "board");
   }, [preferences?.controlPanelView, preferences]);
 
   const handlePublishResult = (result: {

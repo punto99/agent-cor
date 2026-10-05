@@ -31,7 +31,7 @@ export const getUserPreferences = query({
       return {
         userId,
         theme: "light" as const,
-        controlPanelView: externalUser ? undefined : ("cards" as const),
+        controlPanelView: externalUser ? undefined : ("board" as const),
         updatedAt: Date.now(),
       };
     }
@@ -58,7 +58,7 @@ export const ensureDefaultPreferences = internalMutation({
     return await ctx.db.insert("preferences", {
       userId: args.userId,
       theme: "light",
-      controlPanelView: args.userKind === "internal" ? "cards" : undefined,
+      controlPanelView: args.userKind === "internal" ? "board" : undefined,
       updatedAt: Date.now(),
     });
   },
