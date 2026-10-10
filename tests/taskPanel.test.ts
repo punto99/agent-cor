@@ -720,8 +720,8 @@ test("COR leadership stays out, existing project PM wins and creator PM is the f
   assert.ok(displayed.collaborators.some((c: any) => c.userId === "worker"));
   assert.ok(!displayed.collaborators.some((c: any) => c.userId === "c-level"));
   assert.ok(!displayed.collaborators.some((c: any) => c.userId === "director"));
-  assert.ok(!displayed.collaborators.some((c: any) => c.userId === "project-manager"));
-  assert.ok(!displayed.collaborators.some((c: any) => c.userId === "pm-two"));
+  assert.ok(displayed.collaborators.some((c: any) => c.userId === "project-manager"));
+  assert.ok(displayed.collaborators.some((c: any) => c.userId === "pm-two"));
 
   const selection = await f.call(
     tasks.getTaskCollaboratorSelectionInternal,
@@ -759,14 +759,23 @@ test("COR leadership stays out, existing project PM wins and creator PM is the f
   assert.ok(candidates.some((c: any) => c.userId === "worker"));
   assert.ok(!candidates.some((c: any) => c.userId === "c-level"));
   assert.ok(!candidates.some((c: any) => c.userId === "director"));
-  assert.ok(!candidates.some((c: any) => c.userId === "project-manager"));
-  assert.ok(!candidates.some((c: any) => c.userId === "pm-two"));
+  assert.ok(candidates.some((c: any) => c.userId === "project-manager"));
+  assert.ok(candidates.some((c: any) => c.userId === "pm-two"));
+  await f.call(tasks.setTaskCorCollaborators, {
+    taskId: "task1",
+    userIds: ["project-manager"],
+  });
+  assert.deepEqual(
+    (await f.call(tasks.getTaskCorCollaborators, { taskId: "task1" }))
+      .collaborators.map((c: any) => c.userId),
+    ["project-manager"],
+  );
   await assert.rejects(
     f.call(tasks.setTaskCorCollaborators, {
       taskId: "task1",
       userIds: ["director"],
     }),
-    /C-Level, Director o Project Manager/,
+    /C-Level o Director/,
   );
 });
 

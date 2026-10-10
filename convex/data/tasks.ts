@@ -539,8 +539,7 @@ async function filterTaskCollaboratorUserIds(
       .unique();
     if (
       corUser?.corRoleId === COR_ROLE_C_LEVEL ||
-      corUser?.corRoleId === COR_ROLE_DIRECTOR ||
-      corUser?.corRoleId === COR_ROLE_PROJECT_MANAGER
+      corUser?.corRoleId === COR_ROLE_DIRECTOR
     ) {
       continue;
     }
@@ -591,11 +590,10 @@ async function validateTaskCollaboratorAccess(ctx: any, task: any, userIds: Id<"
       .unique();
     if (
       corUser?.corRoleId === COR_ROLE_C_LEVEL ||
-      corUser?.corRoleId === COR_ROLE_DIRECTOR ||
-      corUser?.corRoleId === COR_ROLE_PROJECT_MANAGER
+      corUser?.corRoleId === COR_ROLE_DIRECTOR
     ) {
       throw new Error(
-        "La selección contiene un C-Level, Director o Project Manager que no puede agregarse como colaborador de task.",
+        "La selección contiene un C-Level o Director que no puede agregarse a la asignación de la task.",
       );
     }
   }
@@ -3624,7 +3622,23 @@ export const setTaskCorCollaborators = mutation({
     if (!isRemovalOnly) {
       await validateTaskCollaboratorAccess(ctx, task, selectedUserIds);
     }
-    if (selectedUserIds.length > COR_MAX_TASK_COLLABORATORS && !isRemovalOnly) {
+    const selectedTaskCollaboratorCount = (
+      await Promise.all(
+        selectedUserIds.map(async (selectedUserId) => {
+          const corUser = await ctx.db
+            .query("corUsers")
+            .withIndex("by_userId", (q: any) =>
+              q.eq("userId", selectedUserId),
+            )
+            .unique();
+          return corUser?.corRoleId === COR_ROLE_PROJECT_MANAGER ? 0 : 1;
+        }),
+      )
+    ).reduce<number>((total, count) => total + count, 0);
+    if (
+      selectedTaskCollaboratorCount > COR_MAX_TASK_COLLABORATORS &&
+      !isRemovalOnly
+    ) {
       throw new Error(
         `La selección supera el máximo de ${COR_MAX_TASK_COLLABORATORS} colaboradores permitido por COR.`,
       );
