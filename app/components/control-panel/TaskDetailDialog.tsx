@@ -533,9 +533,10 @@ export function TaskDetailDialog({
   const collaboratorSyncStatus =
     (liveTask as any)?.corCollaboratorSyncStatus ??
     task.corCollaboratorSyncStatus;
-  const collaboratorSyncError =
-    (liveTask as any)?.corCollaboratorSyncError ??
-    task.corCollaboratorSyncError;
+  const collaboratorSyncSummary = useQuery(
+    api.data.tasks.getTaskCollaboratorSyncSummary,
+    collaboratorSyncStatus === "error" ? { taskId: task._id } : "skip",
+  );
   const isPublishedInCOR =
     syncStatus === "synced" ||
     Boolean((liveTask as any)?.corTaskId ?? task.corTaskId);
@@ -1476,14 +1477,42 @@ export function TaskDetailDialog({
                         El proyecto y la tarea están publicados en {toolName}.
                       </p>
                       <p className="mt-0.5 text-xs">
-                        No se pudieron sincronizar los colaboradores. Puedes
-                        volver a intentar únicamente este paso.
+                        {collaboratorSyncSummary?.rejected.length
+                          ? collaboratorSyncSummary.synced.length
+                            ? "Algunos colaboradores se asignaron correctamente y otros no pudieron agregarse."
+                            : "COR no pudo agregar los colaboradores seleccionados."
+                          : "No se pudo completar la sincronización de colaboradores."}
                       </p>
-                      {collaboratorSyncError && (
-                        <p className="mt-1 text-xs text-muted-foreground">
-                          {collaboratorSyncError}
+                      {Boolean(collaboratorSyncSummary?.synced.length) && (
+                        <p className="mt-1.5 text-xs text-muted-foreground">
+                          <span className="font-medium text-emerald-700 dark:text-emerald-400">
+                            Asignados en COR:
+                          </span>{" "}
+                          {collaboratorSyncSummary!.synced
+                            .map((user) => user.name)
+                            .join(", ")}
                         </p>
                       )}
+                      {Boolean(collaboratorSyncSummary?.rejected.length) && (
+                        <>
+                          <p className="mt-1 text-xs text-muted-foreground">
+                            <span className="font-medium text-amber-800 dark:text-amber-300">
+                              No agregados:
+                            </span>{" "}
+                            {collaboratorSyncSummary!.rejected
+                              .map((user) => user.name)
+                              .join(", ")}
+                          </p>
+                          <p className="mt-1 text-xs text-muted-foreground">
+                            COR no pudo validar estos usuarios para esta tarea y
+                            no indicó el motivo específico. Revisa que estén
+                            activos y habilitados para trabajar en este proyecto.
+                          </p>
+                        </>
+                      )}
+                      <p className="mt-1 text-xs">
+                        Puedes volver a intentar únicamente este paso.
+                      </p>
                     </div>
                   </div>
                   <button

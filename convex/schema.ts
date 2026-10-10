@@ -223,6 +223,10 @@ export default defineSchema({
       ),
     ),
     corCollaboratorSyncError: v.optional(v.string()),
+    // Resultado estructurado del último intento. El error técnico se conserva
+    // por separado para logs; estos IDs permiten mostrar un resumen legible.
+    corCollaboratorSyncedCorUserIds: v.optional(v.array(v.number())),
+    corCollaboratorRejectedCorUserIds: v.optional(v.array(v.number())),
     // === Sincronización con Trello (solo Convex; no se expone como custom fields) ===
     trelloCardId: v.optional(v.string()),
     trelloCardUrl: v.optional(v.string()),

@@ -59,6 +59,23 @@ const COR_ROLE_C_LEVEL = 1;
 const COR_ROLE_DIRECTOR = 2;
 const COR_ROLE_PROJECT_MANAGER = 3;
 
+type TaskCollaboratorSyncOutcome = {
+  added: number;
+  requested: number;
+  syncedCorUserIds: number[];
+  rejectedCorUserIds: number[];
+};
+
+class CollaboratorSyncError extends Error {
+  constructor(
+    message: string,
+    readonly outcome: TaskCollaboratorSyncOutcome,
+  ) {
+    super(message);
+    this.name = "CollaboratorSyncError";
+  }
+}
+
 type ChatUploadedFileInput = {
   fileId: string;
   storageId: string;
@@ -706,13 +723,25 @@ async function ensureTaskCollaborators(
   provider: ProjectManagementProvider,
   taskId: number,
   requiredCorUserIds: number[],
-) {
-  if (requiredCorUserIds.length === 0) return { added: 0, requested: 0 };
+): Promise<TaskCollaboratorSyncOutcome> {
+  if (requiredCorUserIds.length === 0) {
+    return {
+      added: 0,
+      requested: 0,
+      syncedCorUserIds: [],
+      rejectedCorUserIds: [],
+    };
+  }
   const current = await provider.getTaskCollaborators(taskId);
   const currentIds = new Set(current.map((collaborator) => collaborator.id));
   const missingIds = requiredCorUserIds.filter((id) => !currentIds.has(id));
   if (missingIds.length === 0) {
-    return { added: 0, requested: requiredCorUserIds.length };
+    return {
+      added: 0,
+      requested: requiredCorUserIds.length,
+      syncedCorUserIds: [...requiredCorUserIds],
+      rejectedCorUserIds: [],
+    };
   }
 
   const failedIds: number[] = [];
@@ -737,12 +766,19 @@ async function ensureTaskCollaborators(
       firstError ??= result.error;
     }
   }
+  const outcome = {
+    added,
+    requested: requiredCorUserIds.length,
+    syncedCorUserIds: requiredCorUserIds.filter((id) => currentIds.has(id)),
+    rejectedCorUserIds: failedIds,
+  };
   if (failedIds.length > 0) {
-    throw new Error(
+    throw new CollaboratorSyncError(
       `Usuarios COR rechazados en task ${taskId}: [${failedIds.join(", ")}]. ${firstError || "COR no informó el motivo."}`,
+      outcome,
     );
   }
-  return { added, requested: requiredCorUserIds.length };
+  return outcome;
 }
 
 async function ensurePublishedCollaborators(
@@ -778,7 +814,12 @@ async function ensurePublishedCollaborators(
     new Set([...requiredCorUserIds, ...taskProjectManagerIds]),
   );
   let projectSync = { added: 0, requested: taskCorUserIds.length };
-  let taskSync = { added: 0, requested: taskCorUserIds.length };
+  let taskSync: TaskCollaboratorSyncOutcome = {
+    added: 0,
+    requested: taskCorUserIds.length,
+    syncedCorUserIds: [],
+    rejectedCorUserIds: [],
+  };
 
   try {
     projectSync = await ensureProjectCollaborators(
@@ -823,11 +864,14 @@ async function ensurePublishedCollaborators(
       taskCorUserIds,
     );
   } catch (error) {
+    if (error instanceof CollaboratorSyncError) {
+      taskSync = error.outcome;
+    }
     errors.push(`Task: ${formatRetryError(error)}`);
   }
 
   if (errors.length > 0) {
-    throw new Error(errors.join(" | "));
+    throw new CollaboratorSyncError(errors.join(" | "), taskSync);
   }
 
   return { projectSync, taskSync };
@@ -3498,6 +3542,50 @@ export const getTaskCorCollaborators = query({
   },
 });
 
+/** Resultado legible del último intento de sincronización de colaboradores. */
+export const getTaskCollaboratorSyncSummary = query({
+  args: {
+    taskId: v.id("tasks"),
+  },
+  handler: async (ctx, args) => {
+    const viewerId = await getAuthUserId(ctx);
+    if (!viewerId) throw new Error("No autenticado");
+    if (await isExternalUser(ctx, viewerId)) return null;
+
+    const task = await ctx.db.get(args.taskId);
+    if (!task || task.convexStatus === "deleted") return null;
+    if (!(await hasTaskAccess(ctx, task, viewerId))) return null;
+
+    const describeUsers = async (corUserIds: number[]) => {
+      const users = [];
+      for (const corUserId of corUserIds) {
+        const corUser = await ctx.db
+          .query("corUsers")
+          .withIndex("by_corUserId", (q) => q.eq("corUserId", corUserId))
+          .unique();
+        const user = corUser ? await ctx.db.get(corUser.userId) : null;
+        users.push({
+          corUserId,
+          name: formatCollaboratorName(
+            user ? (user as Record<string, unknown>) : null,
+            corUser ?? undefined,
+          ),
+        });
+      }
+      return users;
+    };
+
+    return {
+      synced: await describeUsers(
+        task.corCollaboratorSyncedCorUserIds ?? [],
+      ),
+      rejected: await describeUsers(
+        task.corCollaboratorRejectedCorUserIds ?? [],
+      ),
+    };
+  },
+});
+
 /** Busca únicamente usuarios internos que ya tienen una correspondencia válida en COR. */
 export const searchTaskCorCollaboratorCandidates = query({
   args: {
@@ -5097,6 +5185,8 @@ export const retryTaskCollaboratorsAction = internalAction({
           taskId: args.taskId,
           status: "synced",
           pending: false,
+          syncedCorUserIds: syncResult.taskSync.syncedCorUserIds,
+          rejectedCorUserIds: [],
         },
       );
       console.log(
@@ -5104,6 +5194,9 @@ export const retryTaskCollaboratorsAction = internalAction({
       );
     } catch (error) {
       const errorMsg = formatRetryError(error);
+      const outcome = error instanceof CollaboratorSyncError
+        ? error.outcome
+        : undefined;
       await ctx.runMutation(
         internal.data.tasks.updateCollaboratorSyncStatus,
         {
@@ -5111,6 +5204,8 @@ export const retryTaskCollaboratorsAction = internalAction({
           status: "error",
           error: errorMsg,
           pending: true,
+          syncedCorUserIds: outcome?.syncedCorUserIds ?? [],
+          rejectedCorUserIds: outcome?.rejectedCorUserIds ?? [],
         },
       );
       console.error(
@@ -5836,6 +5931,8 @@ export const publishTaskToExternalAction = internalAction({
               taskId: args.taskId,
               status: "synced",
               pending: false,
+              syncedCorUserIds: syncResult.taskSync.syncedCorUserIds,
+              rejectedCorUserIds: [],
             },
           );
           console.log(
@@ -5843,6 +5940,9 @@ export const publishTaskToExternalAction = internalAction({
           );
         } catch (collaboratorError) {
           const collaboratorErrorMsg = formatRetryError(collaboratorError);
+          const outcome = collaboratorError instanceof CollaboratorSyncError
+            ? collaboratorError.outcome
+            : undefined;
           try {
             await ctx.runMutation(
               internal.data.tasks.updateCollaboratorSyncStatus,
@@ -5851,6 +5951,8 @@ export const publishTaskToExternalAction = internalAction({
                 status: "error",
                 error: collaboratorErrorMsg,
                 pending: true,
+                syncedCorUserIds: outcome?.syncedCorUserIds ?? [],
+                rejectedCorUserIds: outcome?.rejectedCorUserIds ?? [],
               },
             );
           } catch (statusError) {
@@ -6029,12 +6131,16 @@ export const updateCollaboratorSyncStatus = internalMutation({
     ),
     error: v.optional(v.string()),
     pending: v.boolean(),
+    syncedCorUserIds: v.optional(v.array(v.number())),
+    rejectedCorUserIds: v.optional(v.array(v.number())),
   },
   handler: async (ctx, args) => {
     await ctx.db.patch(args.taskId, {
       corCollaboratorSyncStatus: args.status,
       corCollaboratorSyncError: args.error,
       corExternalCollaboratorsPending: args.pending,
+      corCollaboratorSyncedCorUserIds: args.syncedCorUserIds,
+      corCollaboratorRejectedCorUserIds: args.rejectedCorUserIds,
     });
     console.log(
       `[UpdateCollaboratorSyncStatus] Task ${args.taskId} → ${args.status}`,

@@ -702,6 +702,24 @@ test("edited and empty collaborator selections persist without being refilled fr
   assert.deepEqual(await f.call(tasks.getTaskCollaboratorSelectionInternal, { taskId: "task1" }), { selectedUserIds: [], collaboratorUserIds: [], requiredCorUserIds: [], projectManagerCorUserIds: [], projectManagerCorUserId: undefined });
 });
 
+test("collaborator sync summary resolves accepted and rejected COR ids to readable names", async () => {
+  const f = collaboratorFixture();
+  f.member("accepted", "client1", "category1", true, 4, 701);
+  f.member("rejected", "client1", "category1", true, 4, 702);
+  f.rows.get("task1").corCollaboratorSyncStatus = "error";
+  f.rows.get("task1").corCollaboratorSyncedCorUserIds = [701];
+  f.rows.get("task1").corCollaboratorRejectedCorUserIds = [702];
+
+  const result = await f.call(tasks.getTaskCollaboratorSyncSummary, {
+    taskId: "task1",
+  });
+
+  assert.deepEqual(result, {
+    synced: [{ corUserId: 701, name: "Member accepted" }],
+    rejected: [{ corUserId: 702, name: "Member rejected" }],
+  });
+});
+
 test("COR leadership stays out, existing project PM wins and creator PM is the fallback", async () => {
   const f = collaboratorFixture();
   f.rows.delete("access-unresolved");
