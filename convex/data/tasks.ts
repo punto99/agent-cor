@@ -55,6 +55,9 @@ const MIN_PUBLISHABLE_DESCRIPTION_LENGTH = 40;
 const DESCRIPTION_MIN_REMAINING_RATIO = 0.35;
 const TRELLO_ATTACHMENT_SYNC_STALE_MS = 10 * 60 * 1000;
 const COR_MAX_TASK_COLLABORATORS = 20;
+const COR_ROLE_C_LEVEL = 1;
+const COR_ROLE_DIRECTOR = 2;
+const COR_ROLE_PROJECT_MANAGER = 3;
 
 type ChatUploadedFileInput = {
   fileId: string;
@@ -414,25 +417,48 @@ async function resolveCollaboratorUsersInCOR(
     return normalized;
   });
 
-  if (normalizedUserIds.length > COR_MAX_TASK_COLLABORATORS) {
+  const corUsersByUserId = new Map<string, any>();
+  for (const userId of normalizedUserIds) {
+    const corUser = await ctx.db
+      .query("corUsers")
+      .withIndex("by_userId", (q: any) => q.eq("userId", userId))
+      .unique();
+    corUsersByUserId.set(String(userId), corUser);
+  }
+  const prospectiveCollaboratorCount = normalizedUserIds.filter((userId) => {
+    const roleId = corUsersByUserId.get(String(userId))?.corRoleId;
+    return roleId !== COR_ROLE_C_LEVEL &&
+      roleId !== COR_ROLE_DIRECTOR &&
+      roleId !== COR_ROLE_PROJECT_MANAGER;
+  }).length;
+  if (prospectiveCollaboratorCount > COR_MAX_TASK_COLLABORATORS) {
     throw new Error(
       `La selección supera el máximo de ${COR_MAX_TASK_COLLABORATORS} colaboradores permitido por COR.`,
     );
   }
 
   const corUserIds = new Set<number>();
+  const collaboratorUserIds: Id<"users">[] = [];
+  const projectManagerCorUserIds = new Set<number>();
   for (const userId of normalizedUserIds) {
-    const [user, approvedExternalUser, corUser] = await Promise.all([
+    const [user, approvedExternalUser] = await Promise.all([
       ctx.db.get(userId),
       ctx.db
         .query("approvedExternalUsers")
         .withIndex("by_user", (q: any) => q.eq("userId", userId))
         .unique(),
-      ctx.db
-        .query("corUsers")
-        .withIndex("by_userId", (q: any) => q.eq("userId", userId))
-        .unique(),
     ]);
+    const corUser = corUsersByUserId.get(String(userId));
+    // C-Level y Directores pueden pertenecer al proyecto, pero no se envían
+    // como colaboradores de task. Tampoco deben bloquear la publicación si su
+    // perfil local quedó desactualizado.
+    if (
+      corUser?.corRoleId === COR_ROLE_C_LEVEL ||
+      corUser?.corRoleId === COR_ROLE_DIRECTOR
+    ) {
+      continue;
+    }
+
     if (!user || approvedExternalUser || !corUser) {
       throw new Error(
         `La selección contiene un usuario externo, inexistente o no resuelto en COR: ${userId}.`,
@@ -448,19 +474,28 @@ async function resolveCollaboratorUsersInCOR(
         `El email local de ${formatCollaboratorName(user as Record<string, unknown>, corUser)} no coincide con COR.`,
       );
     }
+    if (corUser.corRoleId === COR_ROLE_PROJECT_MANAGER) {
+      projectManagerCorUserIds.add(corUser.corUserId);
+      continue;
+    }
+
+    collaboratorUserIds.push(userId);
     corUserIds.add(corUser.corUserId);
   }
 
   return {
-    collaboratorUserIds: normalizedUserIds,
+    collaboratorUserIds,
     requiredCorUserIds: Array.from(corUserIds),
+    projectManagerCorUserIds: Array.from(projectManagerCorUserIds).sort(
+      (a, b) => a - b,
+    ),
   };
 }
 
 /** Internal users assigned to this client and, when restricted, this category.
  * Do not use hasTaskAccess's creator fallback for collaborator eligibility.
  */
-async function getEligibleTaskCollaboratorUserIds(ctx: any, task: any) {
+async function getEligibleTaskParticipantUserIds(ctx: any, task: any) {
   let clientId = task.clientId;
   if (task.clientBrandId) {
     const brand = await ctx.db.get(task.clientBrandId);
@@ -492,38 +527,166 @@ async function getEligibleTaskCollaboratorUserIds(ctx: any, task: any) {
   return Array.from(ids);
 }
 
+async function filterTaskCollaboratorUserIds(
+  ctx: any,
+  userIds: Id<"users">[],
+) {
+  const collaboratorIds: Id<"users">[] = [];
+  for (const userId of userIds) {
+    const corUser = await ctx.db
+      .query("corUsers")
+      .withIndex("by_userId", (q: any) => q.eq("userId", userId))
+      .unique();
+    if (
+      corUser?.corRoleId === COR_ROLE_C_LEVEL ||
+      corUser?.corRoleId === COR_ROLE_DIRECTOR ||
+      corUser?.corRoleId === COR_ROLE_PROJECT_MANAGER
+    ) {
+      continue;
+    }
+    collaboratorIds.push(userId);
+  }
+  return collaboratorIds;
+}
+
+async function getEligibleTaskCollaboratorUserIds(ctx: any, task: any) {
+  return await filterTaskCollaboratorUserIds(
+    ctx,
+    await getEligibleTaskParticipantUserIds(ctx, task),
+  );
+}
+
 function isTaskPublishedInCOR(task: any) {
   return Boolean(task.corTaskId) || task.corSyncStatus === "synced";
 }
 
-async function getTaskCollaboratorUserIdsForDisplay(ctx: any, task: any) {
+async function getTaskParticipantUserIds(ctx: any, task: any) {
   // Explicit selections (including an empty one) remain editable per task.
   if (task.corCollaboratorUserIds !== undefined) {
     return task.corCollaboratorUserIds as Id<"users">[];
   }
   // Never apply the new defaults retroactively to published tasks.
   if (isTaskPublishedInCOR(task)) return [] as Id<"users">[];
-  return await getEligibleTaskCollaboratorUserIds(ctx, task);
+  return await getEligibleTaskParticipantUserIds(ctx, task);
+}
+
+async function getTaskCollaboratorUserIdsForDisplay(ctx: any, task: any) {
+  return await filterTaskCollaboratorUserIds(
+    ctx,
+    await getTaskParticipantUserIds(ctx, task),
+  );
 }
 
 async function validateTaskCollaboratorAccess(ctx: any, task: any, userIds: Id<"users">[]) {
-  const eligibleIds = new Set(await getEligibleTaskCollaboratorUserIds(ctx, task));
+  const eligibleIds = new Set(await getEligibleTaskParticipantUserIds(ctx, task));
   for (const userId of userIds) {
     if (!eligibleIds.has(userId)) {
       throw new Error(
         "La selección contiene un usuario externo o sin acceso al cliente o categoría de esta tarea. Revisa los colaboradores antes de publicar.",
       );
     }
+    const corUser = await ctx.db
+      .query("corUsers")
+      .withIndex("by_userId", (q: any) => q.eq("userId", userId))
+      .unique();
+    if (
+      corUser?.corRoleId === COR_ROLE_C_LEVEL ||
+      corUser?.corRoleId === COR_ROLE_DIRECTOR ||
+      corUser?.corRoleId === COR_ROLE_PROJECT_MANAGER
+    ) {
+      throw new Error(
+        "La selección contiene un C-Level, Director o Project Manager que no puede agregarse como colaborador de task.",
+      );
+    }
   }
 }
 
 async function resolveTaskCollaboratorSelection(ctx: any, task: any) {
-  const userIds = await getTaskCollaboratorUserIdsForDisplay(ctx, task);
+  const userIds = await getTaskParticipantUserIds(ctx, task);
+  const resolved = await resolveCollaboratorUsersInCOR(ctx, userIds);
   // Preserve the existing manual retry behavior for already published tasks.
   if (!isTaskPublishedInCOR(task)) {
-    await validateTaskCollaboratorAccess(ctx, task, userIds);
+    await validateTaskCollaboratorAccess(
+      ctx,
+      task,
+      resolved.collaboratorUserIds,
+    );
   }
-  return await resolveCollaboratorUsersInCOR(ctx, userIds);
+
+  // El PM se deriva siempre de los permisos actuales del cliente, aunque la
+  // selección de colaboradores haya sido personalizada y no lo incluya.
+  const eligibleParticipantIds = await getEligibleTaskParticipantUserIds(
+    ctx,
+    task,
+  );
+  const projectManagerIds = new Set(resolved.projectManagerCorUserIds);
+  for (const userId of eligibleParticipantIds) {
+    const [user, corUser] = await Promise.all([
+      ctx.db.get(userId),
+      ctx.db
+        .query("corUsers")
+        .withIndex("by_userId", (q: any) => q.eq("userId", userId))
+        .unique(),
+    ]);
+    if (!user || corUser?.corRoleId !== COR_ROLE_PROJECT_MANAGER) continue;
+    const localEmail = normalizeCollaboratorEmail(
+      (user as Record<string, unknown>).email,
+    );
+    if (localEmail !== normalizeCollaboratorEmail(corUser.corEmail)) continue;
+    projectManagerIds.add(corUser.corUserId);
+  }
+
+  let creatorProjectManagerCorUserId: number | undefined;
+  const creatorUserId =
+    typeof task.createdBy === "string"
+      ? ctx.db.normalizeId("users", task.createdBy)
+      : null;
+  if (creatorUserId) {
+    const [creator, approvedExternalCreator, creatorCorUser] =
+      await Promise.all([
+        ctx.db.get(creatorUserId),
+        ctx.db
+          .query("approvedExternalUsers")
+          .withIndex("by_user", (q: any) => q.eq("userId", creatorUserId))
+          .unique(),
+        ctx.db
+          .query("corUsers")
+          .withIndex("by_userId", (q: any) => q.eq("userId", creatorUserId))
+          .unique(),
+      ]);
+    const creatorEmail = normalizeCollaboratorEmail(
+      (creator as Record<string, unknown> | null)?.email,
+    );
+    if (
+      creator &&
+      !approvedExternalCreator &&
+      creatorCorUser?.corRoleId === COR_ROLE_PROJECT_MANAGER &&
+      creatorEmail === normalizeCollaboratorEmail(creatorCorUser.corEmail)
+    ) {
+      creatorProjectManagerCorUserId = creatorCorUser.corUserId;
+      projectManagerIds.add(creatorCorUser.corUserId);
+    }
+  }
+
+  let currentProjectPmId: number | undefined;
+  if (task.projectId) {
+    const project = await ctx.db.get(task.projectId);
+    currentProjectPmId = project?.pmId;
+  }
+  const sortedProjectManagerIds = Array.from(projectManagerIds).sort(
+    (a, b) => a - b,
+  );
+  const projectManagerCorUserId =
+    currentProjectPmId ??
+    creatorProjectManagerCorUserId ??
+    sortedProjectManagerIds[0];
+
+  return {
+    collaboratorUserIds: resolved.collaboratorUserIds,
+    requiredCorUserIds: resolved.requiredCorUserIds,
+    projectManagerCorUserIds: sortedProjectManagerIds,
+    projectManagerCorUserId,
+  };
 }
 
 async function ensureProjectCollaborators(
@@ -537,11 +700,18 @@ async function ensureProjectCollaborators(
   const missingIds = requiredCorUserIds.filter((id) => !currentIds.has(id));
   if (missingIds.length === 0) return;
 
-  const result = await provider.addProjectCollaborators(projectId, missingIds);
-  if (!result.success) {
+  const failedIds: number[] = [];
+  let firstError: string | undefined;
+  for (const corUserId of missingIds) {
+    const result = await provider.addProjectCollaborators(projectId, [corUserId]);
+    if (!result.success) {
+      failedIds.push(corUserId);
+      firstError ??= result.error;
+    }
+  }
+  if (failedIds.length > 0) {
     throw new Error(
-      result.error ||
-        `No se pudieron agregar colaboradores al proyecto COR ${projectId}.`,
+      `Usuarios COR rechazados en proyecto ${projectId}: [${failedIds.join(", ")}]. ${firstError || "COR no informó el motivo."}`,
     );
   }
 }
@@ -557,18 +727,29 @@ async function ensureTaskCollaborators(
   const missingIds = requiredCorUserIds.filter((id) => !currentIds.has(id));
   if (missingIds.length === 0) return;
 
-  const finalIds = Array.from(new Set([...currentIds, ...requiredCorUserIds]));
-  if (finalIds.length > COR_MAX_TASK_COLLABORATORS) {
-    throw new Error(
-      `No se pueden agregar los colaboradores obligatorios: la task COR ${taskId} superaría el máximo de ${COR_MAX_TASK_COLLABORATORS}.`,
-    );
+  const failedIds: number[] = [];
+  let firstError: string | undefined;
+  for (const corUserId of missingIds) {
+    if (currentIds.size >= COR_MAX_TASK_COLLABORATORS) {
+      failedIds.push(corUserId);
+      firstError ??=
+        `La task alcanzó el máximo de ${COR_MAX_TASK_COLLABORATORS} colaboradores.`;
+      continue;
+    }
+    const result = await provider.setTaskCollaborators(taskId, [
+      ...currentIds,
+      corUserId,
+    ]);
+    if (result.success) {
+      currentIds.add(corUserId);
+    } else {
+      failedIds.push(corUserId);
+      firstError ??= result.error;
+    }
   }
-
-  const result = await provider.setTaskCollaborators(taskId, finalIds);
-  if (!result.success) {
+  if (failedIds.length > 0) {
     throw new Error(
-      result.error ||
-        `No se pudieron sincronizar colaboradores de la task COR ${taskId}.`,
+      `Usuarios COR rechazados en task ${taskId}: [${failedIds.join(", ")}]. ${firstError || "COR no informó el motivo."}`,
     );
   }
 }
@@ -578,13 +759,65 @@ async function ensurePublishedCollaborators(
   projectId: number,
   taskId: number,
   requiredCorUserIds: number[],
+  projectManagerCorUserId?: number,
+  projectManagerCorUserIds: number[] = [],
 ) {
   const errors: string[] = [];
+  let existingProjectPmId: number | undefined;
+  let projectPmWasChecked = projectManagerCorUserId === undefined;
+
+  if (projectManagerCorUserId !== undefined) {
+    try {
+      const project = await provider.getProject(projectId);
+      if (!project) {
+        throw new Error(`No se pudo leer el proyecto COR ${projectId}.`);
+      }
+      existingProjectPmId = project.pmId;
+      projectPmWasChecked = true;
+    } catch (error) {
+      errors.push(`PM proyecto: ${formatRetryError(error)}`);
+    }
+  }
+
+  const effectiveProjectPmId = existingProjectPmId ?? projectManagerCorUserId;
+  const additionalProjectManagerIds = projectManagerCorUserIds.filter(
+    (id) => id !== effectiveProjectPmId,
+  );
 
   try {
-    await ensureProjectCollaborators(provider, projectId, requiredCorUserIds);
+    await ensureProjectCollaborators(
+      provider,
+      projectId,
+      Array.from(
+        new Set([...requiredCorUserIds, ...additionalProjectManagerIds]),
+      ),
+    );
   } catch (error) {
     errors.push(`Proyecto: ${formatRetryError(error)}`);
+  }
+
+  // Un proyecto existente conserva su PM en COR. Solo se asigna uno nuevo
+  // cuando se pudo comprobar que el proyecto todavía no tiene pm_id.
+  if (
+    projectPmWasChecked &&
+    existingProjectPmId === undefined &&
+    projectManagerCorUserId !== undefined
+  ) {
+    try {
+      const result = await provider.updateProject(projectId, {
+        pmId: projectManagerCorUserId,
+      });
+      if (!result.success) {
+        throw new Error(
+          result.error ||
+            `No se pudo asignar el PM COR ${projectManagerCorUserId} al proyecto ${projectId}.`,
+        );
+      }
+    } catch (error) {
+      errors.push(
+        `PM COR ${projectManagerCorUserId}: ${formatRetryError(error)}`,
+      );
+    }
   }
 
   // Intentar también la task aunque COR rechace los colaboradores del proyecto.
@@ -4676,11 +4909,15 @@ export const retryTaskSync = mutation({
       task.corProjectId &&
       task.corTaskId
     ) {
-      await resolveTaskCollaboratorSelection(ctx, task);
+      const collaboratorSelection = await resolveTaskCollaboratorSelection(
+        ctx,
+        task,
+      );
       await ctx.db.patch(args.taskId, {
         corSyncStatus: "synced",
         corSyncAttempt: 0,
         corSyncError: undefined,
+        corCollaboratorUserIds: collaboratorSelection.collaboratorUserIds,
         corCollaboratorSyncStatus: "syncing",
         corCollaboratorSyncError: undefined,
       });
@@ -4782,8 +5019,12 @@ export const retryTaskCollaborators = mutation({
       );
     }
 
-    await resolveTaskCollaboratorSelection(ctx, task);
+    const collaboratorSelection = await resolveTaskCollaboratorSelection(
+      ctx,
+      task,
+    );
     await ctx.db.patch(args.taskId, {
+      corCollaboratorUserIds: collaboratorSelection.collaboratorUserIds,
       corCollaboratorSyncStatus: "syncing",
       corCollaboratorSyncError: undefined,
       corExternalCollaboratorsPending: true,
@@ -4831,6 +5072,8 @@ export const retryTaskCollaboratorsAction = internalAction({
         projectId,
         taskId,
         selection.requiredCorUserIds,
+        selection.projectManagerCorUserId,
+        selection.projectManagerCorUserIds,
       );
       await ctx.runMutation(
         internal.data.tasks.updateCollaboratorSyncStatus,
@@ -5108,7 +5351,8 @@ export const startPublishTaskToExternal = mutation({
       clientId: task.clientId ?? localClient._id,
     });
     const shouldManageCollaborators =
-      collaboratorSelection.requiredCorUserIds.length > 0;
+      collaboratorSelection.requiredCorUserIds.length > 0 ||
+      collaboratorSelection.projectManagerCorUserIds.length > 0;
 
     // Obtener el usuario directamente por su ID (ya autenticado por getAuthUserId)
     const user = await ctx.db.get(userId);
@@ -5362,7 +5606,9 @@ export const publishTaskToExternalAction = internalAction({
           },
         );
         localProjectDeliverables = localProject?.deliverables;
-        localProjectPmId = localProject?.pmId;
+        // El PM se resuelve por role COR y se sincroniza después, de forma
+        // independiente, para que un PM inválido no cancele la publicación.
+        localProjectPmId = undefined;
         localProjectBrandId = localProject?.brandId ?? task.brandId;
         localProjectProductId = localProject?.productId ?? task.productId;
 
@@ -5546,7 +5792,7 @@ export const publishTaskToExternalAction = internalAction({
 
       // La publicación principal ya terminó. Los colaboradores tienen un
       // estado independiente: un error aquí no revierte ni reintenta proyecto/task.
-      if (collaboratorPublicationPending && requiredCorUserIds.length > 0) {
+      if (collaboratorPublicationPending) {
         try {
           await ctx.runMutation(
             internal.data.tasks.updateCollaboratorSyncStatus,
@@ -5561,6 +5807,8 @@ export const publishTaskToExternalAction = internalAction({
             corProjectId,
             externalTask.id,
             requiredCorUserIds,
+            collaboratorSelection.projectManagerCorUserId,
+            collaboratorSelection.projectManagerCorUserIds,
           );
           await ctx.runMutation(
             internal.data.tasks.updateCollaboratorSyncStatus,
@@ -5594,22 +5842,6 @@ export const publishTaskToExternalAction = internalAction({
           console.error(
             "[PublishTask] ⚠️ Proyecto y task publicados; falló únicamente la sincronización de colaboradores:",
             collaboratorErrorMsg,
-          );
-        }
-      } else if (collaboratorPublicationPending) {
-        try {
-          await ctx.runMutation(
-            internal.data.tasks.updateCollaboratorSyncStatus,
-            {
-              taskId: args.taskId,
-              status: "synced",
-              pending: false,
-            },
-          );
-        } catch (statusError) {
-          console.error(
-            "[PublishTask] ⚠️ No se pudo cerrar el estado independiente de colaboradores:",
-            statusError,
           );
         }
       }

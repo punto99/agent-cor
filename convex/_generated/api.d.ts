@@ -77,6 +77,7 @@ import type * as lib_math from "../lib/math.js";
 import type * as lib_serverConfig from "../lib/serverConfig.js";
 import type * as lib_speechToText from "../lib/speechToText.js";
 import type * as lib_taskCreationNotifications from "../lib/taskCreationNotifications.js";
+import type * as lib_taskMentions from "../lib/taskMentions.js";
 import type * as lib_taskPanelComment from "../lib/taskPanelComment.js";
 import type * as lib_taskStatuses from "../lib/taskStatuses.js";
 import type * as lib_trelloCommentFormat from "../lib/trelloCommentFormat.js";
@@ -190,6 +191,7 @@ declare const fullApi: ApiFromModules<{
   "lib/serverConfig": typeof lib_serverConfig;
   "lib/speechToText": typeof lib_speechToText;
   "lib/taskCreationNotifications": typeof lib_taskCreationNotifications;
+  "lib/taskMentions": typeof lib_taskMentions;
   "lib/taskPanelComment": typeof lib_taskPanelComment;
   "lib/taskStatuses": typeof lib_taskStatuses;
   "lib/trelloCommentFormat": typeof lib_trelloCommentFormat;

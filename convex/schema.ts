@@ -9,10 +9,16 @@ export default defineSchema({
   commentNotifications: defineTable({
     userId: v.id("users"), taskId: v.id("tasks"), messageId: v.id("taskMessages"),
     read: v.boolean(), createdAt: v.number(),
+    kind: v.optional(v.literal("mention")),
+    emailState: v.optional(v.union(v.literal("pending"), v.literal("sending"), v.literal("sent"), v.literal("failed"), v.literal("cancelled"))),
+    attempts: v.optional(v.number()), nextAttemptAt: v.optional(v.number()), firstAttemptAt: v.optional(v.number()),
+    emailPayload: v.optional(v.string()), emailError: v.optional(v.string()),
+    resendId: v.optional(v.string()), emailSentAt: v.optional(v.number()),
   }).index("by_user_read", ["userId", "read"])
     .index("by_user_created", ["userId", "createdAt"])
     .index("by_user_task_read", ["userId", "taskId", "read"])
-    .index("by_user_message", ["userId", "messageId"]),
+    .index("by_user_message", ["userId", "messageId"])
+    .index("by_email_due", ["emailState", "nextAttemptAt"]),
 
   taskCreationNotifications: defineTable({
     userId: v.id("users"), taskId: v.id("tasks"), read: v.boolean(), createdAt: v.number(),
@@ -358,6 +364,7 @@ export default defineSchema({
     .index("by_task", ["taskId"]).index("by_next_check", ["nextCheckAt"]),
 
   taskMessages: defineTable({
+    mentionedUserIds: v.optional(v.array(v.id("users"))),
     userQuote: v.optional(v.string()),
     replyTo: v.optional(v.id("taskMessages")),
     panelEntryId: v.optional(v.id("taskPanelEntries")),

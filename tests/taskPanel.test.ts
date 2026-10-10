@@ -10,7 +10,7 @@ import * as history from "../convex/data/notificationHistory";
 import * as notifications from "../convex/data/commentNotifications";
 import * as taskNotifications from "../convex/data/taskCreationNotifications";
 import { notifyExternalTaskCreated, taskCreationEmail } from "../convex/lib/taskCreationNotifications";
-import { notifyTaskComment } from "../convex/lib/commentNotifications";
+import { notifyTaskComment, mentionEmail } from "../convex/lib/commentNotifications";
 import { clientConfig } from "../config/tenant.config";
 
 const originalRequestsClientIds = clientConfig.ui.externalRequestsClientIds;
@@ -58,7 +58,7 @@ function fixture() {
     },
   };
   const ctx: any = { db, auth: { getUserIdentity: async () => ({ subject: "user1|session" }) }, storage: { getUrl: async (id: string) => `https://files.example/${id}`, get: async () => new Blob(["test"], { type: "application/pdf" }) }, scheduler: { runAfter: async (...args: any[]) => { scheduled.push(args); } } };
-  const modules: any = { "data/taskPanel": panel, "data/taskPanelSync": sender, "data/tasks": tasks, "data/taskCreationNotifications": taskNotifications };
+  const modules: any = { "data/taskPanel": panel, "data/taskPanelSync": sender, "data/tasks": tasks, "data/taskCreationNotifications": taskNotifications, "data/commentNotifications": notifications };
   const run = async (ref: any, args: any) => { const [module, name] = getFunctionName(ref).split(":"); return modules[module][name]._handler(ctx, args); };
   ctx.runQuery = run; ctx.runMutation = run;
   const upload = (id = "upload1", patch: any = {}) => put("taskPanelUploads", { _id: id, taskId: "task1", userId: "user1", key: id, filename: `${id}.pdf`, mimeType: "application/pdf", size: 4, state: "ready", fileId: `file-${id}`, storageId: `storage-${id}`, createdAt: 1, ...patch });
@@ -634,10 +634,17 @@ test("multiple enabled clients preserve per-client assignment and notification a
 function collaboratorFixture() {
   const f = fixture();
   f.ctx.auth.getUserIdentity = async () => ({ subject: "viewer|session" });
-  const member = (id: string, clientId = "client1", brandId?: string, resolved = true) => {
+  const member = (
+    id: string,
+    clientId = "client1",
+    brandId?: string,
+    resolved = true,
+    corRoleId?: number,
+    corUserId = id.length + 100,
+  ) => {
     f.put("users", { _id: id, name: `Member ${id}`, email: `${id}@example.com` });
     f.put("clientUserAssignments", { _id: `access-${id}`, userId: id, clientId, brandId });
-    if (resolved) f.put("corUsers", { _id: `cor-${id}`, userId: id, corUserId: id.length + 100, corEmail: `${id}@example.com`, corFirstName: "Member", corLastName: id });
+    if (resolved) f.put("corUsers", { _id: `cor-${id}`, userId: id, corUserId, corEmail: `${id}@example.com`, corFirstName: "Member", corLastName: id, corRoleId });
   };
   member("viewer");
   member("full");
@@ -692,7 +699,75 @@ test("edited and empty collaborator selections persist without being refilled fr
   await f.call(tasks.setTaskCorCollaborators, { taskId: "task1", userIds: [] });
   result = await f.call(tasks.getTaskCorCollaborators, { taskId: "task1" });
   assert.deepEqual(result.collaborators, []);
-  assert.deepEqual(await f.call(tasks.getTaskCollaboratorSelectionInternal, { taskId: "task1" }), { collaboratorUserIds: [], requiredCorUserIds: [] });
+  assert.deepEqual(await f.call(tasks.getTaskCollaboratorSelectionInternal, { taskId: "task1" }), { collaboratorUserIds: [], requiredCorUserIds: [], projectManagerCorUserIds: [], projectManagerCorUserId: undefined });
+});
+
+test("COR leadership stays out, existing project PM wins and creator PM is the fallback", async () => {
+  const f = collaboratorFixture();
+  f.rows.delete("access-unresolved");
+  f.member("c-level", "client1", "category1", true, 1, 101);
+  f.member("director", "client1", "category1", true, 2, 201);
+  f.member("project-manager", "client1", "category1", true, 3, 303);
+  f.member("pm-two", "client1", "category1", true, 3, 302);
+  f.member("worker", "client1", "category1", true, 4, 401);
+  f.put("projects", { _id: "project1", pmId: 302 });
+  f.rows.get("task1").projectId = "project1";
+  f.rows.get("task1").createdBy = "project-manager";
+
+  const displayed = await f.call(tasks.getTaskCorCollaborators, {
+    taskId: "task1",
+  });
+  assert.ok(displayed.collaborators.some((c: any) => c.userId === "worker"));
+  assert.ok(!displayed.collaborators.some((c: any) => c.userId === "c-level"));
+  assert.ok(!displayed.collaborators.some((c: any) => c.userId === "director"));
+  assert.ok(!displayed.collaborators.some((c: any) => c.userId === "project-manager"));
+  assert.ok(!displayed.collaborators.some((c: any) => c.userId === "pm-two"));
+
+  const selection = await f.call(
+    tasks.getTaskCollaboratorSelectionInternal,
+    { taskId: "task1" },
+  );
+  assert.ok(selection.collaboratorUserIds.includes("worker"));
+  assert.ok(!selection.collaboratorUserIds.includes("c-level"));
+  assert.ok(!selection.collaboratorUserIds.includes("director"));
+  assert.ok(!selection.collaboratorUserIds.includes("project-manager"));
+  assert.ok(!selection.collaboratorUserIds.includes("pm-two"));
+  assert.deepEqual(selection.projectManagerCorUserIds, [302, 303]);
+  assert.equal(selection.projectManagerCorUserId, 302);
+
+  // Sin PM previo, el creador role 3 pasa a ser el PM principal.
+  delete f.rows.get("project1").pmId;
+  const creatorPmSelection = await f.call(
+    tasks.getTaskCollaboratorSelectionInternal,
+    { taskId: "task1" },
+  );
+  assert.equal(creatorPmSelection.projectManagerCorUserId, 303);
+
+  // Si quien crea es colaborador y no hay PM previo, se elige otro role 3.
+  f.rows.get("task1").createdBy = "worker";
+  const collaboratorCreatorSelection = await f.call(
+    tasks.getTaskCollaboratorSelectionInternal,
+    { taskId: "task1" },
+  );
+  assert.equal(collaboratorCreatorSelection.projectManagerCorUserId, 302);
+
+  f.rows.get("task1").corCollaboratorUserIds = [];
+  const candidates = await f.call(
+    tasks.searchTaskCorCollaboratorCandidates,
+    { taskId: "task1", search: "Member" },
+  );
+  assert.ok(candidates.some((c: any) => c.userId === "worker"));
+  assert.ok(!candidates.some((c: any) => c.userId === "c-level"));
+  assert.ok(!candidates.some((c: any) => c.userId === "director"));
+  assert.ok(!candidates.some((c: any) => c.userId === "project-manager"));
+  assert.ok(!candidates.some((c: any) => c.userId === "pm-two"));
+  await assert.rejects(
+    f.call(tasks.setTaskCorCollaborators, {
+      taskId: "task1",
+      userIds: ["director"],
+    }),
+    /C-Level, Director o Project Manager/,
+  );
 });
 
 test("publishing collaborator resolution revalidates revoked access and category changes", async () => {
@@ -878,4 +953,179 @@ test("external board includes legacy client and brand links without granting bra
   task.clientBrandId = "missing-brand";
   delete f.rows.get("assignment-otherExternal").brandId;
   assert.deepEqual(await f.call(tasks.listMyExternalRequests, {}), []);
+});
+
+test("mention candidates are restricted to this client and brand, including inherited subbrands", async () => {
+  const f = fixture();
+  f.put("clientBrands", { _id: "brand1", clientId: "client1" });
+  f.put("subBrands", { _id: "sub1", clientBrandId: "brand1" });
+  f.rows.get("task1").clientBrandId = "brand1";
+  f.rows.get("task1").subBrandId = "sub1";
+  for (const [id, clientId, brandId] of [["internal1", "client1", "brand1"], ["otherBrand", "client1", "brand2"], ["otherClient", "client2", undefined], ["wholeClient", "client1", undefined]]) {
+    f.put("users", { _id: id, name: id });
+    f.put("clientUserAssignments", { _id: `a-${id}`, userId: id, clientId, brandId });
+  }
+  f.put("users", { _id: "user1", name: "External" });
+  const people = await f.call(panel.mentionUsers, { taskId: "task1" });
+  assert.deepEqual(people.map((p: any) => p.id).sort(), ["internal1", "user1", "wholeClient"]);
+  const args = { taskId: "task1", key: "mention", text: "Hola {{task-panel-mention:internal1}}", uploadIds: [] };
+  const entryId = await f.call(panel.submit, args);
+  assert.equal(await f.call(panel.submit, args), entryId);
+  const message = f.rows.get(f.rows.get(entryId).messageId);
+  assert.deepEqual(message.mentionedUserIds, ["internal1"]);
+  const sync = await f.call(panel.syncContext, { entryId });
+  assert.equal(sync.message.message, "Hola @internal1");
+  await assert.rejects(f.call(panel.submit, { ...args, key: "forged", text: "{{task-panel-mention:otherBrand}}" }));
+  f.rows.delete("a-internal1");
+  await assert.rejects(f.call(panel.submit, { ...args, key: "revoked" }));
+  clientConfig.ui.externalRequestsClientIds = [];
+  await assert.rejects(f.call(panel.mentionUsers, { taskId: "task1" }));
+});
+
+async function mentionNotificationFixture() {
+  const f = notificationFixture();
+  for (const id of ["internal1", "internal2", "user1", "otherExternal"]) f.rows.get(id).email = `${id}@example.com`;
+  f.as("internal1");
+  const args = { taskId: "task1", key: "mentions", text: "Revisar {{task-panel-mention:internal2}} y {{task-panel-mention:otherExternal}}. Otra vez {{task-panel-mention:internal2}}. {{task-panel-mention:internal1}}", uploadIds: [] };
+  const entryId = await f.call(panel.submit, args);
+  const messageId = f.rows.get(entryId).messageId;
+  const all = () => [...f.rows.values()].filter(r => r._table === "commentNotifications");
+  return { ...f, args, messageId, all, mentioned: (id: string) => all().find(r => r.userId === id) };
+}
+
+test("mentions notify internal and external recipients once, with one email only for selected users", async () => {
+  const f = await mentionNotificationFixture();
+  await f.call(panel.submit, f.args);
+  await notifyTaskComment(f.ctx, f.messageId);
+  assert.equal(f.all().length, 3);
+  assert.equal(f.mentioned("internal1"), undefined); // no self-notification
+  for (const id of ["internal2", "otherExternal"]) {
+    const row = f.mentioned(id);
+    assert.equal(row.kind, "mention"); assert.equal(row.emailState, "pending");
+    f.as(id);
+    const page = await f.call(history.list, { paginationOpts: { numItems: 20, cursor: null } });
+    assert.equal(page.page[0].kind, "mention");
+    assert.equal(page.page[0].external, id === "otherExternal");
+    assert.equal((await f.unread())[0].count, 1);
+    await f.call(notifications.markRead, { taskId: "task1", messageIds: [f.messageId] });
+    assert.deepEqual(await f.unread(), []);
+  }
+  assert.equal(f.mentioned("user1").kind, undefined);
+  assert.equal(f.mentioned("user1").emailState, undefined);
+  assert.equal(await f.call(notifications.claimEmail, { id: f.mentioned("user1")._id }), null);
+});
+
+test("plain text @names and unselected email addresses never queue mention emails", async () => {
+  const f = notificationFixture(); f.as("internal1");
+  await f.call(panel.submit, { taskId: "task1", key: "plain", text: "@Colega correo@example.com", uploadIds: [] });
+  assert.ok([...f.rows.values()].filter(r => r._table === "commentNotifications").every(r => !r.emailState && !r.kind));
+});
+
+test("revocation, brand scope, disabled feature, hidden comments and removed mentions suppress display and email", async () => {
+  const cases: ((f: Awaited<ReturnType<typeof mentionNotificationFixture>>) => void)[] = [
+    f => { f.rows.delete("assignment-otherExternal"); },
+    f => { f.rows.get("assignment-otherExternal").brandId = "brand2"; },
+    () => { clientConfig.ui.externalRequestsClientIds = []; },
+    f => { f.rows.get(f.messageId).source = "internal"; },
+    f => { f.rows.get(f.messageId).mentionedUserIds = []; },
+    f => { f.rows.delete(f.messageId); },
+    f => { f.rows.get("task1").source = "internal"; },
+    f => { f.rows.get("task1").convexStatus = "deleted"; },
+    f => { f.rows.get("task1").convexStatus = "archived"; },
+    f => { f.put("taskMessages", { _id: "hiddenParent", taskId: "task1", source: "internal" }); f.rows.get(f.messageId).replyTo = "hiddenParent"; },
+  ];
+  for (const change of cases) {
+    clientConfig.ui.externalRequestsClientIds = ["client1"];
+    const f = await mentionNotificationFixture(); const row = f.mentioned("otherExternal");
+    change(f); f.as("otherExternal");
+    assert.deepEqual(await f.unread(), []);
+    const page = await f.call(history.list, { paginationOpts: { numItems: 20, cursor: null } });
+    assert.deepEqual(page.page, []);
+    await f.call(notifications.markRead, { taskId: "task1", messageIds: [f.messageId] });
+    assert.equal(row.read, false);
+    assert.equal(await f.call(notifications.claimEmail, { id: row._id }), null);
+    assert.equal(row.emailState, "cancelled");
+  }
+});
+
+test("mention emails retry idempotently with leases, route by recipient, and stop on access revocation", async () => {
+  const env = { APP_URL: process.env.APP_URL, RESEND_API_KEY: process.env.RESEND_API_KEY };
+  const originalFetch = globalThis.fetch; const calls: any[] = [];
+  try {
+    process.env.APP_URL = "https://app.example.com"; process.env.RESEND_API_KEY = "test-only";
+    globalThis.fetch = (async (_url: any, init: any) => { calls.push(init); return new Response(JSON.stringify(calls.length === 1 ? { name: "rate_limit_exceeded" } : { id: "mention-email" }), { status: calls.length === 1 ? 429 : 200 }); }) as typeof fetch;
+    const f = await mentionNotificationFixture(); const row = f.mentioned("otherExternal");
+    await f.call(notifications.sweep, {});
+    assert.ok(f.scheduled.some(args => getFunctionName(args[1]) === "data/commentNotifications:sendEmail" && args[2].id === row._id));
+    await f.call(notifications.sendEmail, { id: row._id });
+    assert.equal(row.emailState, "pending");
+    await f.call(notifications.sendEmail, { id: row._id }); assert.equal(calls.length, 1);
+    row.nextAttemptAt = 0;
+    await f.call(notifications.sendEmail, { id: row._id });
+    assert.equal(row.emailState, "sent");
+    assert.equal(calls[0].body, calls[1].body);
+    assert.equal(calls[0].headers["Idempotency-Key"], calls[1].headers["Idempotency-Key"]);
+    const payload = JSON.parse(calls[0].body);
+    assert.deepEqual(payload.to, ["otherExternal@example.com"]);
+    assert.match(payload.text, /Revisar @Colega/);
+    assert.match(payload.text, /\/workspace\/requests\?taskId=task1&tab=comments/);
+    await f.call(notifications.sendEmail, { id: row._id }); assert.equal(calls.length, 2);
+    const internalRow = f.mentioned("internal2");
+    const claim = await f.call(notifications.claimEmail, { id: internalRow._id });
+    assert.match(JSON.parse(claim.payload).text, /\/workspace\/control-panel\?taskId=task1&tab=comments/);
+    assert.equal(await f.call(notifications.claimEmail, { id: internalRow._id }), null);
+    await f.call(notifications.finishEmail, { id: internalRow._id, attempt: claim.attempt + 1, resendId: "stale", retry: false });
+    assert.equal(internalRow.emailState, "sending");
+    f.rows.delete("assignment-internal2"); internalRow.nextAttemptAt = 0;
+    await f.call(notifications.sendEmail, { id: internalRow._id });
+    assert.equal(internalRow.emailState, "cancelled"); assert.equal(calls.length, 2);
+  } finally {
+    globalThis.fetch = originalFetch;
+    for (const [key, value] of Object.entries(env)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; }
+  }
+});
+
+test("mention email escapes content and offers an authenticated task link", () => {
+  const args = { from: "sender@example.com", to: "recipient@example.com", baseUrl: "https://app.example.com", taskId: "task1", title: "<script>bad</script>\r\nTitle", author: "Name <img>", comment: "**Revisar** [@Persona](#mention-user) <script>bad</script> [bad](javascript:alert) ![file](https://files.example/a)", quote: "<img src=x>", external: true };
+  const email = mentionEmail(args);
+  assert.ok(!email.html.includes("<script>")); assert.ok(!email.html.includes("<img"));
+  assert.ok(!email.html.includes('href="javascript:')); assert.ok(!email.html.includes("#mention-"));
+  assert.match(email.html, /<strong>Revisar<\/strong>/); assert.match(email.html, /&lt;script&gt;/);
+  assert.match(email.html, />Ver tarea<\/a>/); assert.ok(!/[\r\n]/.test(email.subject));
+  assert.throws(() => mentionEmail({ ...args, baseUrl: "http://app.example.com" }));
+});
+
+test("mention email configuration, changed recipient and retry expiry are handled without delivery", async () => {
+  const env = { APP_URL: process.env.APP_URL, RESEND_API_KEY: process.env.RESEND_API_KEY };
+  try {
+    process.env.RESEND_API_KEY = "test-only"; process.env.APP_URL = "http://app.example.com";
+    const f = await mentionNotificationFixture(); const row = f.mentioned("internal2");
+    assert.equal(await f.call(notifications.claimEmail, { id: row._id }), null);
+    assert.equal(row.emailState, "pending"); assert.equal(row.attempts, 0);
+    process.env.APP_URL = "https://app.example.com"; row.nextAttemptAt = 0;
+    assert.ok(await f.call(notifications.claimEmail, { id: row._id }));
+    row.nextAttemptAt = 0; f.rows.get("internal2").email = "changed@example.com";
+    assert.equal(await f.call(notifications.claimEmail, { id: row._id }), null);
+    assert.equal(row.emailState, "cancelled");
+    const external = f.mentioned("otherExternal");
+    external.firstAttemptAt = Date.now() - 23 * 60 * 60 * 1000;
+    assert.equal(await f.call(notifications.claimEmail, { id: external._id }), null);
+    assert.equal(external.emailState, "failed");
+  } finally {
+    for (const [key, value] of Object.entries(env)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; }
+  }
+});
+
+test("a mention in a reply notifies the selected recipient and does not revive historical emails", async () => {
+  const f = notificationFixture(); f.as("user1");
+  const parentEntry = await f.post("parent");
+  const parentId = f.rows.get(parentEntry).messageId;
+  await f.call(panel.submit, { taskId: "task1", key: "reply", text: "{{task-panel-mention:otherExternal}} revisá esto", uploadIds: [], replyTo: parentId });
+  const row = [...f.rows.values()].find(r => r._table === "commentNotifications" && r.userId === "otherExternal");
+  assert.equal(row.kind, "mention"); assert.equal(row.emailState, "pending");
+  assert.equal(f.rows.get(row.messageId).replyTo, parentId);
+  f.put("commentNotifications", { _id: "legacy", userId: "internal2", taskId: "task1", messageId: "oldMention", read: false, createdAt: 0 });
+  f.put("taskMessages", { _id: "oldMention", taskId: "task1", source: "external_panel", userId: "user1", message: "Old", mentionedUserIds: ["internal2"] });
+  await notifyTaskComment(f.ctx, "oldMention" as any);
+  assert.equal(f.rows.get("legacy").emailState, undefined);
 });

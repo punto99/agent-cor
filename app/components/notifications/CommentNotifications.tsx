@@ -42,7 +42,7 @@ export function CommentNotificationBell() {
       <div className="max-h-[60dvh] overflow-y-auto">
         {status === "LoadingFirstPage" ? <p role="status" className="p-4 text-sm">Cargando…</p> : rows.length ? rows.map(row => <Link key={row.id} href={`${row.external ? "/workspace/requests" : "/workspace/control-panel"}?taskId=${encodeURIComponent(row.taskId)}&tab=${row.kind === "task" ? "task" : "comments"}`} onClick={() => setOpen(false)} className={`block border-b border-border p-4 last:border-0 hover:bg-muted focus-visible:outline-2 focus-visible:outline-ring ${row.read ? "" : "bg-[#E9F2FF] dark:bg-blue-950/30"}`}>
           <span className="flex items-start gap-2 text-sm font-semibold">{!row.read && <span aria-label="No leída" className="mt-1.5 h-2 w-2 shrink-0 rounded-full bg-[#0C66E4]" />}{row.title}</span>
-          <span className="mt-1 block text-xs text-muted-foreground">{row.kind === "task" ? `${row.author} creó una nueva tarea` : `${row.author} comentó`}</span>
+          <span className="mt-1 block text-xs text-muted-foreground">{row.kind === "task" ? `${row.author} creó una nueva tarea` : row.kind === "mention" ? `${row.author} te mencionó en un comentario` : `${row.author} comentó`}</span>
           {row.context && <span className="mt-1 block text-xs text-muted-foreground">{row.context}</span>}
           <time className="mt-1 block text-xs text-muted-foreground" dateTime={new Date(row.createdAt).toISOString()}>{new Date(row.createdAt).toLocaleString("es", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}</time>
         </Link>) : <p className="p-5 text-sm text-muted-foreground">No tenés notificaciones.</p>}

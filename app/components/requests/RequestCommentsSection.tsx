@@ -26,7 +26,7 @@ function CommentComposer({ taskId, replyTo, onDone }: {
     }
   }} className={styles.composer}>
     {replyTo && <p className="mb-2 text-xs text-muted-foreground">Responder a {replyTo.own ? "tu comentario" : replyTo.authorName || "este comentario"}</p>}
-    <CommentEditor key={editorKey} disabled={submission.busy} onChange={(value, selected) => { setText(value); setFiles(selected); }} footer={<div className={styles.footer}>
+    <CommentEditor taskId={taskId} key={editorKey} disabled={submission.busy} onChange={(value, selected) => { setText(value); setFiles(selected); }} footer={<div className={styles.footer}>
       <Button type="submit" size="sm" disabled={submission.busy || !text.trim() || text.length > 10000}>
         {submission.busy && <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />}
         {submission.busy ? "Enviando…" : replyTo ? "Responder" : "Comentar"}
@@ -52,7 +52,7 @@ function CommentContent({ comment }: { comment: Comment }) {
         <time dateTime={date.toISOString()} title={date.toLocaleString("es")} className={styles.time}>{date.toLocaleDateString("es")} · {date.toLocaleTimeString("es", { hour: "2-digit", minute: "2-digit" })}</time>
         {comment.isClient && <span className={styles.client}>CLIENTE</span>}
       </div>
-      <TaskCommentBody text={comment.text} quote={comment.quote} />
+      <TaskCommentBody text={comment.text} quote={comment.quote} mentionedUserIds={comment.mentionedUserIds} />
     </div>
   </div>;
 }

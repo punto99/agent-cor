@@ -26,9 +26,9 @@ export const list = query({
         if (!task) return null;
         if ("messageId" in row) {
           const message = await ctx.db.get(row.messageId);
-          if (!message || !(await canReceiveComment(ctx, userId, task, message))) return null;
+          if (!message || !(await canReceiveComment(ctx, userId, task, message, row.kind))) return null;
           const author = await getAuthorName(ctx, message.userId, message.source === "trello" ? "Trello" : message.source === "cor" ? "COR" : "Autor sin nombre");
-          return { id: row._id, taskId: task._id, title: task.title, kind: "comment" as const, author, external, read: row.read, createdAt: row.createdAt, context: "" };
+          return { id: row._id, taskId: task._id, title: task.title, kind: row.kind ?? "comment" as const, author, external, read: row.read, createdAt: row.createdAt, context: "" };
         }
         if (!(await canReceiveTaskCreation(ctx, userId, task))) return null;
         const creator = task.createdBy ? ctx.db.normalizeId("users", task.createdBy) : null;

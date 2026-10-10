@@ -4,6 +4,7 @@ export function serializeComment(doc: JSONContent, fileIds: string[]): string {
   function render(node: JSONContent): string {
     const children = () => (node.content ?? []).map(render).join("");
     if (node.type === "draftFile") return `\n\n{{task-panel-file:${fileIds.indexOf(node.attrs?.fileId)}}}\n\n`;
+    if (node.type === "mention") return `{{task-panel-mention:${node.attrs?.userId}}}`;
     if (node.type === "text") {
       let text = (node.text ?? "").replace(/[\\`*_{}\[\]<>!#]/g, "\\$&");
       for (const mark of node.marks ?? []) {

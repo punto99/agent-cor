@@ -1,4 +1,5 @@
 "use client";
+import { MentionLabel } from "./comment-editor/Mention";
 import { useState } from "react";
 import { FileText } from "lucide-react";
 import styles from "./Comments.module.css";
@@ -36,7 +37,7 @@ function AttachmentCard({ file, source, name }: { file?: TaskMediaFile; source: 
     <span className="min-w-0 pr-2"><span className="block truncate text-xs font-medium text-foreground">{filename}</span><span className="mt-1 block font-mono text-[10px] tracking-wide text-muted-foreground">{failed ? "No disponible" : !url ? "Cargando…" : [extension, size].filter(Boolean).join(" · ")}</span></span>
   </a>;
 }
-export function TaskCommentBody({ text, quote }: { text: string; quote?: string }) {
+export function TaskCommentBody({ text, quote, mentionedUserIds = [] }: { text: string; quote?: string; mentionedUserIds?: string[] }) {
   const { find } = useTaskMedia();
   const attachments: { file?: TaskMediaFile; source: string; name: string }[] = [];
   const body = text.replace(/!?\[([^\]]*)\]\((https?:\/\/[^\s)]+)\)/g, (match, name: string, source: string) => {
@@ -48,7 +49,7 @@ export function TaskCommentBody({ text, quote }: { text: string; quote?: string 
   return <div className="break-words text-sm leading-relaxed [&_p]:whitespace-pre-wrap [&_ul]:list-disc [&_ul]:pl-4 [&_ol]:list-decimal [&_ol]:pl-4">
     <ReactMarkdown skipHtml components={{
       img: ({ src, alt }) => <CommentImage source={typeof src === "string" ? src : ""} alt={alt ?? "Imagen adjunta"} />,
-      a: ({ children, href }) => { const file = href ? find(href) : undefined; return file ? <CommentAttachmentLink file={file}>{children}</CommentAttachmentLink> : <a className="text-primary underline" href={href} target="_blank" rel="noopener noreferrer">{children}</a>; },
+      a: ({ children, href }) => { if (href?.startsWith("#mention-") && mentionedUserIds.includes(href.slice("#mention-".length))) return <MentionLabel name={String(children).replace(/^@/, "")} />; const file = href ? find(href) : undefined; return file ? <CommentAttachmentLink file={file}>{children}</CommentAttachmentLink> : <a className="text-primary underline" href={href} target="_blank" rel="noopener noreferrer">{children}</a>; },
     }}>{body}</ReactMarkdown>
     {quote && <blockquote className={styles.quote}>“{quote}”</blockquote>}
     {attachments.length > 0 && <div className="flex flex-wrap gap-x-2">{attachments.map(item => <AttachmentCard key={item.source} {...item} />)}</div>}

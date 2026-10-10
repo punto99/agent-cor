@@ -65,6 +65,7 @@ export interface ExternalProject {
   deliverables?: number;
   status?: string;
   estimatedTime?: number;
+  pmId?: number;
 }
 
 /** Task tal como existe en el sistema externo */

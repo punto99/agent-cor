@@ -278,6 +278,7 @@ function mapProjectFromCOR(project: Record<string, unknown>): ExternalProject {
     deliverables: parseDeliverablesFromCOR(project.deliverables),
     status: project.status as string | undefined,
     estimatedTime: project.estimated_time as number | undefined,
+    pmId: parsePositiveInteger(project.pm_id ?? (project.pm as any)?.id),
   };
 }
 
