@@ -438,6 +438,7 @@ async function resolveCollaboratorUsersInCOR(
   }
 
   const corUserIds = new Set<number>();
+  const selectedUserIds: Id<"users">[] = [];
   const collaboratorUserIds: Id<"users">[] = [];
   const projectManagerCorUserIds = new Set<number>();
   for (const userId of normalizedUserIds) {
@@ -474,6 +475,7 @@ async function resolveCollaboratorUsersInCOR(
         `El email local de ${formatCollaboratorName(user as Record<string, unknown>, corUser)} no coincide con COR.`,
       );
     }
+    selectedUserIds.push(userId);
     if (corUser.corRoleId === COR_ROLE_PROJECT_MANAGER) {
       projectManagerCorUserIds.add(corUser.corUserId);
       continue;
@@ -484,6 +486,7 @@ async function resolveCollaboratorUsersInCOR(
   }
 
   return {
+    selectedUserIds,
     collaboratorUserIds,
     requiredCorUserIds: Array.from(corUserIds),
     projectManagerCorUserIds: Array.from(projectManagerCorUserIds).sort(
@@ -611,28 +614,7 @@ async function resolveTaskCollaboratorSelection(ctx: any, task: any) {
     );
   }
 
-  // El PM se deriva siempre de los permisos actuales del cliente, aunque la
-  // selección de colaboradores haya sido personalizada y no lo incluya.
-  const eligibleParticipantIds = await getEligibleTaskParticipantUserIds(
-    ctx,
-    task,
-  );
   const projectManagerIds = new Set(resolved.projectManagerCorUserIds);
-  for (const userId of eligibleParticipantIds) {
-    const [user, corUser] = await Promise.all([
-      ctx.db.get(userId),
-      ctx.db
-        .query("corUsers")
-        .withIndex("by_userId", (q: any) => q.eq("userId", userId))
-        .unique(),
-    ]);
-    if (!user || corUser?.corRoleId !== COR_ROLE_PROJECT_MANAGER) continue;
-    const localEmail = normalizeCollaboratorEmail(
-      (user as Record<string, unknown>).email,
-    );
-    if (localEmail !== normalizeCollaboratorEmail(corUser.corEmail)) continue;
-    projectManagerIds.add(corUser.corUserId);
-  }
 
   let creatorProjectManagerCorUserId: number | undefined;
   const creatorUserId =
@@ -662,7 +644,6 @@ async function resolveTaskCollaboratorSelection(ctx: any, task: any) {
       creatorEmail === normalizeCollaboratorEmail(creatorCorUser.corEmail)
     ) {
       creatorProjectManagerCorUserId = creatorCorUser.corUserId;
-      projectManagerIds.add(creatorCorUser.corUserId);
     }
   }
 
@@ -680,6 +661,7 @@ async function resolveTaskCollaboratorSelection(ctx: any, task: any) {
     sortedProjectManagerIds[0];
 
   return {
+    selectedUserIds: resolved.selectedUserIds,
     collaboratorUserIds: resolved.collaboratorUserIds,
     requiredCorUserIds: resolved.requiredCorUserIds,
     projectManagerCorUserIds: sortedProjectManagerIds,
@@ -692,19 +674,24 @@ async function ensureProjectCollaborators(
   projectId: number,
   requiredCorUserIds: number[],
 ) {
-  if (requiredCorUserIds.length === 0) return;
+  if (requiredCorUserIds.length === 0) return { added: 0, requested: 0 };
   const current = await provider.getProjectCollaborators(projectId);
   const currentIds = new Set(current.map((collaborator) => collaborator.id));
   const missingIds = requiredCorUserIds.filter((id) => !currentIds.has(id));
-  if (missingIds.length === 0) return;
+  if (missingIds.length === 0) {
+    return { added: 0, requested: requiredCorUserIds.length };
+  }
 
   const failedIds: number[] = [];
+  let added = 0;
   let firstError: string | undefined;
   for (const corUserId of missingIds) {
     const result = await provider.addProjectCollaborators(projectId, [corUserId]);
     if (!result.success) {
       failedIds.push(corUserId);
       firstError ??= result.error;
+    } else {
+      added += 1;
     }
   }
   if (failedIds.length > 0) {
@@ -712,6 +699,7 @@ async function ensureProjectCollaborators(
       `Usuarios COR rechazados en proyecto ${projectId}: [${failedIds.join(", ")}]. ${firstError || "COR no informó el motivo."}`,
     );
   }
+  return { added, requested: requiredCorUserIds.length };
 }
 
 async function ensureTaskCollaborators(
@@ -719,13 +707,16 @@ async function ensureTaskCollaborators(
   taskId: number,
   requiredCorUserIds: number[],
 ) {
-  if (requiredCorUserIds.length === 0) return;
+  if (requiredCorUserIds.length === 0) return { added: 0, requested: 0 };
   const current = await provider.getTaskCollaborators(taskId);
   const currentIds = new Set(current.map((collaborator) => collaborator.id));
   const missingIds = requiredCorUserIds.filter((id) => !currentIds.has(id));
-  if (missingIds.length === 0) return;
+  if (missingIds.length === 0) {
+    return { added: 0, requested: requiredCorUserIds.length };
+  }
 
   const failedIds: number[] = [];
+  let added = 0;
   let firstError: string | undefined;
   for (const corUserId of missingIds) {
     if (currentIds.size >= COR_MAX_TASK_COLLABORATORS) {
@@ -740,6 +731,7 @@ async function ensureTaskCollaborators(
     ]);
     if (result.success) {
       currentIds.add(corUserId);
+      added += 1;
     } else {
       failedIds.push(corUserId);
       firstError ??= result.error;
@@ -750,6 +742,7 @@ async function ensureTaskCollaborators(
       `Usuarios COR rechazados en task ${taskId}: [${failedIds.join(", ")}]. ${firstError || "COR no informó el motivo."}`,
     );
   }
+  return { added, requested: requiredCorUserIds.length };
 }
 
 async function ensurePublishedCollaborators(
@@ -778,17 +771,20 @@ async function ensurePublishedCollaborators(
   }
 
   const effectiveProjectPmId = existingProjectPmId ?? projectManagerCorUserId;
-  const additionalProjectManagerIds = projectManagerCorUserIds.filter(
+  const taskProjectManagerIds = projectManagerCorUserIds.filter(
     (id) => id !== effectiveProjectPmId,
   );
+  const taskCorUserIds = Array.from(
+    new Set([...requiredCorUserIds, ...taskProjectManagerIds]),
+  );
+  let projectSync = { added: 0, requested: taskCorUserIds.length };
+  let taskSync = { added: 0, requested: taskCorUserIds.length };
 
   try {
-    await ensureProjectCollaborators(
+    projectSync = await ensureProjectCollaborators(
       provider,
       projectId,
-      Array.from(
-        new Set([...requiredCorUserIds, ...additionalProjectManagerIds]),
-      ),
+      taskCorUserIds,
     );
   } catch (error) {
     errors.push(`Proyecto: ${formatRetryError(error)}`);
@@ -821,7 +817,11 @@ async function ensurePublishedCollaborators(
   // Intentar también la task aunque COR rechace los colaboradores del proyecto.
   // Así cada reintento manual completa todo lo que COR permita en esa llamada.
   try {
-    await ensureTaskCollaborators(provider, taskId, requiredCorUserIds);
+    taskSync = await ensureTaskCollaborators(
+      provider,
+      taskId,
+      taskCorUserIds,
+    );
   } catch (error) {
     errors.push(`Task: ${formatRetryError(error)}`);
   }
@@ -829,6 +829,8 @@ async function ensurePublishedCollaborators(
   if (errors.length > 0) {
     throw new Error(errors.join(" | "));
   }
+
+  return { projectSync, taskSync };
 }
 
 function normalizeDescriptionText(value: unknown): string {
@@ -4931,7 +4933,7 @@ export const retryTaskSync = mutation({
         corSyncStatus: "synced",
         corSyncAttempt: 0,
         corSyncError: undefined,
-        corCollaboratorUserIds: collaboratorSelection.collaboratorUserIds,
+        corCollaboratorUserIds: collaboratorSelection.selectedUserIds,
         corCollaboratorSyncStatus: "syncing",
         corCollaboratorSyncError: undefined,
       });
@@ -5038,7 +5040,7 @@ export const retryTaskCollaborators = mutation({
       task,
     );
     await ctx.db.patch(args.taskId, {
-      corCollaboratorUserIds: collaboratorSelection.collaboratorUserIds,
+      corCollaboratorUserIds: collaboratorSelection.selectedUserIds,
       corCollaboratorSyncStatus: "syncing",
       corCollaboratorSyncError: undefined,
       corExternalCollaboratorsPending: true,
@@ -5081,7 +5083,7 @@ export const retryTaskCollaboratorsAction = internalAction({
         internal.data.tasks.getTaskCollaboratorSelectionInternal,
         { taskId: args.taskId },
       );
-      await ensurePublishedCollaborators(
+      const syncResult = await ensurePublishedCollaborators(
         getProjectManagementProvider(),
         projectId,
         taskId,
@@ -5096,6 +5098,9 @@ export const retryTaskCollaboratorsAction = internalAction({
           status: "synced",
           pending: false,
         },
+      );
+      console.log(
+        `[RetryTaskCollaborators] ✅ Proyecto ${projectId}: ${syncResult.projectSync.added} agregados de ${syncResult.projectSync.requested}; task ${taskId}: ${syncResult.taskSync.added} agregados de ${syncResult.taskSync.requested}.`,
       );
     } catch (error) {
       const errorMsg = formatRetryError(error);
@@ -5366,7 +5371,8 @@ export const startPublishTaskToExternal = mutation({
     });
     const shouldManageCollaborators =
       collaboratorSelection.requiredCorUserIds.length > 0 ||
-      collaboratorSelection.projectManagerCorUserIds.length > 0;
+      collaboratorSelection.projectManagerCorUserIds.length > 0 ||
+      collaboratorSelection.projectManagerCorUserId !== undefined;
 
     // Obtener el usuario directamente por su ID (ya autenticado por getAuthUserId)
     const user = await ctx.db.get(userId);
@@ -5390,7 +5396,7 @@ export const startPublishTaskToExternal = mutation({
       corSyncStatus: "syncing",
       corSyncError: undefined,
       corSyncAttempt: 0,
-      corCollaboratorUserIds: collaboratorSelection.collaboratorUserIds,
+      corCollaboratorUserIds: collaboratorSelection.selectedUserIds,
       corExternalCollaboratorsPending: shouldManageCollaborators,
       corCollaboratorSyncStatus: shouldManageCollaborators
         ? "pending"
@@ -5816,7 +5822,7 @@ export const publishTaskToExternalAction = internalAction({
               pending: true,
             },
           );
-          await ensurePublishedCollaborators(
+          const syncResult = await ensurePublishedCollaborators(
             provider,
             corProjectId,
             externalTask.id,
@@ -5833,7 +5839,7 @@ export const publishTaskToExternalAction = internalAction({
             },
           );
           console.log(
-            `[PublishTask] ✅ Colaboradores sincronizados en proyecto ${corProjectId} y task ${externalTask.id}`,
+            `[PublishTask] ✅ Colaboradores — proyecto ${corProjectId}: ${syncResult.projectSync.added} agregados de ${syncResult.projectSync.requested}; task ${externalTask.id}: ${syncResult.taskSync.added} agregados de ${syncResult.taskSync.requested}.`,
           );
         } catch (collaboratorError) {
           const collaboratorErrorMsg = formatRetryError(collaboratorError);

@@ -699,7 +699,7 @@ test("edited and empty collaborator selections persist without being refilled fr
   await f.call(tasks.setTaskCorCollaborators, { taskId: "task1", userIds: [] });
   result = await f.call(tasks.getTaskCorCollaborators, { taskId: "task1" });
   assert.deepEqual(result.collaborators, []);
-  assert.deepEqual(await f.call(tasks.getTaskCollaboratorSelectionInternal, { taskId: "task1" }), { collaboratorUserIds: [], requiredCorUserIds: [], projectManagerCorUserIds: [], projectManagerCorUserId: undefined });
+  assert.deepEqual(await f.call(tasks.getTaskCollaboratorSelectionInternal, { taskId: "task1" }), { selectedUserIds: [], collaboratorUserIds: [], requiredCorUserIds: [], projectManagerCorUserIds: [], projectManagerCorUserId: undefined });
 });
 
 test("COR leadership stays out, existing project PM wins and creator PM is the fallback", async () => {
@@ -732,6 +732,11 @@ test("COR leadership stays out, existing project PM wins and creator PM is the f
   assert.ok(!selection.collaboratorUserIds.includes("director"));
   assert.ok(!selection.collaboratorUserIds.includes("project-manager"));
   assert.ok(!selection.collaboratorUserIds.includes("pm-two"));
+  assert.ok(selection.selectedUserIds.includes("worker"));
+  assert.ok(selection.selectedUserIds.includes("project-manager"));
+  assert.ok(selection.selectedUserIds.includes("pm-two"));
+  assert.ok(!selection.selectedUserIds.includes("c-level"));
+  assert.ok(!selection.selectedUserIds.includes("director"));
   assert.deepEqual(selection.projectManagerCorUserIds, [302, 303]);
   assert.equal(selection.projectManagerCorUserId, 302);
 
