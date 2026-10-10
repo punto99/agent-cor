@@ -1,5 +1,6 @@
 import { mutation } from "../_generated/server";
 import { v } from "convex/values";
+import { isInternalUserActive } from "../lib/internalUserStatus";
 
 function normalize(value: string): string {
   return value.trim().toLowerCase();
@@ -44,6 +45,9 @@ export const assignUserToClientsBulkDashboard = mutation({
 
     if (!user) {
       throw new Error(`No se encontró usuario local con email "${args.userEmail}".`);
+    }
+    if (!(await isInternalUserActive(ctx, user._id))) {
+      throw new Error("No puedes asignar clientes a un usuario inactivo.");
     }
 
     const allClients = await ctx.db.query("corClients").collect();

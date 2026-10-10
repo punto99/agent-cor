@@ -24,6 +24,12 @@ export const getProjectTool = createTool({
       const threadId = ctx.threadId;
       let project: any = null;
 
+      if (threadId) {
+        await ctx.runQuery(internal.data.tasks.getUserIdFromThread, {
+          threadId,
+        });
+      }
+
       // Estrategia 1: projectId directo
       if (args.projectId) {
         console.log(`[GetProject] Buscando proyecto por ID: ${args.projectId}`);

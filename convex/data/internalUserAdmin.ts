@@ -4,6 +4,7 @@ import { internal } from "../_generated/api";
 import { mutation, query } from "../_generated/server";
 import { canUserAccessInternalUserAdmin } from "../lib/internalUserAdminAccess";
 import { isExcludedUserId } from "../lib/excludedUsers";
+import { isInternalUserActive } from "../lib/internalUserStatus";
 
 function normalizeEmail(email: unknown) {
   return typeof email === "string" ? email.trim().toLowerCase() : "";
@@ -134,6 +135,7 @@ export const getDashboard = query({
               corEmail: corUser.corEmail,
               corRoleId: corUser.corRoleId,
               corPositionName: corUser.corPositionName,
+              isActive: corUser.isActive !== false,
               resolvedAt: corUser.resolvedAt,
               lastVerifiedAt: corUser.lastVerifiedAt,
             }
@@ -176,7 +178,6 @@ export const resolveInternalUserInCOR = mutation({
     if (await isExternalUser(ctx, args.targetUserId)) {
       throw new Error("Esta acción solo aplica a usuarios internos.");
     }
-
     await ctx.scheduler.runAfter(
       0,
       internal.data.corUsersActions.resolveUserInCOR,
@@ -227,6 +228,12 @@ export const setInternalUserAssignments = mutation({
     if (!user) throw new Error("Usuario no encontrado.");
     if (await isExternalUser(ctx, args.targetUserId)) {
       throw new Error("Esta acción solo aplica a usuarios internos.");
+    }
+    if (
+      (args.fullClientIds.length > 0 || args.brandIds.length > 0) &&
+      !(await isInternalUserActive(ctx, args.targetUserId))
+    ) {
+      throw new Error("No puedes asignar clientes a un usuario inactivo.");
     }
 
     const desired = new Map<

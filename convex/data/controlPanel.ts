@@ -3,6 +3,7 @@ import { query } from "../_generated/server";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { createBoardLabelReader } from "../lib/boardLabel";
 import { getAuthorName } from "../lib/authorName";
+import { isInternalUserActive } from "../lib/internalUserStatus";
 
 async function isExternalUser(ctx: any, userId: any) {
   const approvedExternalUser = await ctx.db
@@ -43,6 +44,7 @@ export const listMyClientProjects = query({
     const userId = await getAuthUserId(ctx);
     if (!userId) return [];
     if (await isExternalUser(ctx, userId)) return [];
+    if (!(await isInternalUserActive(ctx, userId))) return [];
 
     const userIdStr = String(userId);
     const assignments = await ctx.db

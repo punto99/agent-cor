@@ -612,6 +612,9 @@ export default defineSchema({
     corEmail: v.string(),
     corRoleId: v.optional(v.number()), // 1=C-Level, 2=Director, 3=PM, 4=Collaborator, 5=Freelancer, 6=Client
     corPositionName: v.optional(v.string()),
+    // false revoca acceso interno sin borrar asignaciones ni historial.
+    // undefined mantiene compatibilidad y se considera activo.
+    isActive: v.optional(v.boolean()),
     resolvedAt: v.number(), // Timestamp de cuándo se resolvió por primera vez
     lastVerifiedAt: v.optional(v.number()),
   })

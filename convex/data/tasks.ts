@@ -37,6 +37,7 @@ import { applyProjectDeliverablesDelta } from "../lib/deliverableAnalytics";
 import { formatTrelloCommentForCOR } from "../lib/trelloCommentFormat";
 import { isTrelloEnabledForCorClientId } from "../lib/trelloPolicy";
 import { usesDirectExternalComments } from "../lib/directExternalComments";
+import { isInternalUserActive } from "../lib/internalUserStatus";
 import { createBoardLabelReader } from "../lib/boardLabel";
 import type { ActionCtx, MutationCtx } from "../_generated/server";
 import type { Doc, Id } from "../_generated/dataModel";
@@ -443,7 +444,9 @@ async function resolveCollaboratorUsersInCOR(
     corUsersByUserId.set(String(userId), corUser);
   }
   const prospectiveCollaboratorCount = normalizedUserIds.filter((userId) => {
-    const roleId = corUsersByUserId.get(String(userId))?.corRoleId;
+    const corUser = corUsersByUserId.get(String(userId));
+    if (corUser?.isActive === false) return false;
+    const roleId = corUser?.corRoleId;
     return roleId !== COR_ROLE_C_LEVEL &&
       roleId !== COR_ROLE_DIRECTOR &&
       roleId !== COR_ROLE_PROJECT_MANAGER;
@@ -467,6 +470,7 @@ async function resolveCollaboratorUsersInCOR(
         .unique(),
     ]);
     const corUser = corUsersByUserId.get(String(userId));
+    if (corUser?.isActive === false) continue;
     // C-Level y Directores pueden pertenecer al proyecto, pero no se envían
     // como colaboradores de task. Tampoco deben bloquear la publicación si su
     // perfil local quedó desactualizado.
@@ -542,7 +546,13 @@ async function getEligibleTaskParticipantUserIds(ctx: any, task: any) {
       ctx.db.get(assignment.userId),
       isExternalUser(ctx, assignment.userId),
     ]);
-    if (user && !external) ids.add(assignment.userId);
+    if (
+      user &&
+      !external &&
+      (await isInternalUserActive(ctx, assignment.userId))
+    ) {
+      ids.add(assignment.userId);
+    }
   }
   return Array.from(ids);
 }
@@ -558,6 +568,7 @@ async function filterTaskCollaboratorUserIds(
       .withIndex("by_userId", (q: any) => q.eq("userId", userId))
       .unique();
     if (
+      corUser?.isActive === false ||
       corUser?.corRoleId === COR_ROLE_C_LEVEL ||
       corUser?.corRoleId === COR_ROLE_DIRECTOR
     ) {
@@ -658,6 +669,7 @@ async function resolveTaskCollaboratorSelection(ctx: any, task: any) {
       creator &&
       !approvedExternalCreator &&
       creatorCorUser?.corRoleId === COR_ROLE_PROJECT_MANAGER &&
+      creatorCorUser?.isActive !== false &&
       creatorEmail === normalizeCollaboratorEmail(creatorCorUser.corEmail)
     ) {
       creatorProjectManagerCorUserId = creatorCorUser.corUserId;
@@ -1303,6 +1315,12 @@ export const getUserIdFromThread = internalQuery({
       .query("chatThreads")
       .withIndex("by_thread", (q) => q.eq("threadId", args.threadId))
       .first();
+    if (
+      chatThread &&
+      !(await isInternalUserActive(ctx, chatThread.userId))
+    ) {
+      throw new Error("Tu usuario está inactivo. Contacta al administrador.");
+    }
     return chatThread?.userId || null;
   },
 });
@@ -2378,6 +2396,12 @@ export const validateAndPrepareTask = internalQuery({
             "❌ Tu usuario no está registrado en el sistema de gestión de proyectos (COR). Usa primero la herramienta 'validateUserForClient'.",
         };
       }
+      if (corUser.isActive === false) {
+        return {
+          ok: false as const,
+          error: "❌ Tu usuario está inactivo. Contacta al administrador.",
+        };
+      }
       if (!pmId) pmId = corUser.corUserId;
 
       // cliente local
@@ -2737,6 +2761,9 @@ export const createProjectAndTask = internalMutation({
       .unique();
     if (!chatThread) {
       throw new Error(`No existe el thread ${args.threadId}.`);
+    }
+    if (!(await isInternalUserActive(ctx, chatThread.userId))) {
+      throw new Error("❌ Tu usuario está inactivo. Contacta al administrador.");
     }
 
     const draft = await ctx.db.get(args.taskDraftId);
@@ -3622,6 +3649,7 @@ export const searchTaskCorCollaboratorCandidates = query({
     const candidates = [];
 
     for (const corUser of corUsers) {
+      if (corUser.isActive === false) continue;
       if (selectedIds.has(String(corUser.userId)) || !eligibleIds.has(corUser.userId)) continue;
       const [user, approvedExternalUser] = await Promise.all([
         ctx.db.get(corUser.userId),
@@ -3813,6 +3841,7 @@ export const listTasks = query({
     const userId = await getAuthUserId(ctx);
     if (!userId) throw new Error("No autenticado");
     if (await isExternalUser(ctx, userId)) return [];
+    if (!(await isInternalUserActive(ctx, userId))) return [];
 
     const tasksById = new Map<string, any>();
 
@@ -3951,6 +3980,7 @@ export const listMyTasks = query({
       .unique();
 
     if (approvedExternalUser) return [];
+    if (!(await isInternalUserActive(ctx, userId))) return [];
 
     const userIdStr = String(userId);
     const tasksById = new Map<string, any>();
@@ -4365,6 +4395,7 @@ async function hasFullClientAccess(ctx: any, clientId: any, userId: any) {
 }
 
 export async function hasTaskAccess(ctx: any, task: any, userId: any) {
+  if (!(await isInternalUserActive(ctx, userId))) return false;
   if (task.clientBrandId) {
     const brand = await ctx.db.get(task.clientBrandId);
     if (!brand?.clientId) return false;

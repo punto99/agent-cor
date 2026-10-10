@@ -14,6 +14,7 @@ import {
   internalQuery,
 } from "../_generated/server";
 import { getAuthUserId } from "@convex-dev/auth/server";
+import { isInternalUserActive } from "../lib/internalUserStatus";
 
 // ==================== QUERIES ====================
 
@@ -26,6 +27,7 @@ export const listClients = query({
   handler: async (ctx) => {
     const userId = await getAuthUserId(ctx);
     if (!userId) throw new Error("No autenticado");
+    if (!(await isInternalUserActive(ctx, userId))) return [];
 
     return await ctx.db.query("corClients").collect();
   },
@@ -40,6 +42,7 @@ export const listMyClients = query({
   handler: async (ctx) => {
     const userId = await getAuthUserId(ctx);
     if (!userId) throw new Error("No autenticado");
+    if (!(await isInternalUserActive(ctx, userId))) return [];
 
     // Obtener asignaciones del usuario
     const assignments = await ctx.db
@@ -94,6 +97,7 @@ export const isUserAuthorizedForClient = internalQuery({
     userId: v.id("users"),
   },
   handler: async (ctx, args) => {
+    if (!(await isInternalUserActive(ctx, args.userId))) return false;
     const assignment = await ctx.db
       .query("clientUserAssignments")
       .withIndex("by_client_and_user", (q) =>
@@ -111,6 +115,7 @@ export const isUserAuthorizedForBrand = internalQuery({
     userId: v.id("users"),
   },
   handler: async (ctx, args) => {
+    if (!(await isInternalUserActive(ctx, args.userId))) return false;
     const brand = await ctx.db.get(args.brandId);
     if (!brand?.clientId) return false;
 
@@ -195,6 +200,9 @@ export const assignUserToClient = mutation({
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
     if (!userId) throw new Error("No autenticado");
+    if (!(await isInternalUserActive(ctx, args.targetUserId))) {
+      throw new Error("El usuario está inactivo.");
+    }
 
     // Verificar que el cliente existe
     const client = await ctx.db.get(args.clientId);
@@ -240,6 +248,9 @@ export const assignUserToClientBrand = mutation({
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
     if (!userId) throw new Error("No autenticado");
+    if (!(await isInternalUserActive(ctx, args.targetUserId))) {
+      throw new Error("El usuario está inactivo.");
+    }
 
     const brand = await ctx.db.get(args.brandId);
     if (!brand) throw new Error("Marca no encontrada");

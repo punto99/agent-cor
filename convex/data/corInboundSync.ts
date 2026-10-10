@@ -28,6 +28,7 @@ import { getProjectManagementProvider } from "../integrations/registry";
 import { CORNotFoundError } from "../integrations/corProvider";
 import { hashText } from "../lib/briefFormat";
 import { applyProjectDeliverablesDelta } from "../lib/deliverableAnalytics";
+import { isInternalUserActive } from "../lib/internalUserStatus";
 
 const SCHEDULED_SYNC_STATE_KEY = "scheduled-cor-inbound-sync";
 const SCHEDULED_EXPIRED_SYNC_STATE_KEY = "scheduled-expired-cor-inbound-sync";
@@ -90,6 +91,7 @@ async function hasFullClientAccess(ctx: any, clientId: any, userId: any) {
 }
 
 async function hasTaskAccess(ctx: any, task: any, userId: any) {
+  if (!(await isInternalUserActive(ctx, userId))) return false;
   if (task.clientBrandId) {
     const brand = await ctx.db.get(task.clientBrandId);
     if (!brand?.clientId) return false;

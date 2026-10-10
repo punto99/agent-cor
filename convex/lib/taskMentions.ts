@@ -1,6 +1,7 @@
 import type { Doc } from "../_generated/dataModel";
 import type { QueryCtx } from "../_generated/server";
 import { getAuthorName } from "./authorName";
+import { isInternalUserActive } from "./internalUserStatus";
 
 export async function eligibleMentionUsers(ctx: QueryCtx, task: Doc<"tasks">) {
   // Subbrands inherit permissions from their parent brand in the current access model.
@@ -14,6 +15,7 @@ export async function eligibleMentionUsers(ctx: QueryCtx, task: Doc<"tasks">) {
   const ids = [...new Set(assignments.filter(a => !a.brandId || a.brandId === brandId).map(a => a.userId))];
   const people = await Promise.all(ids.map(async id => {
     if (!(await ctx.db.get(id))) return null;
+    if (!(await isInternalUserActive(ctx, id))) return null;
     const name = await getAuthorName(ctx, id, "");
     return name ? { id, name } : null;
   }));

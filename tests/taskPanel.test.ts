@@ -720,6 +720,42 @@ test("collaborator sync summary resolves accepted and rejected COR ids to readab
   });
 });
 
+test("inactive internal users lose task access and are excluded from collaborators", async () => {
+  const f = collaboratorFixture();
+  f.member("inactive", "client1", "category1", true, 4, 703);
+  f.rows.get("cor-inactive").isActive = false;
+
+  const selection = await f.call(tasks.getTaskCorCollaborators, {
+    taskId: "task1",
+  });
+  assert.equal(
+    selection.collaborators.some((user: any) => user.userId === "inactive"),
+    false,
+  );
+
+  f.ctx.auth.getUserIdentity = async () => ({ subject: "inactive|session" });
+  assert.equal(await f.call(tasks.getTask, { taskId: "task1" }), null);
+  assert.deepEqual(await f.call(tasks.listMyTasks, {}), []);
+
+  f.put("chatThreads", {
+    _id: "inactive-thread",
+    threadId: "inactive-thread",
+    userId: "inactive",
+  });
+  const preparation = await f.call(tasks.validateAndPrepareTask, {
+    threadId: "inactive-thread",
+    corClientId: f.rows.get("client1").corClientId,
+    corUserId: 703,
+    requireIntegration: true,
+  });
+  assert.equal(preparation.ok, false);
+  assert.match(preparation.error, /inactivo/);
+  await assert.rejects(
+    f.call(tasks.getUserIdFromThread, { threadId: "inactive-thread" }),
+    /inactivo/,
+  );
+});
+
 test("COR leadership stays out, existing project PM wins and creator PM is the fallback", async () => {
   const f = collaboratorFixture();
   f.rows.delete("access-unresolved");

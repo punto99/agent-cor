@@ -1,5 +1,6 @@
 import { v } from "convex/values";
 import { internalQuery } from "../_generated/server";
+import { isInternalUserActive } from "../lib/internalUserStatus";
 
 export const hasFullClientAccess = internalQuery({
   args: {
@@ -7,6 +8,7 @@ export const hasFullClientAccess = internalQuery({
     clientId: v.id("corClients"),
   },
   handler: async (ctx, args) => {
+    if (!(await isInternalUserActive(ctx, args.userId))) return false;
     const assignments = await ctx.db
       .query("clientUserAssignments")
       .withIndex("by_client_and_user", (q) =>
@@ -24,6 +26,7 @@ export const hasBrandAccess = internalQuery({
     brandId: v.id("clientBrands"),
   },
   handler: async (ctx, args) => {
+    if (!(await isInternalUserActive(ctx, args.userId))) return false;
     const brand = await ctx.db.get(args.brandId);
     if (!brand?.clientId) return false;
 
@@ -46,6 +49,7 @@ export const listAccessibleBrands = internalQuery({
     userId: v.id("users"),
   },
   handler: async (ctx, args) => {
+    if (!(await isInternalUserActive(ctx, args.userId))) return [];
     const assignments = await ctx.db
       .query("clientUserAssignments")
       .withIndex("by_user", (q) => q.eq("userId", args.userId))
@@ -82,6 +86,7 @@ export const listAccessibleExternalTargets = internalQuery({
     userId: v.id("users"),
   },
   handler: async (ctx, args) => {
+    if (!(await isInternalUserActive(ctx, args.userId))) return [];
     const assignments = await ctx.db
       .query("clientUserAssignments")
       .withIndex("by_user", (q) => q.eq("userId", args.userId))

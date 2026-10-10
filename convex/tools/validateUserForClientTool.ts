@@ -145,6 +145,12 @@ export const validateUserForClientTool = createTool({
         error: `Tu usuario no está registrado en el sistema de gestión de proyectos (COR). Contacta al administrador para que te registren.`,
       });
     }
+    if (corUser.isActive === false) {
+      return JSON.stringify({
+        authorized: false,
+        error: "Tu usuario está inactivo. Contacta al administrador.",
+      });
+    }
 
     console.log(
       `[ValidateUserForClient] ✅ Usuario en COR: ${corUser.corFirstName} ${corUser.corLastName} (ID: ${corUser.corUserId})`

@@ -19,6 +19,7 @@ import { getAuthUserId } from "@convex-dev/auth/server";
 import { getProjectManagementProvider } from "../integrations/registry";
 import { shouldRetry, getRetryDelay, formatRetryError, isClientError, MAX_RETRY_ATTEMPTS } from "../lib/corRetry";
 import { applyProjectDeliverablesDelta } from "../lib/deliverableAnalytics";
+import { isInternalUserActive } from "../lib/internalUserStatus";
 
 async function isExternalUser(ctx: any, userId: any) {
   const approvedExternalUser = await ctx.db
@@ -29,6 +30,7 @@ async function isExternalUser(ctx: any, userId: any) {
 }
 
 async function hasFullClientAccess(ctx: any, clientId: any, userId: any) {
+  if (!(await isInternalUserActive(ctx, userId))) return false;
   const assignments = await ctx.db
     .query("clientUserAssignments")
     .withIndex("by_client_and_user", (q: any) =>
@@ -40,6 +42,7 @@ async function hasFullClientAccess(ctx: any, clientId: any, userId: any) {
 }
 
 async function hasAnyClientAccess(ctx: any, clientId: any, userId: any) {
+  if (!(await isInternalUserActive(ctx, userId))) return false;
   const assignments = await ctx.db
     .query("clientUserAssignments")
     .withIndex("by_client_and_user", (q: any) =>
@@ -51,6 +54,7 @@ async function hasAnyClientAccess(ctx: any, clientId: any, userId: any) {
 }
 
 async function hasProjectAccess(ctx: any, project: any, userId: any) {
+  if (!(await isInternalUserActive(ctx, userId))) return false;
   if (project.clientBrandId) {
     const brand = await ctx.db.get(project.clientBrandId);
     if (!brand?.clientId) return false;
@@ -131,6 +135,7 @@ export const listMyProjects = query({
     const userId = await getAuthUserId(ctx);
     if (!userId) throw new Error("No autenticado");
     if (await isExternalUser(ctx, userId)) return [];
+    if (!(await isInternalUserActive(ctx, userId))) return [];
 
     const projectsById = new Map<string, any>();
 

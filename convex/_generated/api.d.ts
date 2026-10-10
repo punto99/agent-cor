@@ -72,6 +72,7 @@ import type * as lib_excludedUsers from "../lib/excludedUsers.js";
 import type * as lib_externalRequestsAccess from "../lib/externalRequestsAccess.js";
 import type * as lib_externalUserPreapproval from "../lib/externalUserPreapproval.js";
 import type * as lib_internalUserAdminAccess from "../lib/internalUserAdminAccess.js";
+import type * as lib_internalUserStatus from "../lib/internalUserStatus.js";
 import type * as lib_llmFallback from "../lib/llmFallback.js";
 import type * as lib_math from "../lib/math.js";
 import type * as lib_serverConfig from "../lib/serverConfig.js";
@@ -186,6 +187,7 @@ declare const fullApi: ApiFromModules<{
   "lib/externalRequestsAccess": typeof lib_externalRequestsAccess;
   "lib/externalUserPreapproval": typeof lib_externalUserPreapproval;
   "lib/internalUserAdminAccess": typeof lib_internalUserAdminAccess;
+  "lib/internalUserStatus": typeof lib_internalUserStatus;
   "lib/llmFallback": typeof lib_llmFallback;
   "lib/math": typeof lib_math;
   "lib/serverConfig": typeof lib_serverConfig;
