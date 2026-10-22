@@ -24,7 +24,7 @@ export function MentionLabel({ name, onRemove }: { name: string; onRemove?: () =
     {open && rect && createPortal(<div role="dialog" aria-label={`Persona mencionada: ${name}`} onMouseEnter={cancelClose} onMouseLeave={close} onFocus={cancelClose} onBlur={close} style={{ position: "fixed", zIndex: 150, left: Math.max(8, Math.min(rect.left, window.innerWidth - 256)), top: rect.bottom + 8 > window.innerHeight - 100 ? Math.max(8, rect.top - 100) : rect.bottom + 8 }} className="w-60 rounded-xl border border-border bg-popover p-3 text-popover-foreground shadow-lg">
       <p className="break-words text-sm font-semibold">{name}</p>
       {onRemove && <button type="button" onMouseDown={event => event.preventDefault()} onClick={() => { setOpen(false); onRemove(); }} className="mt-2 rounded px-2 py-1 text-xs text-destructive hover:bg-muted">Quitar mención</button>}
-    </div>, document.body)}
+    </div>, anchor.current?.closest("dialog") ?? document.body)}
   </>;
 }
 function MentionView({ node, editor, getPos }: NodeViewProps) {
@@ -103,5 +103,5 @@ export function MentionSuggestions({ editor, people }: { editor: Editor; people:
     <div ref={list} role="listbox" aria-label="Personas con acceso" className="max-h-52 overflow-y-auto p-1">
       {options.map((person, index) => <button key={person.id} type="button" role="option" aria-selected={index === active} onMouseEnter={() => setActive(index)} onClick={() => choose(person)} className={`flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-sm ${index === active ? "bg-accent text-accent-foreground" : "hover:bg-muted"}`}><span aria-hidden="true" className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-primary/10 text-[10px] text-primary">{person.name.split(/\s+/).slice(0, 2).map(p => p[0]).join("")}</span>{person.name}</button>)}
     </div>
-  </div>, document.body);
+  </div>, editor.view.dom.closest("dialog") ?? document.body);
 }

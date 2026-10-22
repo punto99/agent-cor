@@ -1309,6 +1309,55 @@ export function createCORProvider(): ProjectManagementProvider {
       }
     },
 
+    // ==================== LIST ACTIVE USER IDS ====================
+
+    async listActiveUserIds(): Promise<number[]> {
+      const response = await corApiFetch(`/users?page=false`);
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(
+          `COR API error: ${response.status} - No se pudieron consultar los usuarios activos: ${errorText}`,
+        );
+      }
+
+      const result: unknown = await response.json();
+      const rawUsers = Array.isArray(result)
+        ? result
+        : Array.isArray((result as { data?: unknown[] } | null)?.data)
+          ? (result as { data: unknown[] }).data
+          : null;
+
+      if (!rawUsers || rawUsers.length === 0) {
+        throw new Error(
+          "COR devolvió una lista de usuarios vacía o con formato inválido.",
+        );
+      }
+
+      const ids: number[] = [];
+      const uniqueIds = new Set<number>();
+
+      for (const rawUser of rawUsers) {
+        if (!rawUser || typeof rawUser !== "object") {
+          throw new Error("COR devolvió un usuario con formato inválido.");
+        }
+
+        const id = parsePositiveInteger(
+          (rawUser as Record<string, unknown>).id,
+        );
+        if (id === undefined || uniqueIds.has(id)) {
+          throw new Error(
+            "COR devolvió IDs de usuario inválidos o duplicados.",
+          );
+        }
+
+        uniqueIds.add(id);
+        ids.push(id);
+      }
+
+      return ids;
+    },
+
     // ==================== LIST ALL CLIENTS ====================
 
     async listAllClients(): Promise<ExternalClient[]> {

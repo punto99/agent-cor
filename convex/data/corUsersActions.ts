@@ -11,6 +11,7 @@
 import { v } from "convex/values";
 import { internalAction } from "../_generated/server";
 import { internal } from "../_generated/api";
+import type { Id } from "../_generated/dataModel";
 import { getProjectManagementProvider } from "../integrations/registry";
 
 function getFirstName(name: string | undefined) {
@@ -151,6 +152,120 @@ export const verifyUserInCOR = internalAction({
       }
     } catch (error) {
       console.error(`[corUsers] ❌ Error verificando usuario en COR:`, error);
+    }
+  },
+});
+
+function haveSameUserIds(first: number[], second: number[]): boolean {
+  if (first.length !== second.length) return false;
+  const secondIds = new Set(second);
+  return first.every((id) => secondIds.has(id));
+}
+
+type LocalCorUserForStatusSync = {
+  corUserDocumentId: Id<"corUsers">;
+  corUserId: number;
+};
+
+type CorUserStatusSyncResult = {
+  status:
+    | "no_users"
+    | "unchanged"
+    | "unstable_snapshot"
+    | "completed"
+    | "error";
+  deactivated: number;
+};
+
+/**
+ * Verificación diaria, conservadora y unidireccional de bajas en COR.
+ *
+ * - Los usuarios presentes no generan ninguna escritura local.
+ * - Una ausencia debe repetirse en dos snapshots completos e idénticos.
+ * - Cualquier error o diferencia entre snapshots aborta sin cambios.
+ * - La única escritura permitida es isActive=false.
+ */
+export const syncInactiveCorUsersDaily = internalAction({
+  args: {},
+  handler: async (ctx): Promise<CorUserStatusSyncResult> => {
+    try {
+      const localCorUsers: LocalCorUserForStatusSync[] = await ctx.runQuery(
+        internal.data.corUsers.listActiveCorUsersForStatusSync,
+        {},
+      );
+
+      if (localCorUsers.length === 0) {
+        console.log(
+          "[CorUserStatusSync] Sin usuarios internos activos para verificar.",
+        );
+        return { status: "no_users" as const, deactivated: 0 };
+      }
+
+      const provider = getProjectManagementProvider();
+      const firstSnapshot = await provider.listActiveUserIds();
+      if (firstSnapshot.length < localCorUsers.length) {
+        throw new Error(
+          `COR devolvió menos usuarios (${firstSnapshot.length}) que los vínculos internos activos (${localCorUsers.length}).`,
+        );
+      }
+      const firstIds = new Set(firstSnapshot);
+      const missingOnFirstRead = localCorUsers.filter(
+        (corUser: LocalCorUserForStatusSync) =>
+          !firstIds.has(corUser.corUserId),
+      );
+
+      if (missingOnFirstRead.length === 0) {
+        console.log(
+          `[CorUserStatusSync] Verificación completa: ${localCorUsers.length} usuarios continúan activos en COR.`,
+        );
+        return { status: "unchanged" as const, deactivated: 0 };
+      }
+
+      const secondSnapshot = await provider.listActiveUserIds();
+      if (!haveSameUserIds(firstSnapshot, secondSnapshot)) {
+        console.warn(
+          "[CorUserStatusSync] Los snapshots de COR no coinciden. Verificación abortada sin cambios.",
+        );
+        return { status: "unstable_snapshot" as const, deactivated: 0 };
+      }
+
+      const secondIds = new Set(secondSnapshot);
+      const confirmedMissing = missingOnFirstRead.filter(
+        (corUser: LocalCorUserForStatusSync) =>
+          !secondIds.has(corUser.corUserId),
+      );
+
+      if (confirmedMissing.length === 0) {
+        console.log(
+          "[CorUserStatusSync] La segunda verificación encontró todos los usuarios. Sin cambios.",
+        );
+        return { status: "unchanged" as const, deactivated: 0 };
+      }
+
+      const result: { deactivatedCorUserIds: number[] } = await ctx.runMutation(
+        internal.data.corUsers.deactivateConfirmedMissingCorUsers,
+        {
+          candidates: confirmedMissing.map(
+            (corUser: LocalCorUserForStatusSync) => ({
+              corUserDocumentId: corUser.corUserDocumentId,
+              expectedCorUserId: corUser.corUserId,
+            }),
+          ),
+        },
+      );
+
+      console.warn(
+        `[CorUserStatusSync] Usuarios desactivados tras dos verificaciones: [${result.deactivatedCorUserIds.join(", ")}].`,
+      );
+      return {
+        status: "completed" as const,
+        deactivated: result.deactivatedCorUserIds.length,
+      };
+    } catch (error) {
+      console.error(
+        `[CorUserStatusSync] Verificación abortada sin cambios: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      return { status: "error" as const, deactivated: 0 };
     }
   },
 });

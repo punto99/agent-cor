@@ -973,6 +973,36 @@ test("three external users share brand tasks, comments and uploads while chats r
   assert.equal((await f.call(tasks.listMyExternalRequests, {}))[0].threadId, null);
 });
 
+test("archiving hides a task from its external creator and other authorized client and brand users", async () => {
+  const f = notificationFixture();
+  f.put("approvedExternalUsers", { _id: "brandExternal", userId: "brandUser" });
+  f.put("clientUserAssignments", { _id: "assignment-brand", userId: "brandUser", clientId: "client1", brandId: "brand1" });
+  const original = f.rows.get("task1");
+  f.put("tasks", { ...original, _id: "active-task", convexStatus: "active" });
+  f.put("tasks", { ...original, _id: "legacy-task" });
+  const viewers = ["user1", "otherExternal", "brandUser"];
+  for (const userId of viewers) {
+    f.as(userId);
+    assert.equal((await f.call(tasks.listMyExternalRequests, {})).length, 3);
+    assert.ok(await f.call(tasks.getBoardDialogDetails, { taskId: "task1" }));
+    assert.equal(await f.call(panel.canAccessComments, { taskId: "task1" }), true);
+  }
+
+  await f.call(tasks.completeArchiveUnpublishedTask, { taskId: "task1", archiveProject: false, archivedBy: "internal1" });
+  assert.equal(f.rows.get("task1").convexStatus, "archived");
+
+  for (const userId of viewers) {
+    f.as(userId);
+    assert.equal(await hasExternalRequestsAccess(f.ctx, userId as any), true);
+    assert.deepEqual((await f.call(tasks.listMyExternalRequests, {})).map((task: any) => task._id).sort(), ["active-task", "legacy-task"]);
+    assert.equal(await f.call(tasks.getBoardDialogDetails, { taskId: "task1" }), null);
+    assert.equal(await f.call(panel.canAccessComments, { taskId: "task1" }), false);
+    await assert.rejects(f.call(panel.detail, { taskId: "task1" }), /acceso/);
+    await assert.rejects(f.post(`archived-${userId}`), /acceso/);
+    await assert.rejects(f.call(panel.prepareUpload, { taskId: "task1", key: `archived-${userId}`, filename: "file.pdf", mimeType: "application/pdf", size: 4 }), /acceso/);
+  }
+});
+
 test("external board enforces client and brand access on reads, comments and file uploads", async () => {
   const f = notificationFixture();
   f.as("otherExternal");

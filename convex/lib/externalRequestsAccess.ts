@@ -24,7 +24,7 @@ export async function hasExternalRequestsAccess(ctx: QueryCtx, userId: Id<"users
 }
 
 export async function canViewExternalRequest(ctx: QueryCtx, userId: Id<"users">, task: Doc<"tasks">) {
-  if (task.source !== "external" || task.convexStatus === "deleted") return false;
+  if (task.source !== "external" || task.convexStatus === "deleted" || task.convexStatus === "archived") return false;
   const clientId = await taskClientId(ctx, task);
   if (!clientId || !enabledClientIds().has(String(clientId))) return false;
   const external = await ctx.db.query("approvedExternalUsers").withIndex("by_user", q => q.eq("userId", userId)).unique();

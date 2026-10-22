@@ -355,6 +355,13 @@ export interface ProjectManagementProvider {
   listAllUsers(): Promise<ExternalUser[]>;
 
   /**
+   * Lista únicamente los IDs de usuarios activos visibles en el sistema externo.
+   * Debe lanzar error ante fallas o respuestas inválidas: se usa para decidir
+   * bajas locales y nunca puede convertir un error remoto en una lista vacía.
+   */
+  listActiveUserIds(): Promise<number[]>;
+
+  /**
    * Listar TODOS los clientes del sistema externo.
    * En COR: GET /clients?page=false (desactiva paginación)
    * Usado para backfill masivo de corClients.

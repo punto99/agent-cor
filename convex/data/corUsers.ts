@@ -58,6 +58,23 @@ export const listAllConvexUsers = internalQuery({
   },
 });
 
+/**
+ * Lista los vínculos internos todavía activos que deben comprobarse en COR.
+ * No incluye usuarios ya desactivados y no modifica timestamps ni perfiles.
+ */
+export const listActiveCorUsersForStatusSync = internalQuery({
+  args: {},
+  handler: async (ctx) => {
+    const corUsers = await ctx.db.query("corUsers").collect();
+    return corUsers
+      .filter((corUser) => corUser.isActive !== false)
+      .map((corUser) => ({
+        corUserDocumentId: corUser._id,
+        corUserId: corUser.corUserId,
+      }));
+  },
+});
+
 // ==================== MUTATIONS ====================
 
 /**
@@ -111,6 +128,41 @@ export const upsertCorUser = internalMutation({
 
     console.log(`[corUsers] ✅ Usuario creado: ${args.corFirstName} ${args.corLastName} (COR ID: ${args.corUserId})`);
     return id;
+  },
+});
+
+/**
+ * Desactiva de forma atómica los vínculos que fueron confirmados ausentes en
+ * dos lecturas estables de COR. Si el vínculo cambió desde la lectura inicial,
+ * se omite para evitar desactivar al usuario equivocado.
+ */
+export const deactivateConfirmedMissingCorUsers = internalMutation({
+  args: {
+    candidates: v.array(
+      v.object({
+        corUserDocumentId: v.id("corUsers"),
+        expectedCorUserId: v.number(),
+      }),
+    ),
+  },
+  handler: async (ctx, args) => {
+    const deactivatedCorUserIds: number[] = [];
+
+    for (const candidate of args.candidates) {
+      const corUser = await ctx.db.get(candidate.corUserDocumentId);
+      if (
+        !corUser ||
+        corUser.isActive === false ||
+        corUser.corUserId !== candidate.expectedCorUserId
+      ) {
+        continue;
+      }
+
+      await ctx.db.patch(corUser._id, { isActive: false });
+      deactivatedCorUserIds.push(corUser.corUserId);
+    }
+
+    return { deactivatedCorUserIds };
   },
 });
 

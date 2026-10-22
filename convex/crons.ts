@@ -19,6 +19,14 @@ crons.cron(
   {}
 );
 
+// Una vez al día, 01:17 Ecuador continental (UTC-5).
+// crons.cron(
+//   "daily COR user status sync",
+//   "17 6 * * *",
+//   internal.data.corUsersActions.syncInactiveCorUsersDaily,
+//   {},
+// );
+
 crons.interval("sync manual task panel entries", { minutes: 1 }, internal.data.taskPanelSync.sweep, {});
 
 crons.interval("send new external task emails", { minutes: 1 }, internal.data.taskCreationNotifications.sweep, {});
