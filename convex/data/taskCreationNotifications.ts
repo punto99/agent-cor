@@ -54,7 +54,8 @@ export const claimEmail = internalMutation({
         if (!baseUrl) throw new Error("Falta APP_URL o SITE_URL en Convex.");
         const creator = task.createdBy ? ctx.db.normalizeId("users", task.createdBy) : null;
         const client = task.clientId ? await ctx.db.get(task.clientId) : null;
-        payload = JSON.stringify(taskCreationEmail({ from: process.env.RESEND_FROM_EMAIL || "Punto99 <digital@pto99.com>", to: email, baseUrl, taskId: task._id, title: task.title, author: await getAuthorName(ctx, creator), client: client?.name || task.corClientName || "Cliente", category: task.brandName, brand: task.subBrandName, deadline: task.deadline }));
+        const external = Boolean(await ctx.db.query("approvedExternalUsers").withIndex("by_user", q => q.eq("userId", row.userId)).unique());
+        payload = JSON.stringify(taskCreationEmail({ from: process.env.RESEND_FROM_EMAIL || "Punto99 <digital@pto99.com>", to: email, baseUrl, taskId: task._id, title: task.title, author: await getAuthorName(ctx, creator), client: client?.name || task.corClientName || "Cliente", category: task.brandName, brand: task.subBrandName, deadline: task.deadline, external }));
       } else if (JSON.parse(payload).to[0] !== email) {
         await ctx.db.patch(id, { emailState: "cancelled", emailError: "El correo del destinatario cambió durante el envío." }); return null;
       }

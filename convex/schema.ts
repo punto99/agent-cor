@@ -6,10 +6,31 @@ import { v } from "convex/values";
 export default defineSchema({
   ...authTables,
 
+  // Niveles de administración. No conceden acceso a clientes, categorías o tareas.
+  // Solo se guardan perfiles internos; los externos nunca tienen platformRole.
+  userAccessProfiles: defineTable({
+    userId: v.id("users"),
+    platformRole: v.union(v.literal("user"), v.literal("admin"), v.literal("super_admin")),
+    workRole: v.optional(v.string()),
+    updatedAt: v.number(),
+    updatedBy: v.id("users"),
+  }).index("by_user", ["userId"])
+    .index("by_platform_role", ["platformRole"]),
+
+  userRoleAuditLog: defineTable({
+    actorId: v.id("users"),
+    targetUserId: v.optional(v.id("users")),
+    approvedExternalUserId: v.optional(v.id("approvedExternalUsers")),
+    before: v.string(),
+    after: v.string(),
+    createdAt: v.number(),
+  }).index("by_target_user", ["targetUserId"])
+    .index("by_external_user", ["approvedExternalUserId"]),
+
   commentNotifications: defineTable({
     userId: v.id("users"), taskId: v.id("tasks"), messageId: v.id("taskMessages"),
     read: v.boolean(), createdAt: v.number(),
-    kind: v.optional(v.literal("mention")),
+    kind: v.optional(v.union(v.literal("mention"), v.literal("coordinator_comment"))),
     emailState: v.optional(v.union(v.literal("pending"), v.literal("sending"), v.literal("sent"), v.literal("failed"), v.literal("cancelled"))),
     attempts: v.optional(v.number()), nextAttemptAt: v.optional(v.number()), firstAttemptAt: v.optional(v.number()),
     emailPayload: v.optional(v.string()), emailError: v.optional(v.string()),
@@ -53,6 +74,9 @@ export default defineSchema({
   // Si el email existe en esta tabla, el usuario puede solicitar un código.
   approvedExternalUsers: defineTable({
     email: v.string(),
+    // Solo cambia destinatarios de notificaciones, nunca permisos ni visibilidad.
+    isCoordinator: v.optional(v.boolean()),
+    workRole: v.optional(v.string()),
     name: v.optional(v.string()),
     userId: v.optional(v.id("users")),
     preapprovedClientAccess: v.optional(
@@ -94,6 +118,11 @@ export default defineSchema({
     title: v.optional(v.string()),
     createdAt: v.number(),
     updatedAt: v.number(),
+    // Bounded UI acknowledgements; never part of the model or attachment content.
+    clientMessageReceipts: v.optional(v.array(v.object({
+      clientMessageId: v.string(),
+      messageId: v.string(),
+    }))),
   })
     .index("by_thread", ["threadId"])
     .index("by_user", ["userId"])
@@ -627,6 +656,9 @@ export default defineSchema({
   corClients: defineTable({
     corClientId: v.number(),
     name: v.string(),
+    // Only an explicit true enables the external board and its associated notifications.
+    // Kept local: COR synchronization must not overwrite this setting.
+    externalBoardEnabled: v.optional(v.boolean()),
     nomenclature: v.optional(v.string()), // Abreviatura/iniciales del cliente (ej: "AD" para American Deli). Se usa como prefijo en nombres de proyectos.
     businessName: v.optional(v.string()),
     nameContact: v.optional(v.string()),

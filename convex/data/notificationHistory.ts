@@ -28,11 +28,11 @@ export const list = query({
           const message = await ctx.db.get(row.messageId);
           if (!message || !(await canReceiveComment(ctx, userId, task, message, row.kind))) return null;
           const author = await getAuthorName(ctx, message.userId, message.source === "trello" ? "Trello" : message.source === "cor" ? "COR" : "Autor sin nombre");
-          return { id: row._id, taskId: task._id, title: task.title, kind: row.kind ?? "comment" as const, author, external, read: row.read, createdAt: row.createdAt, context: "" };
+          return { id: row._id, taskId: task._id, title: task.title, kind: row.kind === "mention" ? "mention" as const : "comment" as const, author, external, read: row.read, createdAt: row.createdAt, context: "" };
         }
         if (!(await canReceiveTaskCreation(ctx, userId, task))) return null;
         const creator = task.createdBy ? ctx.db.normalizeId("users", task.createdBy) : null;
-        return { id: row._id, taskId: task._id, title: task.title, kind: "task" as const, author: await getAuthorName(ctx, creator), external: false, read: row.read, createdAt: row.createdAt, context: [task.corClientName, task.subBrandName].filter(Boolean).join(" · ") };
+        return { id: row._id, taskId: task._id, title: task.title, kind: "task" as const, author: await getAuthorName(ctx, creator), external, read: row.read, createdAt: row.createdAt, context: [task.corClientName, task.subBrandName].filter(Boolean).join(" · ") };
       })
       .paginate({ ...paginationOpts, numItems: Math.min(50, Math.max(1, paginationOpts.numItems)), maximumRowsRead: 200 });
   },

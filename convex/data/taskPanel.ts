@@ -1,6 +1,6 @@
 import { eligibleMentionUsers, resolveMentions, mentionsForSync } from "../lib/taskMentions";
 import { getAuthorName } from "../lib/authorName";
-import { canViewExternalRequest, isRequestsClientTask } from "../lib/externalRequestsAccess";
+import { canViewExternalRequest } from "../lib/externalRequestsAccess";
 import { notifyTaskComment } from "../lib/commentNotifications";
 import { resolvePanelComment } from "../lib/taskPanelComment";
 import { getAuthUserId } from "@convex-dev/auth/server";
@@ -22,7 +22,7 @@ export async function requirePanelTask(ctx: QueryCtx | MutationCtx, taskId: Id<"
   if (!task || task.convexStatus === "deleted") throw new Error("No tenés acceso a esta tarea.");
   const allowed = external
     ? await canViewExternalRequest(ctx, userId, task)
-    : await isRequestsClientTask(ctx, task) && await hasTaskAccess(ctx, task, userId);
+    : await hasTaskAccess(ctx, task, userId);
   if (!allowed) throw new Error("No tenés acceso a esta tarea.");
   return task;
 }
@@ -36,7 +36,7 @@ export const canAccessComments = query({
     if (!task || task.convexStatus === "deleted") return false;
     const external = await ctx.db.query("approvedExternalUsers").withIndex("by_user", q => q.eq("userId", userId)).unique();
     return external ? await canViewExternalRequest(ctx, userId, task)
-      : await isRequestsClientTask(ctx, task) && await hasTaskAccess(ctx, task, userId);
+      : await hasTaskAccess(ctx, task, userId);
   },
 });
 

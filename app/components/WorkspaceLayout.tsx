@@ -2,7 +2,7 @@
 
 import { CommentNotificationBell } from "./notifications/CommentNotifications";
 import { useState, useRef, useEffect, useCallback } from "react";
-import { useMutation } from "convex/react";
+import { useMutation, useQuery } from "convex/react";
 import { api } from "../../convex/_generated/api";
 import { usePathname, useRouter } from "next/navigation";
 import {
@@ -14,6 +14,7 @@ import {
   MoreVertical,
   MessageCircle,
   Pencil,
+  Search,
   X,
 } from "lucide-react";
 import { BrandLogo } from "./BrandLogo";
@@ -79,12 +80,26 @@ export function WorkspaceLayout({
   const isSidebarOpen = sidebar.open;
   const toggleSidebar = () => setSidebar({ pathname, open: !isSidebarOpen });
   const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false);
+  const [isThreadSearchOpen, setIsThreadSearchOpen] = useState(false);
+  const [threadSearch, setThreadSearch] = useState("");
+  const searchButtonRef = useRef<HTMLButtonElement>(null);
+  const isSearchingThreads = isThreadSearchOpen && threadSearch.trim().length > 0;
+  const searchResults = useQuery(
+    api.messaging.threads.searchMyThreads,
+    isSearchingThreads ? { search: threadSearch.trim() } : "skip",
+  );
+  const visibleThreads = isSearchingThreads ? searchResults ?? [] : threads;
+  const closeThreadSearch = () => {
+    setIsThreadSearchOpen(false);
+    setThreadSearch("");
+    searchButtonRef.current?.focus();
+  };
   const [editingThreadId, setEditingThreadId] = useState<string | null>(null);
   const [editingTitle, setEditingTitle] = useState("");
   const editInputRef = useRef<HTMLInputElement>(null);
   const threadsContainerRef = useRef<HTMLDivElement>(null);
   const activeThreadRef = useRef<HTMLDivElement>(null);
-  const activeThreadLoaded = threads.some(thread => thread.threadId === currentThreadId);
+  const activeThreadLoaded = visibleThreads.some(thread => thread.threadId === currentThreadId);
 
   useEffect(() => {
     const frame = requestAnimationFrame(() => {
@@ -111,6 +126,7 @@ export function WorkspaceLayout({
 
   // Infinite scroll handler
   const handleScroll = useCallback(() => {
+    if (isSearchingThreads) return;
     const container = threadsContainerRef.current;
     if (!container) return;
 
@@ -120,7 +136,7 @@ export function WorkspaceLayout({
     if (isNearBottom && threadsStatus === "CanLoadMore") {
       loadMoreThreads(20);
     }
-  }, [threadsStatus, loadMoreThreads]);
+  }, [threadsStatus, loadMoreThreads, isSearchingThreads]);
 
   useEffect(() => {
     const container = threadsContainerRef.current;
@@ -279,7 +295,7 @@ export function WorkspaceLayout({
             onClick={handleNewThreadClick}
             aria-label="Nueva conversación"
             title="Nueva conversación"
-            className={`w-full justify-start gap-2 ${isSidebarOpen ? "" : "md:h-10 md:w-10 md:justify-center md:border-transparent md:p-0 md:shadow-none"}`}
+            className={`w-full cursor-pointer justify-start gap-2 ${isSidebarOpen ? "" : "md:h-10 md:w-10 md:justify-center md:border-transparent md:p-0 md:shadow-none"}`}
             variant="outline"
           >
             <Plus className="h-4 w-4 shrink-0" />
@@ -294,17 +310,65 @@ export function WorkspaceLayout({
           className={`min-h-0 flex-1 overflow-y-auto ${isSidebarOpen ? "" : "md:hidden"}`}
         >
           <div className="px-3 py-2">
-            <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider px-2 mb-2">
-              Mis Chats
-            </h3>
+            <div className="mb-2 flex items-center justify-between gap-2 px-2">
+              <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+                Mis Chats
+              </h3>
+              <button
+                ref={searchButtonRef}
+                type="button"
+                aria-label="Buscar chats"
+                title="Buscar chats"
+                aria-expanded={isThreadSearchOpen}
+                aria-controls="workspace-chat-search"
+                onClick={() => isThreadSearchOpen ? closeThreadSearch() : setIsThreadSearchOpen(true)}
+                className="cursor-pointer rounded p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                <Search className="h-4 w-4" aria-hidden="true" />
+              </button>
+            </div>
+            {isThreadSearchOpen && (
+              <div className="relative mb-3 px-1">
+                <input
+                  id="workspace-chat-search"
+                  type="text"
+                  autoFocus
+                  aria-label="Buscar chats por nombre"
+                  placeholder="Buscar por nombre…"
+                  value={threadSearch}
+                  onChange={event => setThreadSearch(event.target.value)}
+                  onKeyDown={event => {
+                    if (event.key === "Escape") {
+                      event.preventDefault();
+                      event.stopPropagation();
+                      closeThreadSearch();
+                    }
+                  }}
+                  className="w-full rounded-lg border border-border bg-background py-2 pl-3 pr-9 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring"
+                />
+                <button
+                  type="button"
+                  aria-label="Cerrar búsqueda de chats"
+                  title="Cerrar búsqueda"
+                  onClick={closeThreadSearch}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 cursor-pointer rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                >
+                  <X className="h-4 w-4" aria-hidden="true" />
+                </button>
+              </div>
+            )}
             <div className="space-y-1">
-              {threads.length === 0 ? (
+              {isSearchingThreads && searchResults === undefined ? (
+                <div role="status" className="px-2 py-4 text-center text-muted-foreground text-sm">
+                  Buscando chats…
+                </div>
+              ) : visibleThreads.length === 0 ? (
                 <div className="px-2 py-4 text-center text-muted-foreground text-sm">
-                  No hay conversaciones
+                  {isSearchingThreads ? "No se encontraron chats" : "No hay conversaciones"}
                 </div>
               ) : (
                 <>
-                  {threads.map((thread) => (
+                  {visibleThreads.map((thread) => (
                     <div
                       key={thread._id}
                       ref={currentThreadId === thread.threadId ? activeThreadRef : undefined}
@@ -384,7 +448,7 @@ export function WorkspaceLayout({
                       )}
                     </div>
                   ))}
-                  {threadsStatus === "LoadingMore" && (
+                  {!isSearchingThreads && threadsStatus === "LoadingMore" && (
                     <div className="px-2 py-3 text-center text-muted-foreground text-sm">
                       Cargando más...
                     </div>

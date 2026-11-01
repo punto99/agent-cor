@@ -5,7 +5,6 @@ import { v } from "convex/values";
 import { internal } from "../_generated/api";
 import { action } from "../_generated/server";
 import { getProjectManagementProvider } from "../integrations/registry";
-import { canUserAccessInternalUserAdmin } from "../lib/internalUserAdminAccess";
 
 type CorActionResult =
   | {
@@ -22,7 +21,7 @@ type CorActionResult =
 async function requireInternalUserAdmin(ctx: any) {
   const userId = await getAuthUserId(ctx);
   if (!userId) throw new Error("No autenticado");
-  if (!canUserAccessInternalUserAdmin(String(userId))) {
+  if (!(await ctx.runQuery(internal.data.userAccess.hasPlatformAdminAccess, { userId }))) {
     throw new Error("No tienes permisos para administrar usuarios internos.");
   }
   return userId;

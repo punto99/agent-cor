@@ -1,5 +1,8 @@
 @import "tailwindcss";
 
+/* Match ThemeProvider's resolved theme instead of the operating system theme. */
+@custom-variant dark (&:where(.dark, .dark *));
+
 @layer base {
   :root {
     --background: 0 0% 100%;

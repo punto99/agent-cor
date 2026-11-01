@@ -1,5 +1,5 @@
 import { getAuthorName } from "../lib/authorName";
-import { canViewExternalRequest, externalRequestCandidates, hasExternalRequestsAccess, isRequestsClientTask } from "../lib/externalRequestsAccess";
+import { canViewExternalRequest, externalRequestCandidates, hasExternalRequestsAccess } from "../lib/externalRequestsAccess";
 import { notifyExternalTaskCreated } from "../lib/taskCreationNotifications";
 import { notifyTaskComment } from "../lib/commentNotifications";
 // convex/data/tasks.ts
@@ -1576,7 +1576,7 @@ export const listInternalTaskComments = query({
     if (!userId) throw new Error("No autenticado");
     if (await isExternalUser(ctx, userId)) return [];
     const task = await ctx.db.get(taskId);
-    if (!task || !(await isRequestsClientTask(ctx, task)) || task.convexStatus === "deleted" || !(await hasTaskAccess(ctx, task, userId))) return [];
+    if (!task || task.convexStatus === "deleted" || !(await hasTaskAccess(ctx, task, userId))) return [];
     const messages = await ctx.db.query("taskMessages").withIndex("by_task", q => q.eq("taskId", taskId)).collect();
     return await Promise.all(messages.sort((a, b) => b.createdAt - a.createdAt).map(async message => ({
       id: message._id, text: message.message, createdAt: message.createdAt,

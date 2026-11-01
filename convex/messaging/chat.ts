@@ -7,6 +7,7 @@ import { components, internal } from "../_generated/api";
 import { saveMessage, listUIMessages, getFile, syncStreams, vStreamArgs } from "@convex-dev/agent";
 import { paginationOptsValidator } from "convex/server";
 import { getAuthUserId } from "@convex-dev/auth/server";
+import { assertChatFileSizes, assertChatOriginalCount } from "../../config/chatUploads";
 
 // NOTA: La creación de threads ahora se hace a través de convex/threads.ts
 // que usa autenticación y crea correctamente el thread del Agent + chatThreads
@@ -42,10 +43,11 @@ export const sendMessage = mutation({
     // Solo archivos originales elegidos por el usuario. fileIds también puede
     // contener imágenes auxiliares extraídas de documentos para contexto del LLM.
     attachmentFileIds: v.optional(v.array(v.string())),
+    clientMessageId: v.optional(v.string()),
   },
   handler: async (
     ctx,
-    { threadId, prompt, fileId, fileIds, attachmentFileIds },
+    { threadId, prompt, fileId, fileIds, attachmentFileIds, clientMessageId },
   ) => {
     const userId = await getAuthUserId(ctx);
     if (userId === null) {
@@ -59,6 +61,12 @@ export const sendMessage = mutation({
 
     if (!chatThread || chatThread.userId !== userId) {
       throw new Error("Thread not found or access denied");
+    }
+
+    if (clientMessageId) {
+      if (clientMessageId.length > 128) throw new Error("Identificador de envío inválido.");
+      const receipt = chatThread.clientMessageReceipts?.find(row => row.clientMessageId === clientMessageId);
+      if (receipt) return { messageId: receipt.messageId };
     }
 
     console.log(`[Chat] 📤 Guardando mensaje en thread ${threadId}`);
@@ -75,12 +83,11 @@ export const sendMessage = mutation({
         storageId: string;
         filename: string;
         mimeType: string;
-        size?: number;
+        size: number;
       }
     >();
     let hasAudioInput = false;
-    if (fileId) allFileIds.push(fileId);
-    if (fileIds) allFileIds.push(...fileIds);
+    allFileIds.push(...new Set([...(fileId ? [fileId] : []), ...(fileIds ?? [])]));
     
     // Procesar todos los archivos
     for (const fId of allFileIds) {
@@ -126,15 +133,14 @@ export const sendMessage = mutation({
           console.log(`[Chat] 📝 Archivo Word detectado - omitiendo (contenido extraído en frontend)`);
         }
 
+        const metadata = await ctx.db.system.get("_storage", file.storageId as any);
+        if (!metadata) throw new Error("El archivo ya no está disponible en storage.");
         resolvedFiles.set(fId, {
           fileId: fId,
           storageId: String(file.storageId),
           filename: file.filename || `archivo_${fId}`,
           mimeType: mimeType || "application/octet-stream",
-          size:
-            typeof (file as any).size === "number"
-              ? (file as any).size
-              : undefined,
+          size: metadata.size,
         });
       } catch (error) {
         console.error(`[Chat] Error obteniendo archivo ${fId}:`, error);
@@ -164,6 +170,18 @@ export const sendMessage = mutation({
         throw new Error(`No se pudo validar el archivo adjunto ${attachmentFileId}.`);
       }
     }
+
+    // Word images contribute to bytes, but do not consume original-attachment slots.
+    // Derive originals independently so an omitted/partial attachmentFileIds cannot
+    // bypass the count check.
+    const files = [...resolvedFiles.values()];
+    const originals = files.filter(candidate =>
+      !candidate.mimeType.startsWith("image/") || !files.some(parent =>
+        /\.docx?$/i.test(parent.filename) && candidate.filename.startsWith(`${parent.filename}-img-`),
+      ),
+    );
+    assertChatOriginalCount(Math.max(requestedAttachmentIds.length, originals.length));
+    assertChatFileSizes(files);
     
     // Agregar texto si existe
     if (prompt.trim()) {
@@ -215,6 +233,14 @@ export const sendMessage = mutation({
     }
     
     // Disparar generación de respuesta asíncrona
+    if (clientMessageId) {
+      await ctx.db.patch(chatThread._id, {
+        clientMessageReceipts: [
+          ...(chatThread.clientMessageReceipts ?? []),
+          { clientMessageId, messageId },
+        ].slice(-100),
+      });
+    }
     await ctx.scheduler.runAfter(0, internal.messaging.chatGenerate.generateResponseAsync, {
       threadId,
       promptMessageId: messageId,
@@ -258,11 +284,17 @@ export const listThreadMessages = query({
 
     // Obtener mensajes regulares (no-streaming)
     const paginated = await listUIMessages(ctx, components.agent, args);
+    const clientIds = new Map((chatThread.clientMessageReceipts ?? []).map(row => [row.messageId, row.clientMessageId]));
 
     // Sincronizar deltas de streaming activos para este thread
     const streams = await syncStreams(ctx, components.agent, args);
 
-    return { ...paginated, streams };
+    return {
+      ...paginated,
+      page: paginated.page.map(message => clientIds.has(message.id)
+        ? { ...message, clientMessageId: clientIds.get(message.id) } : message),
+      streams,
+    };
   },
 });
 

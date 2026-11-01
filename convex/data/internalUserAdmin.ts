@@ -5,6 +5,42 @@ import { mutation, query } from "../_generated/server";
 import { canUserAccessInternalUserAdmin } from "../lib/internalUserAdminAccess";
 import { isExcludedUserId } from "../lib/excludedUsers";
 import { isInternalUserActive } from "../lib/internalUserStatus";
+import { isExternalRoleTarget, normalizeWorkRole, requireUserRoleAdmin } from "../lib/userRoles";
+
+export const setInternalUserRoles = mutation({
+  args: {
+    targetUserId: v.id("users"),
+    // super_admin can only be set directly in the database.
+    platformRole: v.optional(v.union(v.literal("user"), v.literal("admin"))),
+    workRole: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const actorId = await requireUserRoleAdmin(ctx);
+    if (!(await ctx.db.get(args.targetUserId))) throw new Error("Usuario no encontrado.");
+    if (await isExternalRoleTarget(ctx, args.targetUserId)) {
+      throw new Error("Un usuario externo nunca puede tener un rol de administración de la plataforma.");
+    }
+    const current = await ctx.db.query("userAccessProfiles").withIndex("by_user", q => q.eq("userId", args.targetUserId)).unique();
+    if (args.platformRole !== undefined && args.platformRole !== "user" && args.platformRole !== "admin") {
+      throw new Error("Super admin solo puede asignarse desde la base de datos.");
+    }
+    if (current?.platformRole === "super_admin" && args.platformRole !== undefined) {
+      throw new Error("El nivel de un Super admin solo puede modificarse desde la base de datos.");
+    }
+    const values = {
+      platformRole: args.platformRole ?? current?.platformRole ?? "user",
+      workRole: args.workRole === undefined ? current?.workRole : normalizeWorkRole(args.workRole),
+    };
+    const before = JSON.stringify({ platformRole: current?.platformRole ?? null, workRole: current?.workRole });
+    const after = JSON.stringify(values);
+    if (current && before === after) return { ok: true };
+    const profile = { ...values, updatedAt: Date.now(), updatedBy: actorId };
+    if (current) await ctx.db.patch(current._id, profile);
+    else await ctx.db.insert("userAccessProfiles", { userId: args.targetUserId, ...profile });
+    await ctx.db.insert("userRoleAuditLog", { actorId, targetUserId: args.targetUserId, before, after, createdAt: Date.now() });
+    return { ok: true };
+  },
+});
 
 function normalizeEmail(email: unknown) {
   return typeof email === "string" ? email.trim().toLowerCase() : "";
@@ -19,7 +55,7 @@ function formatUserName(user: Record<string, unknown>) {
 async function requireInternalUserAdmin(ctx: any) {
   const userId = await getAuthUserId(ctx);
   if (!userId) throw new Error("No autenticado");
-  if (!canUserAccessInternalUserAdmin(String(userId))) {
+  if (!(await canUserAccessInternalUserAdmin(ctx, userId))) {
     throw new Error("No tienes permisos para administrar usuarios internos.");
   }
   return userId;
@@ -44,7 +80,7 @@ export const viewerCanAccessInternalUserAdmin = query({
     return {
       isAuthenticated: true,
       userId,
-      canAccess: canUserAccessInternalUserAdmin(String(userId)),
+      canAccess: await canUserAccessInternalUserAdmin(ctx, userId),
     };
   },
 });
@@ -53,7 +89,7 @@ export const getDashboard = query({
   args: {},
   handler: async (ctx) => {
     const userId = await getAuthUserId(ctx);
-    if (!userId || !canUserAccessInternalUserAdmin(String(userId))) {
+    if (!userId || !(await canUserAccessInternalUserAdmin(ctx, userId))) {
       return { canAccess: false as const };
     }
 
@@ -120,6 +156,7 @@ export const getDashboard = query({
 
       internalUsers.push({
         _id: user._id,
+        roleProfile: await ctx.db.query("userAccessProfiles").withIndex("by_user", q => q.eq("userId", user._id)).unique(),
         name: formatUserName(user as Record<string, unknown>),
         email: normalizeEmail((user as Record<string, unknown>).email),
         image:

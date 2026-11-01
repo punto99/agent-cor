@@ -1,6 +1,7 @@
 import { v } from "convex/values";
 import { internalMutation, internalQuery, query } from "../_generated/server";
 import { syncClientAssignmentsFromAccess } from "../lib/externalUserPreapproval";
+import { removeInternalRoleProfileForExternal } from "../lib/userRoles";
 
 const OTP_REQUEST_LIMIT = 6;
 const OTP_REQUEST_WINDOW_MS = 15 * 60 * 1000;
@@ -62,6 +63,7 @@ export const linkApprovedExternalUser = internalMutation({
       .unique();
 
     if (!approvedUser) return;
+    await removeInternalRoleProfileForExternal(ctx, args.userId, approvedUser._id, approvedUser.addedBy ?? args.userId);
     if (approvedUser.userId === args.userId) return;
 
     const preapprovedClientAccess = (approvedUser as any)

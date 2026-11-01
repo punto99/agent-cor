@@ -2,6 +2,13 @@ import { hasExternalRequestsAccess } from "../lib/externalRequestsAccess";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { v } from "convex/values";
 import { internalQuery, query } from "../_generated/server";
+import { canAdministerPlatform } from "../lib/userRoles";
+
+// Actions resolve the same database-backed authorization as queries/mutations.
+export const hasPlatformAdminAccess = internalQuery({
+  args: { userId: v.id("users") },
+  handler: async (ctx, { userId }) => await canAdministerPlatform(ctx, userId),
+});
 
 async function getApprovedExternalUser(ctx: any, userId: string) {
   return await ctx.db

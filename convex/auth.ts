@@ -2,6 +2,7 @@ import Google from "@auth/core/providers/google";
 import { Email } from "@convex-dev/auth/providers/Email";
 import { convexAuth } from "@convex-dev/auth/server";
 import { internal } from "./_generated/api";
+import { ensureDefaultRoleForNewInternalUser } from "./lib/userRoles";
 
 const EXTERNAL_EMAIL_OTP_PROVIDER_ID = "external-email-otp";
 
@@ -118,6 +119,12 @@ export const { auth, signIn, signOut, store, isAuthenticated } = convexAuth({
 
       // Solo para usuarios nuevos de Google (no actualizaciones de perfil)
       if (existingUserId) return;
+
+      await ensureDefaultRoleForNewInternalUser(ctx, {
+        userId,
+        existingUserId,
+        providerId: provider.id,
+      });
 
       await ctx.scheduler.runAfter(
         0,

@@ -15,6 +15,7 @@ import {
 } from "../_generated/server";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { isInternalUserActive } from "../lib/internalUserStatus";
+import { requireUserRoleAdmin } from "../lib/userRoles";
 
 // ==================== QUERIES ====================
 
@@ -198,8 +199,7 @@ export const assignUserToClient = mutation({
     targetUserId: v.id("users"),
   },
   handler: async (ctx, args) => {
-    const userId = await getAuthUserId(ctx);
-    if (!userId) throw new Error("No autenticado");
+    const userId = await requireUserRoleAdmin(ctx);
     if (!(await isInternalUserActive(ctx, args.targetUserId))) {
       throw new Error("El usuario está inactivo.");
     }
@@ -246,8 +246,7 @@ export const assignUserToClientBrand = mutation({
     targetUserId: v.id("users"),
   },
   handler: async (ctx, args) => {
-    const userId = await getAuthUserId(ctx);
-    if (!userId) throw new Error("No autenticado");
+    const userId = await requireUserRoleAdmin(ctx);
     if (!(await isInternalUserActive(ctx, args.targetUserId))) {
       throw new Error("El usuario está inactivo.");
     }
@@ -289,8 +288,7 @@ export const removeUserFromClient = mutation({
     targetUserId: v.id("users"),
   },
   handler: async (ctx, args) => {
-    const userId = await getAuthUserId(ctx);
-    if (!userId) throw new Error("No autenticado");
+    await requireUserRoleAdmin(ctx);
 
     const assignments = await ctx.db
       .query("clientUserAssignments")

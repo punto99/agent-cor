@@ -22,8 +22,10 @@ import type { Id } from "@/convex/_generated/dataModel";
 import { LoadingScreen } from "../../components/LoadingScreen";
 import { WorkspaceLayout } from "../../components/WorkspaceLayout";
 import { Button } from "../../components/ui/Button";
+import { UserRolesEditor } from "../../components/UserRolesEditor";
 
 type AdminUser = {
+  roleProfile: { platformRole: "user" | "admin" | "super_admin"; workRole?: string } | null;
   _id: Id<"users">;
   name: string;
   email: string;
@@ -510,7 +512,10 @@ export default function InternalUsersAdminPage() {
                         </p>
                       </div>
                     </div>
-                    <ReadinessBadge user={selectedUser} />
+                    <div className="ml-auto flex flex-wrap items-start gap-2">
+                      <ReadinessBadge user={selectedUser} />
+                      <UserRolesEditor key={selectedUser._id} kind="internal" userId={selectedUser._id} platformRole={selectedUser.roleProfile?.platformRole} />
+                    </div>
                   </div>
 
                   <div className="mt-4 grid grid-cols-1 gap-3 xl:grid-cols-2">

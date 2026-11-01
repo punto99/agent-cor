@@ -14,6 +14,8 @@ import { documentSearchAgent } from "../agents/documentSearchAgent";
 import { components, internal } from "../_generated/api";
 import { getFile, listMessages, saveMessage } from "@convex-dev/agent";
 import { enabledAgents } from "../lib/serverConfig";
+import { ChatUploadLimitError } from "../../config/chatUploads";
+import { assertChatModelFileBudget } from "../lib/chatModelFileBudget";
 import { 
   classifyError, 
   extractErrorMessage,
@@ -357,6 +359,7 @@ async function prepareArgsForGeminiFiles(
   if (messages.length === 0) return preparedArgs;
 
   const fileMaps = await getChatUserFileMaps(ctx, threadId);
+  await assertChatModelFileBudget(ctx, messages, fileMaps);
   let replacedCount = 0;
 
   const transformedMessages = [];
@@ -561,6 +564,7 @@ export const generateResponseAsync = internalAction({
             classificationResult = classification.object as { intent: string };
             logLLMAttempt(geminiConfig.provider, geminiConfig.modelId, true, Date.now() - geminiStart);
           } catch (err) {
+            if (err instanceof ChatUploadLimitError) throw err;
             orchGeminiError = err instanceof Error ? err : new Error(String(err));
             logLLMAttempt(geminiConfig.provider, geminiConfig.modelId, false, Date.now() - geminiStart);
             console.error(`[GenerateResponse] ⚠️ Orquestador Gemini falló: ${extractErrorMessage(err)}`);
@@ -592,6 +596,7 @@ export const generateResponseAsync = internalAction({
               { promptMessageId, model: openaiConfig.model },
               { threadId, storageOptions: { saveMessages: "none" } }
             );
+            await assertChatModelFileBudget(ctx, orchArgs.messages ?? [], await getChatUserFileMaps(ctx, threadId));
             const fallbackResult = await generateObject({
               ...orchArgs,
               schema: intentSchema,
@@ -614,6 +619,7 @@ export const generateResponseAsync = internalAction({
               });
             }
           } catch (err) {
+            if (err instanceof ChatUploadLimitError) throw err;
             logLLMAttempt(openaiConfig.provider, openaiConfig.modelId, false, Date.now() - openaiStart);
             console.error(`[GenerateResponse] ❌ Orquestador OpenAI también falló: ${extractErrorMessage(err)}`);
             
@@ -651,6 +657,7 @@ export const generateResponseAsync = internalAction({
           selectedAgentKey = "brief";
         }
       } catch (error) {
+        if (error instanceof ChatUploadLimitError) throw error;
         console.error(`[GenerateResponse] ⚠️ Orquestador falló, usando briefAgent por defecto: ${extractErrorMessage(error)}`);
         selectedAgentKey = "brief";
       }
@@ -742,6 +749,7 @@ export const generateResponseAsync = internalAction({
         
       } catch (error) {
         clearTimeout(syncGeminiTimer);
+        if (error instanceof ChatUploadLimitError) throw error;
         geminiError = error instanceof Error ? error : new Error(String(error));
         logLLMAttempt(geminiConfig.provider, geminiConfig.modelId, false, Date.now() - geminiStart);
         const isAbort = geminiError.name === "AbortError";
@@ -795,6 +803,7 @@ export const generateResponseAsync = internalAction({
       }, LLM_CALL_TIMEOUT_MS);
 
       try {
+        await assertChatModelFileBudget(ctx, preparedArgs.messages ?? [], await getChatUserFileMaps(ctx, threadId));
         result = await generateText({
           ...preparedArgs,
           model: openaiConfig.model,
@@ -823,6 +832,7 @@ export const generateResponseAsync = internalAction({
         
       } catch (error) {
         clearTimeout(syncOpenaiTimer);
+        if (error instanceof ChatUploadLimitError) throw error;
         openaiError = error instanceof Error ? error : new Error(String(error));
         logLLMAttempt(openaiConfig.provider, openaiConfig.modelId, false, Date.now() - openaiStart);
         console.error(`[GenerateResponse] ❌ OpenAI también falló: ${extractErrorMessage(error)}`);
@@ -916,7 +926,9 @@ export const generateResponseAsync = internalAction({
           threadId,
           message: {
             role: "assistant",
-            content: [{ type: "text", text: `⚠️ Ocurrió un error procesando tu mensaje. Por favor, intenta de nuevo.` }],
+            content: [{ type: "text", text: globalError instanceof ChatUploadLimitError
+              ? `⚠️ ${globalError.message}`
+              : "⚠️ Ocurrió un error procesando tu mensaje. Por favor, intenta de nuevo." }],
           },
         });
       } catch (saveErr) {

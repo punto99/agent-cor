@@ -1,4 +1,4 @@
-import { mutation } from "../_generated/server";
+import { internalMutation } from "../_generated/server";
 import { v } from "convex/values";
 import { isInternalUserActive } from "../lib/internalUserStatus";
 
@@ -8,12 +8,13 @@ function normalize(value: string): string {
 
 /**
  * Función de dashboard para crear asignaciones usuario-cliente en lote.
+ * Solo disponible desde herramientas del servidor/dashboard, nunca desde el navegador.
  *
  * Uso típico:
  * - Pasar email + lista de clientes por nombre
  * - O pasar email + allClients=true para asignarlo a todos los clientes
  */
-export const assignUserToClientsBulkDashboard = mutation({
+export const assignUserToClientsBulkDashboard = internalMutation({
   args: {
     userEmail: v.string(),
     clientNames: v.optional(v.array(v.string())),

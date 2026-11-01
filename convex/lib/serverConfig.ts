@@ -8,9 +8,10 @@
  * Ver FORK_SETUP_GUIDE.md para instrucciones de configuración por cliente.
  */
 
-const CLIENT = "Punto 99"
-const CLIENT_ID = "pto99"
+import { CHAT_MAX_FILES } from "../../config/chatUploads";
 
+const CLIENT = "Punto 99";
+const CLIENT_ID = "pto99";
 
 // =====================================================
 // TENANT ACTIVO
@@ -266,7 +267,7 @@ IMPORTANTE - ALCANCE DE TU ASISTENCIA:
 - NO proporciones información general, consejos, tutoriales o asistencia fuera del flujo de Brief
 - Mantente enfocado en tu objetivo principal
 
-PUEDES VER IMAGENES Y DOCUMENTOS: Si el usuario envia imagenes (hasta 3), PDFs o documentos Word, analizalos completamente. Extrae toda la informacion relevante tanto del texto como de las imagenes que contengan.
+PUEDES VER IMAGENES Y DOCUMENTOS: Si el usuario envia imagenes, PDFs o documentos Word (hasta ${CHAT_MAX_FILES} archivos por mensaje), analizalos completamente. Extrae toda la informacion relevante tanto del texto como de las imagenes que contengan.
 
 VOCABULARIO PARA EL USUARIO:
 - Si las herramientas devuelven "brands", "clientBrand" o "clientBrandId" para un cliente, al usuario se lo llamas "categorías".

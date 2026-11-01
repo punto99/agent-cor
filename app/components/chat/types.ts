@@ -73,7 +73,7 @@ export const SUPPORTED_FILE_TYPES = [
 export const FILE_ACCEPT =
   "image/*,application/pdf,.docx,.doc,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/msword,audio/*,.mp3,.wav,.ogg,.m4a,.aac,.flac";
 
-export const MAX_FILES = 3;
+export { CHAT_MAX_FILES as MAX_FILES } from "@/config/chatUploads";
 
 export type ExtractedImage = {
   data: string; // base64 sin prefijo

@@ -3,7 +3,7 @@ import { getAuthUserId } from "@convex-dev/auth/server";
 import { v } from "convex/values";
 import { query, mutation, internalMutation, internalAction } from "../_generated/server";
 import { internal } from "../_generated/api";
-import { canReceiveComment, canReceiveMention, mentionEmail } from "../lib/commentNotifications";
+import { canReceiveComment, commentEmail } from "../lib/commentNotifications";
 
 export const unread = query({
   args: {},
@@ -47,10 +47,10 @@ export const claimEmail = internalMutation({
   args: { id: v.id("commentNotifications") }, handler: async (ctx, { id }) => {
     const row = await ctx.db.get(id);
     const now = Date.now();
-    if (!row || row.kind !== "mention" || !["pending", "sending"].includes(row.emailState ?? "") || (row.nextAttemptAt ?? 0) > now) return null;
+    if (!row || !row.kind || !["pending", "sending"].includes(row.emailState ?? "") || (row.nextAttemptAt ?? 0) > now) return null;
     const task = await ctx.db.get(row.taskId);
     const message = await ctx.db.get(row.messageId);
-    if (!task || !message || !(await canReceiveMention(ctx, row.userId, task, message))) {
+    if (!task || !message || !(await canReceiveComment(ctx, row.userId, task, message, row.kind))) {
       await ctx.db.patch(id, { emailState: "cancelled", emailError: "El destinatario ya no tiene acceso a la tarea." }); return null;
     }
     if ((row.attempts ?? 0) >= 8 || (row.firstAttemptAt !== undefined && now - row.firstAttemptAt >= 23 * 60 * 60 * 1000)) {
@@ -66,7 +66,7 @@ export const claimEmail = internalMutation({
         const baseUrl = process.env.APP_URL || process.env.SITE_URL;
         if (!baseUrl) throw new Error("Falta APP_URL o SITE_URL en Convex.");
         const external = Boolean(await ctx.db.query("approvedExternalUsers").withIndex("by_user", q => q.eq("userId", row.userId)).unique());
-        payload = JSON.stringify(mentionEmail({ from: process.env.RESEND_FROM_EMAIL || "Punto99 <digital@pto99.com>", to: email, baseUrl, taskId: task._id, title: task.title, author: await getAuthorName(ctx, message.userId), comment: message.message, quote: message.userQuote, external }));
+        payload = JSON.stringify(commentEmail({ from: process.env.RESEND_FROM_EMAIL || "Punto99 <digital@pto99.com>", to: email, baseUrl, taskId: task._id, title: task.title, author: await getAuthorName(ctx, message.userId, message.source === "trello" ? "Trello" : "Autor sin nombre"), comment: message.message, quote: message.userQuote, external, kind: row.kind }));
       } else if (JSON.parse(payload).to[0] !== email) {
         await ctx.db.patch(id, { emailState: "cancelled", emailError: "El correo del destinatario cambió durante el envío." }); return null;
       }

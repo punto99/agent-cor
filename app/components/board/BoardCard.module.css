@@ -30,7 +30,7 @@
 :global(.dark) .card { background: var(--trello-bg-card, #fff); color: var(--trello-text-primary, #172b4d); border-color: var(--trello-border, #091e4224); box-shadow: 0 1px 1px #0006; }
 :global(.dark) .card:hover { border-color: #8c9bab; }
 :global(.dark) .badges, :global(.dark) .fields { color: var(--trello-text-secondary, #44546f); }
-:global(.dark) .overdue { color: var(--trello-danger-bg, #ffeceb); background: var(--trello-danger-bg, #ffeceb); }
+:global(.dark) .overdue { color: var(--trello-danger, #f87168); background: var(--trello-danger-bg, #5d1f1a); }
 :global(.dark) .completed { color: var(--trello-success, #22a06b); background: var(--trello-success-bg, #dcfff1); }
 :global(.dark) .sync { color: var(--trello-blue, #0c66e4); }
 :global(.dark) .error { color: var(--trello-danger, #ca3521); }

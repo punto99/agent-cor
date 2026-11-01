@@ -4,6 +4,7 @@ import { v } from "convex/values";
 import { action, internalMutation, internalQuery, mutation, query } from "../_generated/server";
 import { storeFile, getFile } from "@convex-dev/agent";
 import { components } from "../_generated/api";
+import { registerStoredAgentFile } from "../lib/registerStoredAgentFile";
 
 // Tipos de archivo soportados
 const SUPPORTED_FILE_TYPES = {
@@ -404,15 +405,9 @@ export const registerUploadedFile = action({
   handler: async (ctx, args) => {
     console.log(`[Files] 📤 registerUploadedFile: ${args.filename} (${args.mimeType})`);
 
-    // 1. Obtener el blob desde storage (transferencia server-side, rápida)
-    const url = await ctx.storage.getUrl(args.storageId);
-    if (!url) throw new Error("Archivo no encontrado en storage");
-
-    const response = await fetch(url);
-    const arrayBuffer = await response.arrayBuffer();
-    const blob = new Blob([arrayBuffer], { type: args.mimeType });
-    const fileSizeKB = (arrayBuffer.byteLength / 1024).toFixed(2);
-    console.log(`[Files] 📊 Tamaño real: ${fileSizeKB}KB (${arrayBuffer.byteLength} bytes)`);
+    // Reuse the already-uploaded object. Keep the same Agent file contract used
+    // by messages, task attachments, COR and Trello.
+    const file = await registerStoredAgentFile(ctx, args);
 
     // 2. Guardar imágenes extraídas de Word (si las hay)
     const extractedImageFileIds: string[] = [];
@@ -432,21 +427,13 @@ export const registerUploadedFile = action({
       }
     }
 
-    // 3. Registrar archivo principal en el sistema de archivos del agente
-    const { file } = await storeFile(
-      ctx,
-      components.agent,
-      blob,
-      { filename: args.filename }
-    );
     console.log(`[Files] ✅ Archivo registrado: ${file.fileId}`);
-
-    // 4. Limpiar el upload temporal (storeFile creó su propia copia)
-    await ctx.storage.delete(args.storageId);
 
     const mimeType = args.mimeType;
     return {
       fileId: file.fileId,
+      storageId: file.storageId,
+      size: file.size,
       url: file.url,
       mimeType,
       isImage: isImageType(mimeType),

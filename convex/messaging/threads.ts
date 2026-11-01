@@ -46,6 +46,25 @@ export const getMyThreads = query({
   },
 });
 
+// Search the user's full history, including conversations not yet loaded in the sidebar.
+export const searchMyThreads = query({
+  args: { search: v.string() },
+  handler: async (ctx, { search }) => {
+    const userId = await getAuthUserId(ctx);
+    const normalize = (value: string) => value.normalize("NFD").replace(/\p{M}/gu, "").toLocaleLowerCase().trim();
+    const term = normalize(search);
+    if (!userId || !term) return [];
+
+    const threads = await ctx.db
+      .query("chatThreads")
+      .withIndex("by_user", (q) => q.eq("userId", userId))
+      .order("desc")
+      .collect();
+
+    return threads.filter(thread => normalize(thread.title || "Sin título").includes(term));
+  },
+});
+
 // Verificar si un thread tiene mensajes
 export const hasThreadMessages = query({
   args: { threadId: v.string() },

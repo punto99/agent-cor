@@ -10,6 +10,7 @@ import {
   LayoutDashboard,
   UserCog,
   UserPlus,
+  Building2,
 } from "lucide-react";
 
 /**
@@ -65,6 +66,12 @@ export function TopNavigation() {
       icon: UserPlus,
       isActive: pathname === "/workspace/external-users",
     },
+    {
+      label: "Clientes",
+      href: "/workspace/clients",
+      icon: Building2,
+      isActive: pathname === "/workspace/clients",
+    },
   ].filter((tab) => {
     if (tab.href === "/workspace/requests") return isExternalUser && accessProfile?.canAccessExternalRequests === true;
     if (isExternalUser && tab.href === "/workspace/control-panel") return false;
@@ -76,6 +83,9 @@ export function TopNavigation() {
     }
     if (tab.href === "/workspace/external-users") {
       return externalUserAdminAccess?.canAccess === true;
+    }
+    if (tab.href === "/workspace/clients") {
+      return internalUserAdminAccess?.canAccess === true;
     }
     return true;
   });

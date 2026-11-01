@@ -26,6 +26,9 @@ type Message = {
   status?: string;
   reasoning?: string;
   reasoningDetails?: ReasoningDetail[];
+  localSendId?: string;
+  localAttachments?: Array<{ name: string; mimeType: string; previewUrl?: string; isUploading?: boolean }>;
+  sendFailed?: boolean;
 };
 
 function isImageFilePart(part: MessagePart, hasWordContent: boolean) {
@@ -151,11 +154,7 @@ function TextPart({
   if (partHasWordContent && role === "user") {
     const parts = text.split(wordMarkerStart);
     const userText = parts[0].trim();
-    const match = text.match(
-      /--- Contenido extraído del documento "(.+?)" ---/,
-    );
-    const filename = match ? match[1] : "Documento Word";
-    const isDocx = filename.toLowerCase().endsWith(".docx");
+    const filenames = Array.from(text.matchAll(/--- Contenido extraído del documento "(.+?)" ---/g), match => match[1]);
 
     return (
       <div className="space-y-2">
@@ -166,12 +165,12 @@ function TextPart({
             showLinkPreviews={showLinkPreviews}
           />
         )}
-        <div className="bg-slate-100 rounded-lg p-2 flex items-center gap-2 border border-slate-200 hover:bg-slate-200 hover:border-slate-300 transition-colors cursor-pointer">
+        {filenames.map((filename, index) => <div key={index} className="bg-slate-100 rounded-lg p-2 flex items-center gap-2 border border-slate-200 hover:bg-slate-200 hover:border-slate-300 transition-colors cursor-pointer">
           <span className="text-slate-500">📝</span>
           <span className="text-xs text-slate-600 truncate">
-            {isDocx ? "Documento DOCX" : "Documento DOC"}
+            {filename.toLowerCase().endsWith(".docx") ? "Documento DOCX" : "Documento DOC"}
           </span>
-        </div>
+        </div>)}
       </div>
     );
   }

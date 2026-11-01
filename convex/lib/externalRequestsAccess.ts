@@ -1,9 +1,8 @@
-import { clientConfig } from "../../config/tenant.config";
 import type { Doc, Id } from "../_generated/dataModel";
 import type { QueryCtx } from "../_generated/server";
 
-function enabledClientIds() {
-  return new Set(clientConfig.ui.externalRequestsClientIds.map(id => id.trim()).filter(Boolean));
+async function isExternalBoardEnabled(ctx: QueryCtx, clientId: Id<"corClients">) {
+  return (await ctx.db.get(clientId))?.externalBoardEnabled === true;
 }
 
 async function taskClientId(ctx: QueryCtx, task: Doc<"tasks">) {
@@ -15,18 +14,19 @@ async function taskClientId(ctx: QueryCtx, task: Doc<"tasks">) {
 
 // Categories do not restrict this feature: any assignment to an enabled client qualifies.
 export async function hasExternalRequestsAccess(ctx: QueryCtx, userId: Id<"users">) {
-  const configured = enabledClientIds();
-  if (!configured.size) return false;
   const external = await ctx.db.query("approvedExternalUsers").withIndex("by_user", q => q.eq("userId", userId)).unique();
   if (!external) return false;
   const assignments = await ctx.db.query("clientUserAssignments").withIndex("by_user", q => q.eq("userId", userId)).collect();
-  return assignments.some(assignment => configured.has(String(assignment.clientId)));
+  for (const clientId of new Set(assignments.map(assignment => assignment.clientId))) {
+    if (await isExternalBoardEnabled(ctx, clientId)) return true;
+  }
+  return false;
 }
 
 export async function canViewExternalRequest(ctx: QueryCtx, userId: Id<"users">, task: Doc<"tasks">) {
   if (task.source !== "external" || task.convexStatus === "deleted" || task.convexStatus === "archived") return false;
   const clientId = await taskClientId(ctx, task);
-  if (!clientId || !enabledClientIds().has(String(clientId))) return false;
+  if (!clientId || !(await isExternalBoardEnabled(ctx, clientId))) return false;
   const external = await ctx.db.query("approvedExternalUsers").withIndex("by_user", q => q.eq("userId", userId)).unique();
   if (!external) return false;
   // Access to another enabled client must never grant access to this task's client.
@@ -39,11 +39,10 @@ export async function canViewExternalRequest(ctx: QueryCtx, userId: Id<"users">,
 export async function externalRequestCandidates(ctx: QueryCtx, userId: Id<"users">) {
   const assignments = await ctx.db.query("clientUserAssignments")
     .withIndex("by_user", q => q.eq("userId", userId)).collect();
-  const configured = enabledClientIds();
   const candidates = new Map<string, Doc<"tasks">>();
   for (const clientId of new Set(assignments.map(a => a.clientId))) {
-    if (!configured.has(String(clientId))) continue;
     const client = await ctx.db.get(clientId);
+    if (client?.externalBoardEnabled !== true) continue;
     const brands = await ctx.db.query("clientBrands").withIndex("by_client", q => q.eq("clientId", clientId)).collect();
     const groups = await Promise.all([
       ctx.db.query("tasks").withIndex("by_clientId", q => q.eq("clientId", clientId)).collect(),
@@ -53,9 +52,4 @@ export async function externalRequestCandidates(ctx: QueryCtx, userId: Id<"users
     for (const task of groups.flat()) candidates.set(String(task._id), task);
   }
   return [...candidates.values()].sort((a, b) => b._creationTime - a._creationTime);
-}
-
-export async function isRequestsClientTask(ctx: QueryCtx, task: Doc<"tasks">) {
-  const clientId = await taskClientId(ctx, task);
-  return Boolean(clientId && enabledClientIds().has(String(clientId)));
 }

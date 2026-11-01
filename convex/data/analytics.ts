@@ -4,6 +4,7 @@ import { mutation, query } from "../_generated/server";
 import { canUserAccessAnalytics } from "../lib/analyticsAccess";
 import { applyProjectDeliverablesDelta } from "../lib/deliverableAnalytics";
 import { isExcludedUserId } from "../lib/excludedUsers";
+import { requireUserRoleAdmin } from "../lib/userRoles";
 
 const TASK_STATUSES = [
   "nueva",
@@ -37,7 +38,7 @@ export const viewerCanAccessAnalytics = query({
     return {
       isAuthenticated: true,
       userId,
-      canAccess: canUserAccessAnalytics(String(userId)),
+      canAccess: await canUserAccessAnalytics(ctx, userId),
     };
   },
 });
@@ -47,6 +48,7 @@ export const rebuildDeliverableAnalyticsRollups = mutation({
     confirm: v.string(),
   },
   handler: async (ctx, args) => {
+    await requireUserRoleAdmin(ctx);
     if (args.confirm !== "REBUILD_DELIVERABLE_ANALYTICS") {
       throw new Error(
         "Confirmación inválida. Usa REBUILD_DELIVERABLE_ANALYTICS para recalcular.",
@@ -97,7 +99,7 @@ export const getDashboard = query({
   args: {},
   handler: async (ctx) => {
     const userId = await getAuthUserId(ctx);
-    if (!userId || !canUserAccessAnalytics(String(userId))) {
+    if (!userId || !(await canUserAccessAnalytics(ctx, userId))) {
       return { canAccess: false as const };
     }
 

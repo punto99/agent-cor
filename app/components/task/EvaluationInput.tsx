@@ -73,7 +73,7 @@ export function EvaluationInput({
 
     const remainingSlots = MAX_FILES - selectedFiles.length;
     if (remainingSlots <= 0) {
-      alert(`Solo puedes subir hasta ${MAX_FILES} archivos.`);
+      alert(`Solo puedes subir hasta ${MAX_FILES} archivos por mensaje.`);
       return;
     }
 
@@ -162,7 +162,7 @@ export function EvaluationInput({
 
       const remainingSlots = MAX_FILES - selectedFiles.length;
       if (remainingSlots <= 0) {
-        alert(`Solo puedes subir hasta ${MAX_FILES} archivos.`);
+        alert(`Solo puedes subir hasta ${MAX_FILES} archivos por mensaje.`);
         return;
       }
 

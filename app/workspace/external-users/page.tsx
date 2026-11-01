@@ -26,6 +26,7 @@ import type { Id } from "@/convex/_generated/dataModel";
 import { LoadingScreen } from "../../components/LoadingScreen";
 import { WorkspaceLayout } from "../../components/WorkspaceLayout";
 import { Button } from "../../components/ui/Button";
+import { UserRolesEditor } from "../../components/UserRolesEditor";
 
 type ExternalStatus =
   | "pending_registration"
@@ -37,6 +38,8 @@ type ExternalStatus =
   | "ready";
 
 type ExternalUser = {
+  isCoordinator: boolean;
+  workRole?: string;
   _id: Id<"approvedExternalUsers">;
   email: string;
   name?: string;
@@ -779,6 +782,11 @@ export default function ExternalUsersAdminPage() {
                             <div className="truncate text-xs text-muted-foreground">
                               {user.email}
                             </div>
+                            {user.isCoordinator && (
+                              <span className="mt-1 inline-flex rounded-full border border-blue-200 bg-blue-50 px-2 py-0.5 text-[10px] font-medium text-blue-700 dark:border-blue-800 dark:bg-blue-950/50 dark:text-blue-200">
+                                Coordinador
+                              </span>
+                            )}
                           </div>
                           <StatusIcon status={user.status} />
                         </div>
@@ -820,6 +828,8 @@ export default function ExternalUsersAdminPage() {
                     </div>
                   )}
                 </section>
+
+                <UserRolesEditor key={selectedUser._id} kind="external" approvedExternalUserId={selectedUser._id} isCoordinator={selectedUser.isCoordinator} />
 
                 {selectedUser.userId ? (
                   <section className="rounded-lg border border-border bg-card">
