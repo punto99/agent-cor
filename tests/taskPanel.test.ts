@@ -9,6 +9,10 @@ import { hasExternalRequestsAccess, canViewExternalRequest } from "../convex/lib
 import * as history from "../convex/data/notificationHistory";
 import * as notifications from "../convex/data/commentNotifications";
 import * as taskNotifications from "../convex/data/taskCreationNotifications";
+import * as statusNotifications from "../convex/data/taskStatusNotifications";
+import { patchTaskWithStatusNotification, taskStatusEmail } from "../convex/lib/taskStatusNotifications";
+import { applyInboundTaskUpdate } from "../convex/data/corInboundSync";
+import { applySafeInboundCardUpdate } from "../convex/data/trello";
 import { canReceiveTaskCreation, notifyExternalTaskCreated, taskCreationEmail } from "../convex/lib/taskCreationNotifications";
 import { notifyTaskComment, commentEmail } from "../convex/lib/commentNotifications";
 import { clientConfig } from "../config/tenant.config";
@@ -57,7 +61,7 @@ function fixture() {
     },
   };
   const ctx: any = { db, auth: { getUserIdentity: async () => ({ subject: "user1|session" }) }, storage: { getUrl: async (id: string) => `https://files.example/${id}`, get: async () => new Blob(["test"], { type: "application/pdf" }) }, scheduler: { runAfter: async (...args: any[]) => { scheduled.push(args); } } };
-  const modules: any = { "data/taskPanel": panel, "data/taskPanelSync": sender, "data/tasks": tasks, "data/taskCreationNotifications": taskNotifications, "data/commentNotifications": notifications };
+  const modules: any = { "data/taskPanel": panel, "data/taskPanelSync": sender, "data/tasks": tasks, "data/taskCreationNotifications": taskNotifications, "data/commentNotifications": notifications, "data/taskStatusNotifications": statusNotifications };
   const run = async (ref: any, args: any) => { const [module, name] = getFunctionName(ref).split(":"); return modules[module][name]._handler(ctx, args); };
   ctx.runQuery = run; ctx.runMutation = run;
   const upload = (id = "upload1", patch: any = {}) => put("taskPanelUploads", { _id: id, taskId: "task1", userId: "user1", key: id, filename: `${id}.pdf`, mimeType: "application/pdf", size: 4, state: "ready", fileId: `file-${id}`, storageId: `storage-${id}`, createdAt: 1, ...patch });
@@ -1518,4 +1522,210 @@ test("enabling coordinator comment subscriptions does not resend historical noti
   await notifyTaskComment(f.ctx, f.rows.get(entry).messageId);
   assert.equal(row.emailState, undefined);
   assert.equal(await f.call(notifications.claimEmail, { id: row._id }), null);
+});
+
+function statusFixture() {
+  const f = notificationFixture();
+  f.rows.get("external2").isCoordinator = true;
+  f.rows.get("otherExternal").email = "coordinator@example.com";
+  const statusRows = () => [...f.rows.values()].filter(row => row._table === "taskStatusNotifications");
+  const change = (status: string) => patchTaskWithStatusNotification(f.ctx, "task1" as any, { status }, "platform");
+  return { ...f, statusRows, change };
+}
+
+test("status events notify only authorized external coordinators, once per real transition across sync sources", async () => {
+  const f = statusFixture();
+  f.put("approvedExternalUsers", { _id: "wrong-brand-external", userId: "wrongBrandUser", isCoordinator: true });
+  f.put("approvedExternalUsers", { _id: "foreign-external", userId: "foreignCoordinator", isCoordinator: true });
+  f.put("corClients", { _id: "client2", corClientId: 100, externalBoardEnabled: true });
+  f.put("clientUserAssignments", { _id: "foreign-assignment", userId: "foreignCoordinator", clientId: "client2" });
+  // Duplicate assignments must not duplicate a coordinator's notification.
+  f.put("clientUserAssignments", { _id: "duplicate-assignment", userId: "otherExternal", clientId: "client1", brandId: "brand1" });
+  f.as("internal1");
+  await f.call(tasks.updateTaskFields, { taskId: "task1", updates: { status: "en_proceso" } });
+  assert.deepEqual(f.statusRows().map(row => [row.userId, row.fromStatus, row.toStatus, row.source]), [["otherExternal", "nueva", "en_proceso", "platform"]]);
+  f.rows.get("task1").corSyncStatus = "synced";
+  assert.deepEqual(await f.call(applyInboundTaskUpdate, { taskId: "task1", corTitle: "Original", corStatus: "en_proceso" }), { updated: false, statusChanged: false, trelloFieldsChanged: false });
+  await f.call(applySafeInboundCardUpdate, { taskId: "task1", updates: { status: "en_proceso" } });
+  assert.equal(f.statusRows().length, 1);
+  assert.equal(f.rows.get("task1").trelloInboundSyncStatus, "pending_review");
+  const result = await f.call(applyInboundTaskUpdate, { taskId: "task1", corTitle: "Changed title", corStatus: "en_revision" });
+  assert.deepEqual(result, { updated: true, statusChanged: true, trelloFieldsChanged: true });
+  assert.equal(f.statusRows()[1].source, "cor");
+  await f.call(applySafeInboundCardUpdate, { taskId: "task1", updates: { status: "finalizada" } });
+  assert.deepEqual(f.statusRows().map(row => row.toStatus), ["en_proceso", "en_revision", "finalizada"]);
+  assert.equal(f.statusRows()[2].source, "trello");
+  assert.ok(f.statusRows().every(row => row.emailState === "pending" && row.read === false));
+  assert.equal([...f.rows.values()].filter(row => row._table === "taskCreationNotifications" || row._table === "commentNotifications").length, 0);
+});
+
+test("status events cover every assigned client and own external tasks, preserving repeated legitimate transitions", async () => {
+  const f = statusFixture();
+  f.rows.get("task1").createdBy = "otherExternal";
+  for (const status of ["en_proceso", "nueva", "en_proceso"]) await f.change(status);
+  assert.deepEqual(f.statusRows().map(row => [row.fromStatus, row.toStatus]), [["nueva", "en_proceso"], ["en_proceso", "nueva"], ["nueva", "en_proceso"]]);
+  assert.equal(new Set(f.statusRows().map(row => row._id)).size, 3);
+  f.put("corClients", { _id: "client2", corClientId: 100, externalBoardEnabled: true });
+  f.put("clientUserAssignments", { _id: "second-client", userId: "otherExternal", clientId: "client2" });
+  f.put("tasks", { ...f.rows.get("task1"), _id: "task2", clientId: "client2", clientBrandId: undefined, corClientId: 100 });
+  await patchTaskWithStatusNotification(f.ctx, "task2" as any, { status: "finalizada" }, "cor");
+  f.as("otherExternal");
+  assert.deepEqual((await f.call(statusNotifications.unread, {})).map((row: any) => row.taskId).sort(), ["task1", "task1", "task1", "task2"]);
+});
+
+test("status notifications fail closed for revoked roles, clients, categories, boards and hidden tasks before creation or delivery", async () => {
+  const cases: Record<string, (f: ReturnType<typeof statusFixture>) => void> = {
+    role: f => { f.rows.get("external2").isCoordinator = false; },
+    external: f => { f.rows.delete("external2"); },
+    assignment: f => { f.rows.delete("assignment-otherExternal"); },
+    client: f => { f.rows.get("assignment-otherExternal").clientId = "another-client"; },
+    category: f => { f.rows.get("assignment-otherExternal").brandId = "brand2"; },
+    board: f => { f.rows.get("client1").externalBoardEnabled = false; },
+    unconfigured: f => { delete f.rows.get("client1").externalBoardEnabled; },
+    internalTask: f => { f.rows.get("task1").source = "internal"; },
+    deleted: f => { f.rows.get("task1").convexStatus = "deleted"; },
+    archived: f => { f.rows.get("task1").convexStatus = "archived"; },
+    missingBrand: f => { f.rows.delete("brand1"); },
+    foreignBrand: f => { f.rows.get("brand1").clientId = "another-client"; },
+  };
+  for (const [name, revoke] of Object.entries(cases)) {
+    const f = statusFixture(); await f.change("en_proceso");
+    const [row] = f.statusRows(); assert.ok(row, name);
+    revoke(f); f.as("otherExternal");
+    assert.deepEqual(await f.call(statusNotifications.unread, {}), [], name);
+    assert.deepEqual((await f.call(history.list, { paginationOpts: { numItems: 20, cursor: null } })).page, [], name);
+    await f.call(statusNotifications.markRead, { taskId: "task1", notificationIds: [row._id] });
+    assert.equal(row.read, false, name);
+    assert.equal(await f.call(statusNotifications.claimEmail, { id: row._id }), null, name);
+    assert.equal(row.emailState, "cancelled", name);
+    await f.change("finalizada"); assert.equal(f.statusRows().length, 1, name);
+  }
+});
+
+test("status reads acknowledge only the viewer's requested task events, retaining new events and paginated history", async () => {
+  const f = statusFixture(); await f.change("en_proceso");
+  const [first] = f.statusRows();
+  f.put("taskStatusNotifications", { ...first, _id: "foreign-event", userId: "user1" });
+  f.put("taskStatusNotifications", { ...first, _id: "other-task-event", taskId: "task2" });
+  f.as("otherExternal");
+  const displayed = await f.call(statusNotifications.unread, {});
+  assert.deepEqual(displayed.map((row: any) => row.id), [first._id]);
+  await f.change("finalizada");
+  await f.call(statusNotifications.markRead, { taskId: "task1", notificationIds: [first._id, "foreign-event", "other-task-event"] });
+  assert.equal(first.read, true);
+  assert.equal(f.rows.get("foreign-event").read, false);
+  assert.equal(f.rows.get("other-task-event").read, false);
+  assert.equal((await f.call(statusNotifications.unread, {})).length, 1);
+  const page = await f.call(history.list, { paginationOpts: { numItems: 20, cursor: null } });
+  assert.equal(page.page.length, 2);
+  assert.ok(page.page.every((row: any) => row.kind === "status" && row.external));
+  assert.ok(page.page.some((row: any) => row.read && row.context === "Nueva → En proceso"));
+  await assert.rejects(f.call(statusNotifications.markRead, { taskId: "task1", notificationIds: Array(101).fill(first._id) }));
+  f.ctx.auth.getUserIdentity = async () => null;
+  assert.deepEqual(await f.call(statusNotifications.unread, {}), []);
+  await assert.rejects(f.call(statusNotifications.markRead, { taskId: "task1", notificationIds: [first._id] }), /No autenticado/);
+});
+
+test("status-only public mutation enforces existing task edit access and read-only locks", async () => {
+  const denied: Record<string, (f: ReturnType<typeof statusFixture>) => void> = {
+    anonymous: f => { f.ctx.auth.getUserIdentity = async () => null; },
+    external: f => { f.as("otherExternal"); },
+    assignment: f => { f.rows.delete("assignment-internal1"); },
+    inactive: f => { f.put("corUsers", { _id: "inactive", userId: "internal1", isActive: false }); },
+    published: f => { f.rows.get("task1").corTaskId = "99"; },
+    synced: f => { f.rows.get("task1").corSyncStatus = "synced"; },
+    syncing: f => { f.rows.get("task1").corSyncStatus = "syncing"; },
+    retrying: f => { f.rows.get("task1").corSyncStatus = "retrying"; },
+  };
+  for (const [name, change] of Object.entries(denied)) {
+    const f = statusFixture(); f.as("internal1"); change(f);
+    await assert.rejects(f.call(tasks.updateTaskStatus, { taskId: "task1", status: "en_proceso" }), Error, name);
+    assert.equal(f.rows.get("task1").status, "nueva", name);
+    assert.equal(f.statusRows().length, 0, name);
+  }
+  const f = statusFixture(); f.as("internal1");
+  await f.call(tasks.updateTaskStatus, { taskId: "task1", status: "en_proceso" });
+  assert.equal(f.statusRows().length, 1);
+});
+
+test("unchanged status, metadata-only changes and blocked COR syncs never create historical status alerts", async () => {
+  const f = statusFixture();
+  await f.change("nueva");
+  await patchTaskWithStatusNotification(f.ctx, "task1" as any, { title: "Edited title" }, "platform");
+  assert.equal(f.rows.get("task1").title, "Edited title");
+  f.rows.get("task1").corSyncStatus = "syncing";
+  const result = await f.call(applyInboundTaskUpdate, { taskId: "task1", corTitle: "COR title", corStatus: "finalizada" });
+  assert.equal(result.updated, false); assert.equal(f.rows.get("task1").status, "nueva");
+  assert.equal(f.statusRows().length, 0);
+});
+
+test("status emails use scoped external links and stable retry keys without duplicate delivery", async () => {
+  const env = { APP_URL: process.env.APP_URL, RESEND_API_KEY: process.env.RESEND_API_KEY };
+  const originalFetch = globalThis.fetch; const calls: any[] = [];
+  try {
+    process.env.APP_URL = "https://app.example.com"; process.env.RESEND_API_KEY = "test-only";
+    globalThis.fetch = (async (_url: any, init: any) => {
+      calls.push(init);
+      return new Response(JSON.stringify(calls.length === 1 ? { name: "rate_limit_exceeded" } : { id: `status-email-${calls.length}` }), { status: calls.length === 1 ? 429 : 200 });
+    }) as typeof fetch;
+    const f = statusFixture(); await f.change("en_proceso"); const [row] = f.statusRows();
+    await f.call(statusNotifications.sweep, {});
+    assert.ok(f.scheduled.some(args => getFunctionName(args[1]) === "data/taskStatusNotifications:sendEmail" && args[2].id === row._id));
+    await f.call(statusNotifications.sendEmail, { id: row._id });
+    assert.equal(row.emailState, "pending");
+    await f.call(statusNotifications.sendEmail, { id: row._id }); assert.equal(calls.length, 1);
+    row.nextAttemptAt = 0; f.rows.get("task1").title = "New title after first attempt";
+    await f.call(statusNotifications.sendEmail, { id: row._id });
+    await f.call(statusNotifications.sendEmail, { id: row._id });
+    assert.equal(row.emailState, "sent"); assert.equal(calls.length, 2);
+    assert.equal(calls[0].body, calls[1].body);
+    assert.equal(calls[0].headers["Idempotency-Key"], calls[1].headers["Idempotency-Key"]);
+    const payload = JSON.parse(calls[0].body);
+    assert.deepEqual(payload.to, ["coordinator@example.com"]);
+    assert.match(payload.subject, /^Cambio de estado:/);
+    assert.match(payload.text, /Nueva → En proceso/);
+    assert.match(payload.text, /\/workspace\/requests\?taskId=task1&tab=task/);
+    await f.change("nueva"); await f.change("en_proceso");
+    const repeated = f.statusRows()[2];
+    await f.call(statusNotifications.sendEmail, { id: repeated._id });
+    assert.notEqual(calls[2].headers["Idempotency-Key"], calls[0].headers["Idempotency-Key"]);
+  } finally {
+    globalThis.fetch = originalFetch;
+    for (const [key, value] of Object.entries(env)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; }
+  }
+});
+
+test("status email claims prevent concurrency, unsafe retries and changed-recipient delivery", async () => {
+  const env = { APP_URL: process.env.APP_URL, RESEND_API_KEY: process.env.RESEND_API_KEY };
+  try {
+    process.env.APP_URL = "http://app.example.com"; process.env.RESEND_API_KEY = "test-only";
+    const f = statusFixture(); await f.change("en_proceso"); const [row] = f.statusRows();
+    assert.equal(await f.call(statusNotifications.claimEmail, { id: row._id }), null);
+    assert.equal(row.emailState, "pending"); assert.equal(row.attempts, 0);
+    process.env.APP_URL = "https://app.example.com"; row.nextAttemptAt = 0;
+    const claim = await f.call(statusNotifications.claimEmail, { id: row._id }); assert.ok(claim);
+    assert.equal(await f.call(statusNotifications.claimEmail, { id: row._id }), null);
+    await f.call(statusNotifications.finishEmail, { id: row._id, attempt: claim.attempt + 1, resendId: "stale", retry: false });
+    assert.equal(row.emailState, "sending");
+    row.nextAttemptAt = 0; f.rows.get("otherExternal").email = "changed@example.com";
+    assert.equal(await f.call(statusNotifications.claimEmail, { id: row._id }), null);
+    assert.equal(row.emailState, "cancelled");
+    for (const expiration of [{ attempts: 8 }, { attempts: 1, firstAttemptAt: Date.now() - 23 * 60 * 60 * 1000 }]) {
+      Object.assign(row, { emailState: "pending", nextAttemptAt: 0 }, expiration);
+      assert.equal(await f.call(statusNotifications.claimEmail, { id: row._id }), null);
+      assert.equal(row.emailState, "failed");
+    }
+  } finally {
+    for (const [key, value] of Object.entries(env)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; }
+  }
+});
+
+test("status email content escapes titles, client names and unknown status labels", () => {
+  const args = { from: "sender@example.com", to: "recipient@example.com", baseUrl: "https://app.example.com", taskId: "task1", title: "<script>alert(1)</script>\nTitle", client: "Client & Co", fromStatus: "nueva", toStatus: "<unsafe>" };
+  const email = taskStatusEmail(args);
+  assert.ok(!email.html.includes("<script>")); assert.ok(email.html.includes("&lt;script&gt;"));
+  assert.ok(email.html.includes("Client &amp; Co")); assert.ok(email.html.includes("Nueva → &lt;unsafe&gt;"));
+  assert.ok(!email.subject.includes("\n"));
+  for (const baseUrl of ["javascript:alert(1)", "http://app.example.com", "https://user:pass@app.example.com", "http://localhost.evil.example"]) assert.throws(() => taskStatusEmail({ ...args, baseUrl }));
+  assert.match(taskStatusEmail({ ...args, baseUrl: "http://localhost:3000" }).text, /http:\/\/localhost:3000\/workspace\/requests/);
 });

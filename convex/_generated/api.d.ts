@@ -48,6 +48,7 @@ import type * as data_preferences from "../data/preferences.js";
 import type * as data_projects from "../data/projects.js";
 import type * as data_subBrands from "../data/subBrands.js";
 import type * as data_taskCreationNotifications from "../data/taskCreationNotifications.js";
+import type * as data_taskStatusNotifications from "../data/taskStatusNotifications.js";
 import type * as data_taskPanel from "../data/taskPanel.js";
 import type * as data_taskPanelMedia from "../data/taskPanelMedia.js";
 import type * as data_taskPanelSync from "../data/taskPanelSync.js";
@@ -82,6 +83,7 @@ import type * as lib_registerStoredAgentFile from "../lib/registerStoredAgentFil
 import type * as lib_serverConfig from "../lib/serverConfig.js";
 import type * as lib_speechToText from "../lib/speechToText.js";
 import type * as lib_taskCreationNotifications from "../lib/taskCreationNotifications.js";
+import type * as lib_taskStatusNotifications from "../lib/taskStatusNotifications.js";
 import type * as lib_taskMentions from "../lib/taskMentions.js";
 import type * as lib_taskPanelComment from "../lib/taskPanelComment.js";
 import type * as lib_taskStatuses from "../lib/taskStatuses.js";
@@ -168,6 +170,7 @@ declare const fullApi: ApiFromModules<{
   "data/projects": typeof data_projects;
   "data/subBrands": typeof data_subBrands;
   "data/taskCreationNotifications": typeof data_taskCreationNotifications;
+  "data/taskStatusNotifications": typeof data_taskStatusNotifications;
   "data/taskPanel": typeof data_taskPanel;
   "data/taskPanelMedia": typeof data_taskPanelMedia;
   "data/taskPanelSync": typeof data_taskPanelSync;
@@ -202,6 +205,7 @@ declare const fullApi: ApiFromModules<{
   "lib/serverConfig": typeof lib_serverConfig;
   "lib/speechToText": typeof lib_speechToText;
   "lib/taskCreationNotifications": typeof lib_taskCreationNotifications;
+  "lib/taskStatusNotifications": typeof lib_taskStatusNotifications;
   "lib/taskMentions": typeof lib_taskMentions;
   "lib/taskPanelComment": typeof lib_taskPanelComment;
   "lib/taskStatuses": typeof lib_taskStatuses;

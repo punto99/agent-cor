@@ -29,6 +29,7 @@ import { CORNotFoundError } from "../integrations/corProvider";
 import { hashText } from "../lib/briefFormat";
 import { applyProjectDeliverablesDelta } from "../lib/deliverableAnalytics";
 import { isInternalUserActive } from "../lib/internalUserStatus";
+import { patchTaskWithStatusNotification } from "../lib/taskStatusNotifications";
 
 const SCHEDULED_SYNC_STATE_KEY = "scheduled-cor-inbound-sync";
 const SCHEDULED_EXPIRED_SYNC_STATE_KEY = "scheduled-expired-cor-inbound-sync";
@@ -1566,7 +1567,7 @@ export const applyInboundTaskUpdate = internalMutation({
       updates.corDescriptionHash = hashText(updates.description as string);
     }
 
-    await ctx.db.patch(args.taskId, updates as any);
+    await patchTaskWithStatusNotification(ctx, args.taskId, updates as any, "cor");
     console.log(
       `[InboundSync] ✅ Task ${args.taskId} actualizada: ${Object.keys(updates)
         .filter((k) => !k.startsWith("cor"))

@@ -1,6 +1,7 @@
 import { getAuthorName } from "../lib/authorName";
 import { canViewExternalRequest, externalRequestCandidates, hasExternalRequestsAccess } from "../lib/externalRequestsAccess";
 import { notifyExternalTaskCreated } from "../lib/taskCreationNotifications";
+import { patchTaskWithStatusNotification } from "../lib/taskStatusNotifications";
 import { notifyTaskComment } from "../lib/commentNotifications";
 // convex/data/tasks.ts
 // Funciones Convex para manejar tasks/requerimientos
@@ -1707,7 +1708,7 @@ export const updateTaskFields = mutation({
       `[Tasks.updateTaskFields] Actualizando task ${args.taskId}:`,
       Object.keys(updateData),
     );
-    await ctx.db.patch(args.taskId, updateData as any);
+    await patchTaskWithStatusNotification(ctx, args.taskId, updateData as any, "platform");
 
     // Programar sync a COR si corresponde (via internalMutation)
     const changedFields = Object.keys(args.updates).filter(
@@ -1738,9 +1739,17 @@ export const updateTaskStatus = mutation({
     status: v.string(),
   },
   handler: async (ctx, args) => {
-    await ctx.db.patch(args.taskId, {
-      status: args.status,
-    });
+    // Apply the same access and read-only rules as updateTaskFields.
+    const userId = await getAuthUserId(ctx);
+    if (!userId) throw new Error("No autenticado");
+    const external = await ctx.db.query("approvedExternalUsers").withIndex("by_user", q => q.eq("userId", userId)).unique();
+    if (external) throw new Error("Los usuarios externos no pueden editar el estado de las tareas.");
+    const task = await ctx.db.get(args.taskId);
+    if (!task) throw new Error("Task no encontrada");
+    if (task.corTaskId || task.corSyncStatus === "synced") throw new Error("Las tareas publicadas en COR son de solo lectura.");
+    if (task.corSyncStatus === "syncing" || task.corSyncStatus === "retrying") throw new Error("La tarea se está sincronizando con el sistema externo.");
+    if (!(await hasTaskAccess(ctx, task, userId))) throw new Error("No tienes permisos para editar esta tarea.");
+    await patchTaskWithStatusNotification(ctx, args.taskId, { status: args.status }, "platform");
     return args.taskId;
   },
 });

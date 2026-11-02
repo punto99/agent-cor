@@ -32,5 +32,6 @@ crons.interval("sync manual task panel entries", { minutes: 1 }, internal.data.t
 crons.interval("send new external task emails", { minutes: 1 }, internal.data.taskCreationNotifications.sweep, {});
 
 crons.interval("send comment mention emails", { minutes: 1 }, internal.data.commentNotifications.sweep, {});
+crons.interval("send external task status emails", { minutes: 1 }, internal.data.taskStatusNotifications.sweep, {});
 
 export default crons;

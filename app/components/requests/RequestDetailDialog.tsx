@@ -13,6 +13,7 @@ import { BoardCustomFields } from "../board/BoardCustomFields";
 import { TaskMediaProvider } from "./TaskMediaContext";
 import { RequestCommentsSection } from "./RequestCommentsSection";
 import { useReadTaskCreation } from "../notifications/useReadTaskCreation";
+import { useReadTaskStatus } from "../notifications/useReadTaskStatus";
 import { BoardDialogMetadata, BoardDialogDeadline } from "../board/BoardDialogMetadata";
 import dialogStyles from "../board/BoardDialog.module.css";
 import styles from "./requestsInteractions.module.css";
@@ -24,6 +25,7 @@ export function RequestDetailDialog({ request, stage, onClose }: {
   const titleId = useId();
   const brief = useRequestBrief(request.description);
   useReadTaskCreation(request._id, true);
+  useReadTaskStatus(request._id, true);
 
   useEffect(() => {
     const dialog = dialogRef.current;

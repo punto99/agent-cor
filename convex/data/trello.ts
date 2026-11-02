@@ -12,6 +12,7 @@ import { components, internal } from "../_generated/api";
 import { trelloProvider } from "../integrations/trelloProvider";
 import { getProjectManagementProvider } from "../integrations/registry";
 import { TASK_STATUS_OPTIONS, getTaskStatusName } from "../lib/taskStatuses";
+import { patchTaskWithStatusNotification } from "../lib/taskStatusNotifications";
 import {
   getTrelloDisabledReason,
   isTrelloEnabledForCorClientId,
@@ -1125,7 +1126,7 @@ export const applySafeInboundCardUpdate = internalMutation({
     }
     if (args.updates.status !== undefined) taskPatch.status = args.updates.status;
 
-    await ctx.db.patch(args.taskId, taskPatch);
+    await patchTaskWithStatusNotification(ctx, args.taskId, taskPatch, "trello");
 
     if (args.projectId) {
       const projectPatch: Record<string, any> = {};

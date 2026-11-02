@@ -5,7 +5,7 @@ async function isExternalBoardEnabled(ctx: QueryCtx, clientId: Id<"corClients">)
   return (await ctx.db.get(clientId))?.externalBoardEnabled === true;
 }
 
-async function taskClientId(ctx: QueryCtx, task: Doc<"tasks">) {
+export async function taskClientId(ctx: QueryCtx, task: Doc<"tasks">) {
   let clientId = task.clientId;
   if (task.clientBrandId) return (await ctx.db.get(task.clientBrandId))?.clientId;
   if (!clientId && task.corClientId !== undefined) clientId = (await ctx.db.query("corClients").withIndex("by_corClientId", q => q.eq("corClientId", task.corClientId!)).unique())?._id;

@@ -52,6 +52,19 @@ export default defineSchema({
     .index("by_user_task", ["userId", "taskId"])
     .index("by_email_due", ["emailState", "nextAttemptAt"]),
 
+  taskStatusNotifications: defineTable({
+    userId: v.id("users"), taskId: v.id("tasks"),
+    fromStatus: v.string(), toStatus: v.string(),
+    source: v.union(v.literal("platform"), v.literal("cor"), v.literal("trello")),
+    read: v.boolean(), createdAt: v.number(),
+    emailState: v.union(v.literal("pending"), v.literal("sending"), v.literal("sent"), v.literal("failed"), v.literal("cancelled")),
+    attempts: v.number(), nextAttemptAt: v.number(), firstAttemptAt: v.optional(v.number()),
+    emailPayload: v.optional(v.string()), emailError: v.optional(v.string()),
+    resendId: v.optional(v.string()), emailSentAt: v.optional(v.number()),
+  }).index("by_user_read", ["userId", "read"])
+    .index("by_user_created", ["userId", "createdAt"])
+    .index("by_email_due", ["emailState", "nextAttemptAt"]),
+
   // Workspaces - uno por usuario
   workspaces: defineTable({
     ownerId: v.id("users"),

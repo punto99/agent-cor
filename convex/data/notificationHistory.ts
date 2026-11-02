@@ -7,6 +7,8 @@ import type { Doc } from "../_generated/dataModel";
 import schema from "../schema";
 import { canReceiveComment } from "../lib/commentNotifications";
 import { canReceiveTaskCreation } from "../lib/taskCreationNotifications";
+import { canReceiveTaskStatus } from "../lib/taskStatusNotifications";
+import { getTaskStatusName } from "../lib/taskStatuses";
 
 // Merge indexed streams before pagination, including existing read records.
 // Authorization runs before returning each item, even on subsequent pages.
@@ -17,13 +19,18 @@ export const list = query({
     if (!userId) return { page: [], isDone: true, continueCursor: "" };
     const external = Boolean(await ctx.db.query("approvedExternalUsers").withIndex("by_user", q => q.eq("userId", userId)).unique());
     const db = stream(ctx.db, schema);
-    return await mergedStream<Doc<"commentNotifications"> | Doc<"taskCreationNotifications">>([
+    return await mergedStream<Doc<"commentNotifications"> | Doc<"taskCreationNotifications"> | Doc<"taskStatusNotifications">>([
       db.query("commentNotifications").withIndex("by_user_created", q => q.eq("userId", userId)).order("desc"),
       db.query("taskCreationNotifications").withIndex("by_user_created", q => q.eq("userId", userId)).order("desc"),
+      db.query("taskStatusNotifications").withIndex("by_user_created", q => q.eq("userId", userId)).order("desc"),
     ], ["createdAt", "_creationTime", "_id"])
       .map(async row => {
         const task = await ctx.db.get(row.taskId);
         if (!task) return null;
+        if ("fromStatus" in row) {
+          if (!(await canReceiveTaskStatus(ctx, userId, task))) return null;
+          return { id: row._id, taskId: task._id, title: task.title, kind: "status" as const, author: "", external, read: row.read, createdAt: row.createdAt, context: `${getTaskStatusName(row.fromStatus)} → ${getTaskStatusName(row.toStatus)}` };
+        }
         if ("messageId" in row) {
           const message = await ctx.db.get(row.messageId);
           if (!message || !(await canReceiveComment(ctx, userId, task, message, row.kind))) return null;
