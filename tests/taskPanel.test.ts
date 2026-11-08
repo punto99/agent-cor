@@ -353,6 +353,45 @@ test("external users and already published COR tasks reject dialog edits", async
   }
 });
 
+test("quantity edits adjust only the delta and keep published tasks read-only", async () => {
+  const f = fixture();
+  f.rows.delete("external1");
+  Object.assign(f.rows.get("task1"), { projectId: "project1", deliverablesCount: 2 });
+  f.put("projects", { _id: "project1", deliverables: 10, corProjectId: 123, corSyncStatus: "synced" });
+  await f.call(tasks.updateTaskFields, { taskId: "task1", updates: { deliverablesCount: 5 } });
+  assert.equal(f.rows.get("project1").deliverables, 13);
+  assert.equal(f.rows.get("task1").deliverablesCount, 5);
+  assert.deepEqual(f.rows.get("task1").projectDeliverableAllocation, { amount: 5, trackedOnProject: false });
+  await f.call(tasks.updateTaskFields, { taskId: "task1", updates: { deliverablesCount: 5 } });
+  assert.equal(f.rows.get("project1").deliverables, 13);
+  assert.equal(f.scheduled.length, 0);
+  await f.call(tasks.updateTaskFields, { taskId: "task1", updates: { deliverablesCount: 1 } });
+  assert.equal(f.rows.get("project1").deliverables, 9);
+  assert.equal(f.scheduled.length, 0);
+  // Published tasks still reject quantity edits, preserving both records.
+  f.rows.get("task1").corTaskId = "456";
+  await assert.rejects(f.call(tasks.updateTaskFields,
+    { taskId: "task1", updates: { deliverablesCount: 6 } }), /solo lectura/);
+  assert.equal(f.rows.get("project1").deliverables, 9);
+  assert.equal(f.rows.get("task1").deliverablesCount, 1);
+});
+
+test("task and project quantities roll back together if saving the task fails", async () => {
+  const f = fixture();
+  f.rows.delete("external1");
+  Object.assign(f.rows.get("task1"), { projectId: "project1", deliverablesCount: 2 });
+  f.put("projects", { _id: "project1", deliverables: 8 });
+  const patch = f.ctx.db.patch;
+  f.ctx.db.patch = async (id: string, data: any) => {
+    if (id === "task1") throw new Error("Simulated task write failure");
+    return patch(id, data);
+  };
+  await assert.rejects(f.call(tasks.updateTaskFields,
+    { taskId: "task1", updates: { deliverablesCount: 5 } }), /Simulated task write failure/);
+  assert.equal(f.rows.get("project1").deliverables, 8);
+  assert.equal(f.rows.get("task1").deliverablesCount, 2);
+});
+
 function notificationFixture() {
   const f = fixture();
   f.put("users", { _id: "user1", name: "Externo" });

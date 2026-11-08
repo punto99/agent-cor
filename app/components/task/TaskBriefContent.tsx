@@ -671,7 +671,10 @@ export function TaskBriefContent({
   afterTitleItems,
   highlightMissingDeadline = false,
 }: TaskBriefContentProps) {
-  const updateTask = useAnalyticsMutation(api.data.tasks.updateTaskFields, (_, args) => [args.taskId]);
+  const updateTask = useAnalyticsMutation(api.data.tasks.updateTaskFields, (_, args) => [
+    args.taskId,
+    args.updates.deliverablesCount !== undefined ? task.projectId : undefined,
+  ]);
   const attachments = useQuery(api.data.tasks.getTaskAttachmentsPublic, {
     taskId: task._id,
   });
