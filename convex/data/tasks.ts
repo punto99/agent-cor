@@ -1709,16 +1709,40 @@ export const updateTaskFields = mutation({
     }
 
     // Agregar timestamp de edición local
-    updateData.lastLocalEditAt = Date.now();
-    updateData.updatedAt = updateData.lastLocalEditAt;
+    const editedAt = Date.now();
+    updateData.lastLocalEditAt = editedAt;
+    updateData.updatedAt = editedAt;
 
     console.log(
       `[Tasks.updateTaskFields] Actualizando task ${args.taskId}:`,
       Object.keys(updateData),
     );
-    // Freeze the legacy amount included in the project before changing the task quantity.
+    // Adjust only this task's delta, preserving the other tasks and historical remainder.
+    if (args.updates.deliverablesCount !== undefined && task.projectId) {
+      const delta = positiveDeliverables(args.updates.deliverablesCount)
+        - positiveDeliverables(task.deliverablesCount);
+      const project = delta !== 0 ? await ctx.db.get(task.projectId) : null;
+      if (project) {
+        const previousTotal = positiveDeliverables(project.deliverables);
+        const deliverables = Math.max(0, previousTotal + delta);
+        const allocation = task.projectDeliverableAllocation ?? {
+          amount: positiveDeliverables(task.deliverablesCount), trackedOnProject: false,
+        };
+        const amount = Math.max(0, allocation.amount + deliverables - previousTotal);
+        updateData.projectDeliverableAllocation = { ...allocation, amount };
+        await ctx.db.patch(project._id, {
+          deliverables,
+          updatedAt: editedAt,
+          ...(allocation.trackedOnProject ? {
+            deliverablesCoveredByTasks: Math.max(0,
+              positiveDeliverables(project.deliverablesCoveredByTasks) + amount - allocation.amount),
+          } : {}),
+        });
+      }
+    }
+    // If no project was adjusted, retain the amount already included in its total.
     if (updateData.deliverablesCount !== undefined && !task.projectDeliverableAllocation) {
-      updateData.projectDeliverableAllocation = {
+      updateData.projectDeliverableAllocation ??= {
         amount: positiveDeliverables(task.deliverablesCount),
         trackedOnProject: false,
       };

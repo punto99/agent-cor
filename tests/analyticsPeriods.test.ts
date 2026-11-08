@@ -10,6 +10,7 @@ import { failure, nightly, nightlyBatch, process, processPage, record } from "..
 import { notifyAnalytics } from "../convex/analytics/notify";
 import { getDashboard, getPeriodDashboard } from "../convex/data/analytics";
 import { attachProjectToExistingCORProject } from "../convex/data/projects";
+import { updateTaskFields } from "../convex/data/tasks";
 import { projectDeliverableShard } from "../convex/lib/deliverableAnalytics";
 import { clientConfig } from "../config/tenant.config";
 
@@ -445,6 +446,43 @@ test("publishing a new task into an older project keeps its dated deliverables a
     remainderExamples: [{ projectId: "original", day: "2026-10-15", deliverables: 5 }],
     projectsWithExcessShares: 0, excessExamples: [],
   });
+});
+
+test("editing task quantities adjusts a shared project by delta and preserves its dated remainder", async (t) => {
+  for (const tracked of [undefined, false, true]) {
+    await t.test(`allocation trackedOnProject=${tracked}`, async () => {
+      const f = fixture();
+      f.put("projects", { _id: "project", _creationTime: october, name: "Compartido", status: "active",
+        deliverables: 7, ...(tracked === true ? { deliverablesCoveredByTasks: 5 } : {}) });
+      for (const [id, count] of [["first", 2], ["second", 3]] as const) {
+        f.put("tasks", { _id: id, _creationTime: november, title: id, status: "nueva", createdBy: "admin",
+          projectId: "project", deliverablesCount: count,
+          ...(tracked !== undefined ? { projectDeliverableAllocation: { amount: count, trackedOnProject: tracked } } : {}) });
+      }
+      await f.call(backfill, { dryRun: false });
+      for (const [taskId, quantity, projectTotal, taskTotal] of [
+        ["first", 5, 10, 8],
+        ["second", 1, 8, 6],
+        ["first", 5, 8, 6], // Repeating a save must not add the delta again.
+        ["first", 1, 4, 2],
+      ] as const) {
+        await f.callOperational(updateTaskFields, { taskId, updates: { deliverablesCount: quantity } });
+        assert.equal(f.rows.get("project").deliverables, projectTotal);
+        assert.equal(f.rows.get(taskId).deliverablesCount, quantity);
+        if (tracked === true) assert.equal(f.rows.get("project").deliverablesCoveredByTasks, taskTotal);
+        // Independent analytics jobs may process the project before its task.
+        await notifyAnalytics(f.ctx, ["project", taskId] as any);
+        await f.drain();
+        assert.equal((await f.readDashboard("month", "2026-10-01")).summary.deliverables, 2);
+        assert.equal((await f.readDashboard("month", "2026-11-01")).summary.deliverables, taskTotal);
+        assert.equal((await f.readDashboard("all", "all")).summary.deliverables, projectTotal);
+        const preview = await f.call(backfill, { dryRun: true });
+        assert.equal(preview.deliverables, projectTotal);
+        assert.equal(preview.diagnostics.deliverables.attribution.projectRemainder, 2);
+        assert.equal(preview.diagnostics.deliverables.attribution.projectsWithExcessShares, 0);
+      }
+    });
+  }
 });
 
 test("task corrections and exclusions do not reappear in the project remainder", async () => {
