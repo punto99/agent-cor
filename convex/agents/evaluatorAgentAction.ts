@@ -3,6 +3,7 @@
 // convex/evaluatorAgentAction.ts
 // Agente evaluador para comparar producto final con requerimiento original
 // IMPORTANTE: Este archivo usa Node.js runtime (512MB) en vez de Convex runtime (64MB)
+import { notifyAnalytics } from "../analytics/notify";
 import { Agent, createTool, listMessages, saveMessage } from "@convex-dev/agent";
 import { components, internal } from "../_generated/api";
 import { google } from "@ai-sdk/google";
@@ -348,6 +349,7 @@ export const generateEvaluationAsync = internalAction({
           agentResultMessageId: resultMessage?._id,
           resultProvider: usedProvider,
         });
+        await notifyAnalytics(ctx, [evaluationId]);
       }
 
       const totalTime = Date.now() - startTime;
@@ -378,6 +380,7 @@ export const generateEvaluationAsync = internalAction({
             evaluationId,
             error: errorMessage,
           });
+          await notifyAnalytics(ctx, [evaluationId]);
         } catch (failEvaluationError) {
           console.error(
             "[Evaluator] No se pudo marcar la evaluación como fallida:",

@@ -1,5 +1,6 @@
 "use client";
 
+import { useAnalyticsMutation } from "@/app/hooks/useAnalyticsMutation";
 import { TaskFieldEditor } from "./TaskFieldEditor";
 import { TaskFieldOptions } from "./TaskFieldOptions";
 import { TaskDateCalendar } from "./TaskDateCalendar";
@@ -10,7 +11,7 @@ import { useState, useRef, useEffect } from "react";
 import type { ReactNode } from "react";
 import type { Task } from "./types";
 import { formatDate, getStatusColor } from "./types";
-import { useMutation, useQuery } from "convex/react";
+import { useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { Pencil, Check, X as XIcon, Cloud } from "lucide-react";
 import type { Id } from "@/convex/_generated/dataModel";
@@ -670,7 +671,7 @@ export function TaskBriefContent({
   afterTitleItems,
   highlightMissingDeadline = false,
 }: TaskBriefContentProps) {
-  const updateTask = useMutation(api.data.tasks.updateTaskFields);
+  const updateTask = useAnalyticsMutation(api.data.tasks.updateTaskFields, (_, args) => [args.taskId]);
   const attachments = useQuery(api.data.tasks.getTaskAttachmentsPublic, {
     taskId: task._id,
   });

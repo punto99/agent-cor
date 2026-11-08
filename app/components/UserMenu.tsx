@@ -82,7 +82,7 @@ export function UserMenu() {
             <DropdownMenuItem asChild className="hidden cursor-pointer md:flex">
               <Link href="/workspace/analytics">
                 <BarChart3 className="mr-2 h-4 w-4" />
-                <span>Analytics</span>
+                <span>Analíticas</span>
               </Link>
             </DropdownMenuItem>
             <DropdownMenuSeparator className="hidden md:block" />

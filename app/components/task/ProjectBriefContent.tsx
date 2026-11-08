@@ -1,5 +1,6 @@
 "use client";
 
+import { useAnalyticsMutation } from "@/app/hooks/useAnalyticsMutation";
 import { useState, useRef, useEffect } from "react";
 import { useMutation } from "convex/react";
 import { api } from "@/convex/_generated/api";
@@ -380,7 +381,7 @@ export function ProjectBriefContent({
   editable = false,
   syncStatus,
 }: ProjectBriefContentProps) {
-  const updateProject = useMutation(api.data.projects.updateProjectFields);
+  const updateProject = useAnalyticsMutation(api.data.projects.updateProjectFields, (_, args) => [args.projectId]);
 
   // Sync feedback indicator
   const [showingSyncFeedback, setShowingSyncFeedback] = useState(false);

@@ -1,3 +1,5 @@
+import type { Id } from "../_generated/dataModel";
+import { notifyAnalytics } from "../analytics/notify";
 // convex/tools/createTaskTool.ts
 // Tool principal para crear una task/requerimiento en Convex
 // También crea el proyecto local asociado (obligatorio)
@@ -404,6 +406,8 @@ export const createTaskTool = createTool({
     console.log(`[CreateTask] Task ID: ${taskId}`);
     console.log(`[CreateTask] Project ID: ${projectId}`);
     console.log("========================================\n");
+
+    await notifyAnalytics(ctx, [taskId as Id<"tasks">, projectId as Id<"projects">]);
 
     return `Listo, requerimiento guardado correctamente.
 

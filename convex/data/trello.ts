@@ -12,6 +12,7 @@ import { components, internal } from "../_generated/api";
 import { trelloProvider } from "../integrations/trelloProvider";
 import { getProjectManagementProvider } from "../integrations/registry";
 import { TASK_STATUS_OPTIONS, getTaskStatusName } from "../lib/taskStatuses";
+import { notifyAnalytics } from "../analytics/notify";
 import { patchTaskWithStatusNotification } from "../lib/taskStatusNotifications";
 import {
   getTrelloDisabledReason,
@@ -2237,7 +2238,7 @@ export const archiveUnpublishedTask: any = internalAction({
         }
       }
 
-      return await ctx.runMutation(
+      const archived = await ctx.runMutation(
         internal.data.tasks.completeArchiveUnpublishedTask,
         {
           taskId: args.taskId,
@@ -2246,6 +2247,8 @@ export const archiveUnpublishedTask: any = internalAction({
           archivedBy: args.archivedBy,
         },
       );
+      await notifyAnalytics(ctx, [args.taskId, archived.projectArchived ? args.projectId : undefined]);
+      return archived;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       await ctx.runMutation(
@@ -3066,6 +3069,7 @@ export const processWebhookEvent: any = internalAction({
             projectId: context.project._id,
             updates: safeUpdates,
           });
+          await notifyAnalytics(ctx, [context.task._id]);
         }
       } else if (event.actionType === "commentCard") {
         const trelloCommentId = action?.id;

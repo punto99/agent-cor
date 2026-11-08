@@ -7,7 +7,7 @@ const task = { _id: "task1", corTaskId: "11", corProjectId: 22, projectId: "proj
 const remoteTask = { id: 11, title: "Updated task", description: "Brief", deadline: "2026-10-01", priority: 2, status: "inProgress", project_id: 22 };
 const remoteProject = { id: 22, name: "Updated project", brief: "Project brief", status: "active" };
 
-function context() {
+function context({ changed = true, failAnalytics = false } = {}) {
   const mutations: any[] = [], actions: any[] = [], scheduled: any[] = [];
   const ctx: any = {
     runQuery: async (ref: any) => {
@@ -20,7 +20,14 @@ function context() {
       const name = getFunctionName(ref);
       assert.ok(!/Attachment/.test(name), `Unexpected attachment mutation: ${name}`);
       mutations.push({ name, args });
-      return name.endsWith(":applyInboundTaskUpdate") ? { statusChanged: true, trelloFieldsChanged: true } : undefined;
+      if (name.endsWith(":applyInboundTaskUpdate")) {
+        return { analyticsChanged: changed, statusChanged: changed, trelloFieldsChanged: changed };
+      }
+      if (name.endsWith(":applyInboundProjectUpdate")) return changed;
+      if (name === "analytics/jobs:record") {
+        if (failAnalytics) throw new Error("Analytics unavailable");
+        return args.sourceIds.map((id: string) => "job-" + id);
+      }
     },
     runAction: async (ref: any, args: any) => { actions.push({ name: getFunctionName(ref), args }); },
     scheduler: { runAfter: async (delay: number, ref: any, args: any) => { scheduled.push({ delay, name: getFunctionName(ref), args }); } },
@@ -51,11 +58,25 @@ test("manual and scheduled pulls preserve task/project fields without reading CO
       assert.equal(f.mutations.find(m => m.name.endsWith(":applyInboundProjectUpdate"))?.args.corName, remoteProject.name);
       assert.deepEqual(f.mutations.filter(m => m.name.endsWith(":enqueueTrelloOutboundSyncFromCOR")).map(m => m.args.kind), ["status", "fields"]);
     }
-    assert.equal(scheduled.scheduled.length, 1);
+    for (const f of [manual, scheduled]) {
+      assert.deepEqual(f.mutations.filter(m => m.name === "analytics/jobs:record").map(m => m.args.sourceIds), [["task1"], ["project1"]]);
+      assert.deepEqual(f.scheduled.filter(s => s.name === "analytics/jobs:process").map(s => s.args.jobId), ["job-task1", "job-project1"]);
+    }
+    const attachments = scheduled.scheduled.filter(s => s.name.endsWith(":pullTaskAttachmentsFromCORWorker"));
+    assert.equal(attachments.length, 1);
     // Also exercise a previously queued attachment worker: no import, existing Trello forwarding preserved.
-    await (sync.pullTaskAttachmentsFromCORWorker as any)._handler(scheduled.ctx, scheduled.scheduled[0].args);
+    await (sync.pullTaskAttachmentsFromCORWorker as any)._handler(scheduled.ctx, attachments[0].args);
     assert.deepEqual(scheduled.actions, [{ name: "data/trello:syncClientAttachmentsFromCORToTrello", args: { taskId: "task1" } }]);
     assert.ok(requested.every(url => /\/oauth\/token|\/tasks\/11$|\/projects\/22$/.test(url)));
+
+    const unchanged = context({ changed: false });
+    await (sync.pullFromCORAction as any)._handler(unchanged.ctx, { taskId: "task1" });
+    assert.ok(!unchanged.mutations.some(m => m.name === "analytics/jobs:record"));
+
+    const unavailable = context({ failAnalytics: true });
+    await (sync.pullFromCORAction as any)._handler(unavailable.ctx, { taskId: "task1" });
+    assert.ok(unavailable.mutations.some(m => m.name.endsWith(":applyInboundProjectUpdate")));
+    assert.deepEqual(unavailable.mutations.filter(m => m.name.endsWith(":enqueueTrelloOutboundSyncFromCOR")).map(m => m.args.kind), ["status", "fields"]);
   } finally {
     for (const [key, value] of Object.entries(saved)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; }
   }

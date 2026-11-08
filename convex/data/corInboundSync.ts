@@ -27,7 +27,7 @@ import { getAuthUserId } from "@convex-dev/auth/server";
 import { getProjectManagementProvider } from "../integrations/registry";
 import { CORNotFoundError } from "../integrations/corProvider";
 import { hashText } from "../lib/briefFormat";
-import { applyProjectDeliverablesDelta } from "../lib/deliverableAnalytics";
+import { notifyAnalytics } from "../analytics/notify";
 import { isInternalUserActive } from "../lib/internalUserStatus";
 import { patchTaskWithStatusNotification } from "../lib/taskStatusNotifications";
 
@@ -329,6 +329,8 @@ export const pullFromCORAction = internalAction({
           );
         }
 
+        if (taskUpdateResult?.analyticsChanged) await notifyAnalytics(ctx, [args.taskId]);
+
         // COR attachments are not imported; outbound uploads remain independent.
       }
 
@@ -370,7 +372,7 @@ export const pullFromCORAction = internalAction({
               missing: false,
             },
           );
-          await ctx.runMutation(
+          const analyticsChanged = await ctx.runMutation(
             internal.data.corInboundSync.applyInboundProjectUpdate,
             {
               projectId: task.projectId,
@@ -385,6 +387,7 @@ export const pullFromCORAction = internalAction({
               corProductId: corProject.productId,
             },
           );
+          if (analyticsChanged) await notifyAnalytics(ctx, [task.projectId]);
         }
       }
 
@@ -1237,6 +1240,8 @@ export const pullTaskFromCORWorker = internalAction({
       );
     }
 
+    if (taskUpdateResult?.analyticsChanged) await notifyAnalytics(ctx, [args.taskId]);
+
     await ctx.scheduler.runAfter(
       SCHEDULED_ATTACHMENT_DELAY_MS,
       internal.data.corInboundSync.pullTaskAttachmentsFromCORWorker,
@@ -1379,7 +1384,7 @@ export const pullProjectFromCORWorker = internalAction({
       },
     );
 
-    await ctx.runMutation(
+    const analyticsChanged = await ctx.runMutation(
       internal.data.corInboundSync.applyInboundProjectUpdate,
       {
         projectId: args.projectId,
@@ -1394,6 +1399,7 @@ export const pullProjectFromCORWorker = internalAction({
         corProductId: corProject.productId,
       },
     );
+    if (analyticsChanged) await notifyAnalytics(ctx, [args.projectId]);
   },
 });
 
@@ -1501,6 +1507,7 @@ export const applyInboundTaskUpdate = internalMutation({
     if (!task) {
       return {
         updated: false,
+        analyticsChanged: false,
         statusChanged: false,
         trelloFieldsChanged: false,
       };
@@ -1517,6 +1524,7 @@ export const applyInboundTaskUpdate = internalMutation({
       );
       return {
         updated: false,
+        analyticsChanged: false,
         statusChanged: false,
         trelloFieldsChanged: false,
       };
@@ -1556,6 +1564,7 @@ export const applyInboundTaskUpdate = internalMutation({
       );
       return {
         updated: false,
+        analyticsChanged: false,
         statusChanged: false,
         trelloFieldsChanged: false,
       };
@@ -1573,7 +1582,7 @@ export const applyInboundTaskUpdate = internalMutation({
         .filter((k) => !k.startsWith("cor"))
         .join(", ")}`,
     );
-    return { updated: true, statusChanged, trelloFieldsChanged };
+    return { updated: true, analyticsChanged: statusChanged || titleChanged || deadlineChanged, statusChanged, trelloFieldsChanged };
   },
 });
 
@@ -1677,9 +1686,8 @@ export const applyInboundProjectUpdate = internalMutation({
 
     updates.corSyncedAt = Date.now();
 
-    await ctx.db.patch(args.projectId, updates as any);
-    const updatedProject = await ctx.db.get(args.projectId);
-    await applyProjectDeliverablesDelta(ctx, project, updatedProject);
+    const analyticsChanged = ["status", "deliverables", "clientBrandId", "subBrandId"].some(field => field in updates);
+    await ctx.db.patch(args.projectId, analyticsChanged ? { ...updates, updatedAt: Date.now() } : updates);
     console.log(
       `[InboundSync] ✅ Proyecto ${args.projectId} actualizado: ${Object.keys(
         updates,
@@ -1687,5 +1695,6 @@ export const applyInboundProjectUpdate = internalMutation({
         .filter((k) => !k.startsWith("cor"))
         .join(", ")}`,
     );
+    return analyticsChanged;
   },
 });

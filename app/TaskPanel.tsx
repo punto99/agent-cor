@@ -1,5 +1,6 @@
 "use client";
 
+import { useAnalyticsMutation } from "@/app/hooks/useAnalyticsMutation";
 import { useQuery, useMutation, useAction } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { useState, useEffect } from "react";
@@ -54,10 +55,10 @@ export default function TaskPanel({ threadId, onClose }: TaskPanelProps) {
   const createEvaluationThread = useMutation(
     api.data.evaluation.createEvaluationThread,
   );
-  const sendEvaluationFile = useMutation(api.data.evaluation.sendEvaluationFile);
-  const retryTaskEvaluation = useMutation(
-    api.data.evaluation.retryTaskEvaluation,
-  );
+  const sendEvaluationFile = useAnalyticsMutation(api.data.evaluation.sendEvaluationFile, result => [result.evaluationId]);
+  const retryTaskEvaluation = useAnalyticsMutation(api.data.evaluation.retryTaskEvaluation, (result, args) => [
+    args.evaluationId, result.status === "scheduled" ? result.evaluationId : undefined,
+  ]);
   const uploadFile = useAction(api.data.files.uploadFile);
 
   // Sincronizar evaluationThreadId cuando cambia la task

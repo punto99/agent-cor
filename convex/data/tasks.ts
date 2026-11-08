@@ -1,3 +1,4 @@
+import type { FunctionArgs } from "convex/server";
 import { getAuthorName } from "../lib/authorName";
 import { canViewExternalRequest, externalRequestCandidates, hasExternalRequestsAccess } from "../lib/externalRequestsAccess";
 import { notifyExternalTaskCreated } from "../lib/taskCreationNotifications";
@@ -34,7 +35,9 @@ import {
   isClientError,
   MAX_RETRY_ATTEMPTS,
 } from "../lib/corRetry";
-import { applyProjectDeliverablesDelta } from "../lib/deliverableAnalytics";
+import { notifyAnalytics } from "../analytics/notify";
+import { positiveDeliverables } from "../lib/deliverableAnalytics";
+import type { SourceId } from "../analytics/projection";
 import { formatTrelloCommentForCOR } from "../lib/trelloCommentFormat";
 import { isTrelloEnabledForCorClientId } from "../lib/trelloPolicy";
 import { usesDirectExternalComments } from "../lib/directExternalComments";
@@ -1113,6 +1116,7 @@ export const createTaskInternal = internalMutation({
     }
 
     const taskId = await ctx.db.insert("tasks", {
+      updatedAt: Date.now(),
       title: args.title,
       description: args.description,
       deadline: args.deadline,
@@ -1199,6 +1203,7 @@ export const updateTaskInternal = internalMutation({
 
     // Registrar timestamp de edición local (detección de conflictos bidireccional)
     updateData.lastLocalEditAt = Date.now();
+    updateData.updatedAt = updateData.lastLocalEditAt;
 
     await ctx.db.patch(args.taskId as any, updateData);
 
@@ -1219,6 +1224,7 @@ export const setTaskStrategicPriorityInternal = internalMutation({
   },
   handler: async (ctx, args) => {
     await ctx.db.patch(args.taskId, {
+      updatedAt: Date.now(),
       strategicPriority: args.strategicPriority,
     });
   },
@@ -1452,6 +1458,7 @@ export const applyExternalTaskEditInternal = internalMutation({
 
     if (Object.keys(updateData).length === 0) return;
     updateData.lastLocalEditAt = Date.now();
+    updateData.updatedAt = updateData.lastLocalEditAt;
 
     await ctx.db.patch(args.taskId, updateData);
   },
@@ -1703,11 +1710,19 @@ export const updateTaskFields = mutation({
 
     // Agregar timestamp de edición local
     updateData.lastLocalEditAt = Date.now();
+    updateData.updatedAt = updateData.lastLocalEditAt;
 
     console.log(
       `[Tasks.updateTaskFields] Actualizando task ${args.taskId}:`,
       Object.keys(updateData),
     );
+    // Freeze the legacy amount included in the project before changing the task quantity.
+    if (updateData.deliverablesCount !== undefined && !task.projectDeliverableAllocation) {
+      updateData.projectDeliverableAllocation = {
+        amount: positiveDeliverables(task.deliverablesCount),
+        trackedOnProject: false,
+      };
+    }
     await patchTaskWithStatusNotification(ctx, args.taskId, updateData as any, "platform");
 
     // Programar sync a COR si corresponde (via internalMutation)
@@ -1955,6 +1970,7 @@ export const registerThreadUploadedFiles = internalMutation({
     if (task && attached > 0) {
       if (task.corTaskId) {
         await ctx.db.patch(task._id, {
+          updatedAt: Date.now(),
           corSyncStatus: "syncing",
           corSyncAttempt: 0,
           corSyncError: undefined,
@@ -2883,12 +2899,16 @@ export const createProjectAndTask = internalMutation({
     });
 
     // 1. Crear o reutilizar proyecto
+    const coveredDeliverables = args.existingProjectId ? 0 : Math.min(
+      positiveDeliverables(args.projectDeliverables), positiveDeliverables(args.taskDeliverablesCount),
+    );
     let projectId: string;
     if (args.existingProjectId) {
       projectId = args.existingProjectId;
       console.log(`[CreateProjectAndTask] ℹ️ Proyecto ya existe: ${projectId}`);
     } else {
       projectId = await ctx.db.insert("projects", {
+        updatedAt: Date.now(),
         name: args.projectName,
         brief: args.projectBrief,
         startDate: new Date().toISOString().split("T")[0],
@@ -2897,6 +2917,7 @@ export const createProjectAndTask = internalMutation({
         convexStatus: "active",
         pmId: args.projectPmId,
         deliverables: args.projectDeliverables,
+        deliverablesCoveredByTasks: coveredDeliverables,
         estimatedTime: args.projectEstimatedTime,
         createdBy: args.projectCreatedBy,
         threadId: args.threadId,
@@ -2911,8 +2932,6 @@ export const createProjectAndTask = internalMutation({
         clientId: resolved.clientId ?? args.projectClientId,
         corSyncStatus: "pending",
       });
-      const createdProject = await ctx.db.get(projectId as any);
-      await applyProjectDeliverablesDelta(ctx, null, createdProject as any);
       console.log(`[CreateProjectAndTask] ✅ Proyecto creado: ${projectId}`);
     }
 
@@ -2933,10 +2952,12 @@ export const createProjectAndTask = internalMutation({
 
     // 2. Crear task
     const taskId = await ctx.db.insert("tasks", {
+      updatedAt: Date.now(),
       title: args.taskTitle,
       description: args.taskDescription,
       deadline: args.taskDeadline,
       deliverablesCount: args.taskDeliverablesCount,
+      projectDeliverableAllocation: { amount: coveredDeliverables, trackedOnProject: true },
       priority: args.taskPriority ?? 1,
       threadId: args.threadId,
       taskDraftId: draft._id,
@@ -3115,7 +3136,7 @@ export const backfillTaskClientId = internalMutation({
     }
 
     if (!args.dryRun) {
-      await ctx.db.patch(task._id, { clientId });
+      await ctx.db.patch(task._id, { clientId, updatedAt: Date.now() });
     }
 
     return {
@@ -3196,7 +3217,7 @@ export const backfillTaskDeliverablesCount = internalMutation({
     }
 
     if (!args.dryRun) {
-      await ctx.db.patch(task._id, { deliverablesCount });
+      await ctx.db.patch(task._id, { deliverablesCount, updatedAt: Date.now() });
     }
 
     return {
@@ -3305,6 +3326,8 @@ export const classifyAndUpdatePriority = internalAction({
             strategicPriority: classification,
           },
         );
+
+        await notifyAnalytics(ctx, [args.taskId]);
 
         // Si ya está publicada en COR, sincronizar etiqueta inmediatamente
         const task = await ctx.runQuery(
@@ -4066,6 +4089,7 @@ export const softDeleteTask = mutation({
     }
 
     await ctx.db.patch(args.taskId, {
+      updatedAt: Date.now(),
       convexStatus: "deleted",
     });
 
@@ -4223,17 +4247,17 @@ export const completeArchiveUnpublishedTask = internalMutation({
         !projectExistsInCOR
       ) {
         await ctx.db.patch(project._id, {
+          updatedAt: Date.now(),
           convexStatus: "archived",
           archivedAt,
           archivedBy: args.archivedBy,
         });
-        const archivedProject = await ctx.db.get(project._id);
-        await applyProjectDeliverablesDelta(ctx, project, archivedProject);
         projectArchived = true;
       }
     }
 
     await ctx.db.patch(task._id, {
+      updatedAt: Date.now(),
       convexStatus: "archived",
       archiveSyncStatus: "synced",
       archiveSyncError: undefined,
@@ -4316,6 +4340,7 @@ export const softDeleteUnpublishedDraftTask = mutation({
     }
 
     await ctx.db.patch(args.taskId, {
+      updatedAt: Date.now(),
       convexStatus: "deleted",
     });
 
@@ -4349,10 +4374,9 @@ export const softDeleteUnpublishedDraftTask = mutation({
 
         if (!hasOtherActiveTasks && !isProjectPublishedExternally) {
           await ctx.db.patch(project._id, {
+            updatedAt: Date.now(),
             convexStatus: "deleted",
           });
-          const deletedProjectDoc = await ctx.db.get(project._id);
-          await applyProjectDeliverablesDelta(ctx, project, deletedProjectDoc);
           deletedProject = true;
         }
       }
@@ -4619,7 +4643,7 @@ export const updateTaskTaxonomy = mutation({
       subBrandName: subBrand?.name,
     };
 
-    await ctx.db.patch(args.taskId, taxonomyPatch);
+    await ctx.db.patch(args.taskId, { ...taxonomyPatch, updatedAt: Date.now() });
 
     if (task.projectId) {
       const project = await ctx.db.get(task.projectId);
@@ -4631,9 +4655,7 @@ export const updateTaskTaxonomy = mutation({
         project.corSyncStatus !== "syncing" &&
         project.corSyncStatus !== "retrying"
       ) {
-        await ctx.db.patch(task.projectId, taxonomyPatch);
-        const updatedProject = await ctx.db.get(task.projectId);
-        await applyProjectDeliverablesDelta(ctx, project, updatedProject);
+        await ctx.db.patch(task.projectId, { ...taxonomyPatch, updatedAt: Date.now() });
       }
     }
 
@@ -4680,6 +4702,7 @@ export const scheduleTaskSyncToCOR = internalMutation({
       `[scheduleTaskSyncToCOR] 🔄 Programando sync para task ${args.taskId}`,
     );
     await ctx.db.patch(args.taskId, {
+      updatedAt: Date.now(),
       corSyncStatus: "syncing",
       corSyncAttempt: 0,
       corSyncError: undefined,
@@ -4717,6 +4740,8 @@ export const syncEditToCORAction = internalAction({
   },
   handler: async (ctx, args) => {
     const attempt = args.attempt ?? 0;
+    const changedSources = new Set<SourceId>();
+    const updatePublishStatus = trackPublishStatus(ctx, changedSources);
     console.log("\n========================================");
     console.log("[SyncEdit] 🔄 SINCRONIZANDO EDICIÓN LOCAL → COR");
     console.log(`[SyncEdit] Task Convex ID: ${args.taskId}`);
@@ -4786,7 +4811,7 @@ export const syncEditToCORAction = internalAction({
         console.error(
           `[SyncEdit] ❌ Task COR ${corTaskId} no encontrada. ¿Fue eliminada?`,
         );
-        await ctx.runMutation(internal.data.tasks.updatePublishStatus, {
+        await updatePublishStatus({
           taskId: args.taskId,
           corSyncStatus: "error",
           corSyncError: `Task COR ${corTaskId} no encontrada — puede haber sido eliminada`,
@@ -4799,7 +4824,7 @@ export const syncEditToCORAction = internalAction({
         console.error(
           `[SyncEdit] 🚨 ALERTA DE SEGURIDAD: La task COR ${corTaskId} pertenece al proyecto ${corTask.projectId}, no al esperado ${corProjectId}. ABORTANDO.`,
         );
-        await ctx.runMutation(internal.data.tasks.updatePublishStatus, {
+        await updatePublishStatus({
           taskId: args.taskId,
           corSyncStatus: "error",
           corSyncError: `Error de seguridad: task COR pertenece a proyecto incorrecto`,
@@ -4910,10 +4935,7 @@ export const syncEditToCORAction = internalAction({
         successUpdate.corDescriptionHash = newHash;
         console.log(`[SyncEdit] ✅ Hash actualizado: ${newHash}`);
       }
-      await ctx.runMutation(
-        internal.data.tasks.updatePublishStatus,
-        successUpdate as any,
-      );
+      await updatePublishStatus(successUpdate as any);
 
       console.log(`[SyncEdit] ✅ Sincronización completada exitosamente`);
       console.log("========================================\n");
@@ -4934,7 +4956,7 @@ export const syncEditToCORAction = internalAction({
         );
 
         // Marcar como "retrying" con el error actual
-        await ctx.runMutation(internal.data.tasks.updatePublishStatus, {
+        await updatePublishStatus({
           taskId: args.taskId,
           corSyncStatus: "retrying",
           corSyncError: `Intento ${attempt + 1}/${MAX_RETRY_ATTEMPTS} falló: ${errorMsg}`,
@@ -4965,7 +4987,7 @@ export const syncEditToCORAction = internalAction({
             `[SyncEdit] 🚫 Reintentos agotados para task ${args.taskId}`,
           );
         }
-        await ctx.runMutation(internal.data.tasks.updatePublishStatus, {
+        await updatePublishStatus({
           taskId: args.taskId,
           corSyncStatus: "error",
           corSyncError: isClientError(error)
@@ -4977,6 +4999,8 @@ export const syncEditToCORAction = internalAction({
           corSyncAttempt: attempt,
         });
       }
+    } finally {
+      await notifyAnalytics(ctx, [...changedSources]);
     }
   },
 });
@@ -5058,6 +5082,7 @@ export const retryTaskSync = mutation({
         task,
       );
       await ctx.db.patch(args.taskId, {
+        updatedAt: Date.now(),
         corSyncStatus: "synced",
         corSyncAttempt: 0,
         corSyncError: undefined,
@@ -5084,6 +5109,7 @@ export const retryTaskSync = mutation({
         `[retryTaskSync] 🔄 Reintentando PUBLICACIÓN de task ${args.taskId}`,
       );
       await ctx.db.patch(args.taskId, {
+        updatedAt: Date.now(),
         corSyncStatus: "syncing",
         corSyncAttempt: 0,
         corSyncError: undefined,
@@ -5102,6 +5128,7 @@ export const retryTaskSync = mutation({
     // Si ya tiene corTaskId, reintentar sincronización de edición
     console.log(`[retryTaskSync] 🔄 Reintentando SYNC de task ${args.taskId}`);
     await ctx.db.patch(args.taskId, {
+      updatedAt: Date.now(),
       corSyncStatus: "syncing",
       corSyncAttempt: 0,
       corSyncError: undefined,
@@ -5528,6 +5555,7 @@ export const startPublishTaskToExternal = mutation({
 
     // Poner estado "syncing" — la UI lo verá inmediatamente
     await ctx.db.patch(args.taskId, {
+      updatedAt: Date.now(),
       corSyncStatus: "syncing",
       corSyncError: undefined,
       corSyncAttempt: 0,
@@ -5574,6 +5602,8 @@ export const publishTaskToExternalAction = internalAction({
   },
   handler: async (ctx, args) => {
     const attempt = args.attempt ?? 0;
+    const changedSources = new Set<SourceId>();
+    const updatePublishStatus = trackPublishStatus(ctx, changedSources);
     console.log("\n========================================");
     console.log("[PublishTask] 🚀 PUBLICANDO TASK EN SISTEMA EXTERNO");
     console.log(`[PublishTask] Task ID: ${args.taskId}`);
@@ -5588,7 +5618,7 @@ export const publishTaskToExternalAction = internalAction({
 
       if (!task) {
         console.error("[PublishTask] ❌ Task no encontrada");
-        await ctx.runMutation(internal.data.tasks.updatePublishStatus, {
+        await updatePublishStatus({
           taskId: args.taskId,
           corSyncStatus: "error",
           corSyncError: "Task no encontrada en la base de datos",
@@ -5599,7 +5629,7 @@ export const publishTaskToExternalAction = internalAction({
       const deadlineError = getPublishDeadlineError(task.deadline);
       if (deadlineError) {
         console.error(`[PublishTask] ❌ ${deadlineError}`);
-        await ctx.runMutation(internal.data.tasks.updatePublishStatus, {
+        await updatePublishStatus({
           taskId: args.taskId,
           corSyncStatus: "error",
           corSyncError: deadlineError,
@@ -5610,7 +5640,7 @@ export const publishTaskToExternalAction = internalAction({
       const descriptionError = validatePublishableDescription(task.description);
       if (descriptionError) {
         console.error(`[PublishTask] ❌ ${descriptionError}`);
-        await ctx.runMutation(internal.data.tasks.updatePublishStatus, {
+        await updatePublishStatus({
           taskId: args.taskId,
           corSyncStatus: "error",
           corSyncError: descriptionError,
@@ -5628,7 +5658,7 @@ export const publishTaskToExternalAction = internalAction({
         console.error(
           "[PublishTask] ❌ No hay corClientId — no se puede crear proyecto",
         );
-        await ctx.runMutation(internal.data.tasks.updatePublishStatus, {
+        await updatePublishStatus({
           taskId: args.taskId,
           corSyncStatus: "error",
           corSyncError:
@@ -5737,7 +5767,7 @@ export const publishTaskToExternalAction = internalAction({
           taskDeliverablesCount !== undefined ||
           proposedEstimatedTime !== undefined;
 
-        await ctx.runMutation(
+        const attachment = await ctx.runMutation(
           internal.data.projects.attachProjectToExistingCORProject,
           {
             projectId: projectId ? (projectId as any) : undefined,
@@ -5749,9 +5779,12 @@ export const publishTaskToExternalAction = internalAction({
             endDate: existingProjectEndDate,
             status: optionalStringFromExternal(existingProject.status),
             deliverables: localProjectDeliverables,
+            taskDeliverablesIncluded: taskDeliverablesCount ?? 0,
             estimatedTime: localProjectEstimatedTime,
           },
         );
+        changedSources.add(attachment.projectId);
+        if (projectId) changedSources.add(projectId as Id<"projects">);
       } else if (projectId) {
         // Leer el proyecto local
         const localProject = await ctx.runQuery(
@@ -5867,7 +5900,7 @@ export const publishTaskToExternalAction = internalAction({
 
       // Persistir el proyecto antes de crear la task permite reanudar un error
       // de publicación sin crear un segundo proyecto.
-      await ctx.runMutation(internal.data.tasks.updatePublishStatus, {
+      await updatePublishStatus({
         taskId: args.taskId,
         corSyncStatus: "syncing",
         corProjectId,
@@ -5908,7 +5941,7 @@ export const publishTaskToExternalAction = internalAction({
 
       // Guardar ambos IDs antes de cualquier operación posterior garantiza que
       // un error de etiqueta u otra sincronización no pueda duplicar recursos.
-      await ctx.runMutation(internal.data.tasks.updatePublishStatus, {
+      await updatePublishStatus({
         taskId: args.taskId,
         corSyncStatus: "syncing",
         corTaskId: String(externalTask.id),
@@ -5932,7 +5965,7 @@ export const publishTaskToExternalAction = internalAction({
       // 5. Actualizar task local con IDs externos y estado "synced"
       const descriptionHash = hashText(task.description || "");
 
-      await ctx.runMutation(internal.data.tasks.updatePublishStatus, {
+      await updatePublishStatus({
         taskId: args.taskId,
         corSyncStatus: "synced",
         corTaskId: String(externalTask.id),
@@ -6067,7 +6100,7 @@ export const publishTaskToExternalAction = internalAction({
           `[PublishTask] 🔄 Reintentando en ${delay / 1000}s (intento ${attempt + 2}/${MAX_RETRY_ATTEMPTS})`,
         );
 
-        await ctx.runMutation(internal.data.tasks.updatePublishStatus, {
+        await updatePublishStatus({
           taskId: args.taskId,
           corSyncStatus: "retrying",
           corSyncError: `Intento ${attempt + 1}/${MAX_RETRY_ATTEMPTS} falló: ${errorMsg}`,
@@ -6096,7 +6129,7 @@ export const publishTaskToExternalAction = internalAction({
             `[PublishTask] 🚫 Reintentos agotados para task ${args.taskId}`,
           );
         }
-        await ctx.runMutation(internal.data.tasks.updatePublishStatus, {
+        await updatePublishStatus({
           taskId: args.taskId,
           corSyncStatus: "error",
           corSyncError: isClientError(error)
@@ -6108,15 +6141,20 @@ export const publishTaskToExternalAction = internalAction({
           corSyncAttempt: attempt,
         });
       }
+    } finally {
+      await notifyAnalytics(ctx, [...changedSources]);
     }
   },
 });
 
-/**
- * Mutation interna para actualizar el estado de publicación.
- * Llamada desde publishTaskToExternalAction para actualizar
- * la task con el resultado (éxito o error).
- */
+function trackPublishStatus(ctx: ActionCtx, changedSources: Set<SourceId>) {
+  return async (args: FunctionArgs<typeof internal.data.tasks.updatePublishStatus>) => {
+    await ctx.runMutation(internal.data.tasks.updatePublishStatus, args);
+    changedSources.add(args.taskId);
+  };
+}
+
+/** Persiste el estado de la publicación después de sincronizar con COR. */
 export const updatePublishStatus = internalMutation({
   args: {
     taskId: v.id("tasks"),
@@ -6130,6 +6168,7 @@ export const updatePublishStatus = internalMutation({
   },
   handler: async (ctx, args) => {
     const updateData: Record<string, unknown> = {
+      updatedAt: Date.now(),
       corSyncStatus: args.corSyncStatus,
     };
 
@@ -6206,6 +6245,7 @@ export const updateCORSyncStatus = internalMutation({
 
     await ctx.db.patch(args.taskId as any, {
       corTaskId: args.corTaskId ? String(args.corTaskId) : undefined,
+      updatedAt: Date.now(),
       corSyncStatus: args.syncStatus,
       corSyncError: args.syncError,
     });

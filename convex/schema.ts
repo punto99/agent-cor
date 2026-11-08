@@ -2,9 +2,11 @@
 import { authTables } from "@convex-dev/auth/server";
 import { defineSchema, defineTable } from "convex/server";
 import { v } from "convex/values";
+import { analyticsTables } from "./analytics/tables";
 
 export default defineSchema({
   ...authTables,
+  ...analyticsTables,
 
   // Niveles de administración. No conceden acceso a clientes, categorías o tareas.
   // Solo se guardan perfiles internos; los externos nunca tienen platformRole.
@@ -196,11 +198,17 @@ export default defineSchema({
   //   priority    → numérico: 0=Low, 1=Medium, 2=High, 3=Urgent
   //   status      → estado de la task
   tasks: defineTable({
+    updatedAt: v.optional(v.number()),
+    replacedProjectIds: v.optional(v.array(v.id("projects"))),
     // === Campos 1:1 con COR ===
     title: v.string(),
     description: v.optional(v.string()), // Contiene todos los datos del brief formateados
     deadline: v.optional(v.string()),
     deliverablesCount: v.optional(v.number()), // Entregables propios de la task (local; no existe en COR)
+    projectDeliverableAllocation: v.optional(v.object({
+      amount: v.number(),
+      trackedOnProject: v.boolean(),
+    })),
     priority: v.optional(v.number()), // 0=Low, 1=Medium, 2=High, 3=Urgent
     strategicPriority: v.optional(
       v.union(
@@ -293,6 +301,7 @@ export default defineSchema({
     archivedAt: v.optional(v.number()),
     archivedBy: v.optional(v.string()),
   })
+    .index("by_updatedAt", ["updatedAt"])
     .index("by_thread", ["threadId"])
     .index("by_taskDraftId", ["taskDraftId"])
     .index("by_status", ["status"])
@@ -529,6 +538,7 @@ export default defineSchema({
     .index("by_requestedBy", ["requestedBy"])
     .index("by_status", ["status"])
     .index("by_createdAt", ["createdAt"])
+    .index("by_updatedAt", ["updatedAt"])
     .index("by_task_and_createdAt", ["taskId", "createdAt"])
     .index("by_requestedBy_and_createdAt", ["requestedBy", "createdAt"])
     .index("by_clientId_and_createdAt", ["clientId", "createdAt"])
@@ -768,6 +778,7 @@ export default defineSchema({
   // Projects — Proyectos locales (Client → Project → Task)
   // =====================================================
   projects: defineTable({
+    updatedAt: v.optional(v.number()),
     // === Campos 1:1 con COR ===
     name: v.string(),
     brief: v.optional(v.string()),
@@ -785,6 +796,7 @@ export default defineSchema({
     billable: v.optional(v.boolean()),
     incomeType: v.optional(v.string()), // "fee" | "one_time" | "hourly_rate" | "contract"
     deliverables: v.optional(v.number()), // Cantidad de entregables
+    deliverablesCoveredByTasks: v.optional(v.number()),
     pmId: v.optional(v.number()), // PM en COR (opcional)
     brandId: v.optional(v.number()), // Marca en COR (opcional)
     productId: v.optional(v.number()), // Producto en COR (opcional)
@@ -814,6 +826,7 @@ export default defineSchema({
     archivedAt: v.optional(v.number()),
     archivedBy: v.optional(v.string()),
   })
+    .index("by_updatedAt", ["updatedAt"])
     .index("by_clientId", ["clientId"])
     .index("by_status", ["status"])
     .index("by_source", ["source"])

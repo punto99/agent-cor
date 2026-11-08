@@ -38,13 +38,13 @@ type RollupDelta = RollupContribution & {
   projectCountDelta: number;
 };
 
-function positiveDeliverables(value: unknown) {
+export function positiveDeliverables(value: unknown) {
   if (typeof value !== "number" || !Number.isFinite(value)) return 0;
   const normalized = Math.trunc(value);
   return normalized > 0 ? normalized : 0;
 }
 
-function hashShard(projectId: unknown) {
+export function projectDeliverableShard(projectId: unknown) {
   const value = String(projectId ?? "");
   let hash = 0;
   for (let i = 0; i < value.length; i += 1) {
@@ -116,7 +116,7 @@ function getContributions(project?: ProjectSnapshot | null): RollupContribution[
   const deliverables = positiveDeliverables(project.deliverables);
   if (deliverables === 0) return [];
 
-  const shard = hashShard(project._id);
+  const shard = projectDeliverableShard(project._id);
   return getDimensions(project).map((dimensions) => ({
     ...dimensions,
     rollupKey: buildRollupKey(dimensions, shard),

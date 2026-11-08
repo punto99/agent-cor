@@ -7,6 +7,7 @@ import { registerUploadedFile } from "../convex/data/files";
 import { sendMessage, listThreadMessages } from "../convex/messaging/chat";
 import * as tasks from "../convex/data/tasks";
 import * as trello from "../convex/data/trello";
+import { record as recordAnalytics } from "../convex/analytics/jobs";
 import { trelloProvider } from "../convex/integrations/trelloProvider";
 import { generateText } from "ai";
 import { createOpenAI } from "@ai-sdk/openai";
@@ -76,7 +77,10 @@ function fixture() {
         return row;
       }) };
     }
-    const name = getFunctionName(ref).split(":")[1];
+    const [module, name] = getFunctionName(ref).split(":");
+    if (module === "analytics/jobs" && name === "record") {
+      return (recordAnalytics as any)._handler(ctx, args);
+    }
     return (tasks as any)[name]._handler(ctx, args);
   };
   const upload = async (name: string, type = "application/pdf", content = name) => {

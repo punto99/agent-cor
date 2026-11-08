@@ -1,3 +1,5 @@
+import type { Id } from "../_generated/dataModel";
+import { notifyAnalytics } from "../analytics/notify";
 // convex/tools/editProjectTool.ts
 // Tool para editar un proyecto existente en Convex y sincronizar con COR si está publicado.
 // Usa scheduleProjectSyncToCOR para unificar el flujo de sync con la UI.
@@ -165,6 +167,8 @@ ${project.deliverables ?? "No especificada"}
       const corStatus = corId
         ? `\n🔄 Sincronización con COR (ID: ${corId}) programada automáticamente.`
         : "";
+
+      await notifyAnalytics(ctx, [projectId as Id<"projects">]);
 
       return `✅ Proyecto actualizado exitosamente!
 

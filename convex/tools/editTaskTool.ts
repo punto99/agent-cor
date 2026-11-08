@@ -1,3 +1,5 @@
+import type { Id } from "../_generated/dataModel";
+import { notifyAnalytics } from "../analytics/notify";
 // convex/tools/editTaskTool.ts
 // Tool para editar una task existente en Convex y sincronizar con COR si está publicada.
 // Usa scheduleTaskSyncToCOR para unificar el flujo de sync con la UI.
@@ -235,6 +237,8 @@ ${task.description || "Sin descripción"}
         ? `\n🔄 Sincronización con COR (ID: ${corId}) programada automáticamente.`
         : "";
       
+      await notifyAnalytics(ctx, [taskIdToEdit as Id<"tasks">]);
+
       return `✅ Task actualizada exitosamente!
 
 **Campos actualizados:** ${updatedFields}${corStatus}

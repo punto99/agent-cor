@@ -1545,12 +1545,12 @@ test("status events notify only authorized external coordinators, once per real 
   await f.call(tasks.updateTaskFields, { taskId: "task1", updates: { status: "en_proceso" } });
   assert.deepEqual(f.statusRows().map(row => [row.userId, row.fromStatus, row.toStatus, row.source]), [["otherExternal", "nueva", "en_proceso", "platform"]]);
   f.rows.get("task1").corSyncStatus = "synced";
-  assert.deepEqual(await f.call(applyInboundTaskUpdate, { taskId: "task1", corTitle: "Original", corStatus: "en_proceso" }), { updated: false, statusChanged: false, trelloFieldsChanged: false });
+  assert.deepEqual(await f.call(applyInboundTaskUpdate, { taskId: "task1", corTitle: "Original", corStatus: "en_proceso" }), { updated: false, analyticsChanged: false, statusChanged: false, trelloFieldsChanged: false });
   await f.call(applySafeInboundCardUpdate, { taskId: "task1", updates: { status: "en_proceso" } });
   assert.equal(f.statusRows().length, 1);
   assert.equal(f.rows.get("task1").trelloInboundSyncStatus, "pending_review");
   const result = await f.call(applyInboundTaskUpdate, { taskId: "task1", corTitle: "Changed title", corStatus: "en_revision" });
-  assert.deepEqual(result, { updated: true, statusChanged: true, trelloFieldsChanged: true });
+  assert.deepEqual(result, { updated: true, analyticsChanged: true, statusChanged: true, trelloFieldsChanged: true });
   assert.equal(f.statusRows()[1].source, "cor");
   await f.call(applySafeInboundCardUpdate, { taskId: "task1", updates: { status: "finalizada" } });
   assert.deepEqual(f.statusRows().map(row => row.toStatus), ["en_proceso", "en_revision", "finalizada"]);

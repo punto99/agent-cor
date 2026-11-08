@@ -1,5 +1,6 @@
 "use client";
 
+import { useAnalyticsMutation } from "@/app/hooks/useAnalyticsMutation";
 import { useSearchParams } from "next/navigation";
 import { CommentUnreadBadge } from "../notifications/CommentNotifications";
 import { useState, useEffect, useMemo, useRef } from "react";
@@ -374,17 +375,17 @@ export function TaskDetailDialog({
   const convex = useConvex();
   const params = useSearchParams();
   const viewer = useQuery(api.data.userAccess.viewerAccessProfile);
-  const startPublish = useMutation(api.data.tasks.startPublishTaskToExternal);
-  const retryTask = useMutation(api.data.tasks.retryTaskSync);
+  const startPublish = useAnalyticsMutation(api.data.tasks.startPublishTaskToExternal, (_, args) => [args.taskId]);
+  const retryTask = useAnalyticsMutation(api.data.tasks.retryTaskSync, (_, args) => [args.taskId]);
   const retryTaskCollaborators = useMutation(
     api.data.tasks.retryTaskCollaborators,
   );
-  const updateTaskTaxonomy = useMutation(api.data.tasks.updateTaskTaxonomy);
+  const updateTaskTaxonomy = useAnalyticsMutation(api.data.tasks.updateTaskTaxonomy, (_, args) => [args.taskId, task?.projectId]);
   const startArchiveUnpublishedTask = useMutation(
     (api as any).data.tasks.startArchiveUnpublishedTask,
   );
   const retryProject = useMutation(api.data.projects.retryProjectSync);
-  const softDeleteProject = useMutation(api.data.projects.softDeleteProject);
+  const softDeleteProject = useAnalyticsMutation(api.data.projects.softDeleteProject, (_, args) => [args.projectId]);
   const pullFromCOR = useMutation(api.data.corInboundSync.startPullFromCOR);
   const startPublishToTrello = useMutation(
     api.data.trello.startPublishTaskToTrello,
@@ -392,12 +393,10 @@ export function TaskDetailDialog({
   const createEvaluationThread = useMutation(
     api.data.evaluation.createEvaluationThread,
   );
-  const sendEvaluationFile = useMutation(
-    api.data.evaluation.sendEvaluationFile,
-  );
-  const retryTaskEvaluation = useMutation(
-    api.data.evaluation.retryTaskEvaluation,
-  );
+  const sendEvaluationFile = useAnalyticsMutation(api.data.evaluation.sendEvaluationFile, result => [result.evaluationId]);
+  const retryTaskEvaluation = useAnalyticsMutation(api.data.evaluation.retryTaskEvaluation, (result, args) => [
+    args.evaluationId, result.status === "scheduled" ? result.evaluationId : undefined,
+  ]);
   const generateUploadUrl = useMutation(api.data.files.generateUploadUrl);
   const registerUploadedFile = useAction(api.data.files.registerUploadedFile);
   const [publishError, setPublishError] = useState<string | null>(null);

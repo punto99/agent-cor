@@ -1,29 +1,28 @@
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { v } from "convex/values";
-import { mutation, query } from "../_generated/server";
+import { mutation, query, type QueryCtx } from "../_generated/server";
+import {
+  analyticsFirstDay,
+  analyticsPeriod,
+  analyticsTrendPeriods,
+  isAnalyticsDay,
+  type AnalyticsPeriod,
+} from "../analytics/calendar";
+import {
+  analyticsParentKey,
+  evaluationStatuses as EVALUATION_STATUSES,
+  priorities as STRATEGIC_PRIORITIES,
+  projectStatuses as PROJECT_STATUSES,
+  taskStatuses as TASK_STATUSES,
+} from "../analytics/projection";
+import { periodTypeValidator } from "../analytics/tables";
+import { datedDeliverableMetrics } from "../analytics/deliverables";
 import { canUserAccessAnalytics } from "../lib/analyticsAccess";
-import { applyProjectDeliverablesDelta } from "../lib/deliverableAnalytics";
+import type { Doc } from "../_generated/dataModel";
+import { applyProjectDeliverablesDelta, positiveDeliverables } from "../lib/deliverableAnalytics";
 import { isExcludedUserId } from "../lib/excludedUsers";
 import { requireUserRoleAdmin } from "../lib/userRoles";
 
-const TASK_STATUSES = [
-  "nueva",
-  "en_proceso",
-  "en_revision",
-  "en_diseno",
-  "estancada",
-  "finalizada",
-] as const;
-
-const PROJECT_STATUSES = [
-  "active",
-  "in_process",
-  "suspended",
-  "finished",
-] as const;
-
-const STRATEGIC_PRIORITIES = ["I_U", "I_NU", "NI_U", "NI_NU"] as const;
-const EVALUATION_STATUSES = ["processing", "completed", "failed"] as const;
 const MAX_ANALYTICS_TASKS = 2500;
 const MAX_ANALYTICS_EVALUATIONS = 2500;
 
@@ -271,7 +270,7 @@ export const getDashboard = query({
     });
 
     const weeklyTrend = buildWeeklyTrend(activeTasks, 8);
-    const deliverableAnalytics = await buildDeliverableAnalytics(ctx);
+    const deliverableAnalytics = await buildDeliverableAnalytics(ctx, activeProjects);
     const evaluationStatusCounts = EVALUATION_STATUSES.map((status) => ({
       key: status,
       label: getEvaluationStatusLabel(status),
@@ -341,53 +340,196 @@ export const getDashboard = query({
   },
 });
 
-async function buildDeliverableAnalytics(ctx: any) {
-  const rollups = await ctx.db
-    .query("deliverableAnalyticsRollups")
-    .collect();
+export const getPeriodDashboard = query({
+  args: { periodType: periodTypeValidator, periodKey: v.string(), today: v.string() },
+  handler: async (ctx, { periodType, periodKey, today }) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId || !(await canUserAccessAnalytics(ctx, userId))) {
+      return { canAccess: false as const };
+    }
+    if (!isAnalyticsDay(today) || (periodType === "all"
+      ? periodKey !== "all"
+      : !isAnalyticsDay(periodKey) || periodKey > today
+        || analyticsPeriod(periodType, periodKey).periodKey !== periodKey)) {
+      throw new Error("Periodo de analíticas inválido.");
+    }
 
-  const aggregated = new Map<
-    string,
-    {
-      scope: "global" | "client" | "brand" | "subBrand";
-      clientId?: string;
-      clientBrandId?: string;
-      subBrandId?: string;
-      deliverablesTotal: number;
-      projectCount: number;
-    }
-  >();
+    const published = await ctx.db.query("analyticsState")
+      .withIndex("by_key", (q) => q.eq("key", "published")).unique();
+    if (!published) return { canAccess: true as const, ready: false as const };
+    const datedDeliverables = Boolean(await ctx.db.query("analyticsState")
+      .withIndex("by_key", (q) => q.eq("key", "datedDeliverables")).unique());
 
-  for (const rollup of rollups) {
-    if (
-      (rollup as any).periodType !== undefined ||
-      (rollup as any).periodKey !== undefined
-    ) {
-      continue;
+    const firstPeriod = analyticsPeriod(periodType, analyticsFirstDay);
+    const period = periodKey < firstPeriod.periodKey ? firstPeriod : { periodType, periodKey };
+    const trendPeriods = analyticsTrendPeriods(period, today).filter((bucket) =>
+      bucket.periodKey >= analyticsPeriod(bucket.periodType, analyticsFirstDay).periodKey);
+    const [counts, tasksByClient, tasksByBrand, tasksByUser, evaluationsByUser,
+      byClient, weeklyTrend, overdue, dueSoon] = await Promise.all([
+      readPeriodCounts(ctx, period),
+      rankedAnalytics(ctx, period, "tasksByClient", "corClients", 8),
+      rankedAnalytics(ctx, period, "tasksByBrand", "clientBrands", 8),
+      rankedAnalytics(ctx, period, "tasksByUser", "users", 10),
+      rankedAnalytics(ctx, period, "evaluationsByUser", "users", 10),
+      readPeriodDeliverables(ctx, period, datedDeliverables),
+      Promise.all(trendPeriods.map(async (bucket) => {
+        const counts = await readPeriodCounts(ctx, bucket);
+        return {
+          week: bucket.periodKey < analyticsFirstDay ? analyticsFirstDay : bucket.periodKey,
+          count: counts.tasks ?? 0,
+          internal: counts.source_internal ?? 0,
+          external: counts.source_external ?? 0,
+        };
+      })),
+      periodAttention(ctx, period, "overdue"),
+      periodAttention(ctx, period, "dueSoon"),
+    ]);
+    const count = (key: string) => counts[key] ?? 0;
+    const deliverables = count(datedDeliverables ? datedDeliverableMetrics.total : "deliverables");
+    const sourceCounts = [
+      { key: "internal", label: "Internas", count: count("source_internal") },
+      { key: "external", label: "Clientes externos", count: count("source_external") },
+    ];
+    return {
+      canAccess: true as const,
+      ready: true as const,
+      summary: {
+        tasks: count("tasks"),
+        projects: count("projects"),
+        externalTasks: count("source_external"),
+        syncedTasks: count("cor_synced"),
+        pendingCorTasks: count("cor_pending"),
+        errorCorTasks: count("cor_error"),
+        overdueTasks: count("overdue"),
+        dueSoonTasks: count("dueSoon"),
+        evaluatedTasks: count("evaluatedTasks"),
+        deliverables,
+      },
+      statusCounts: TASK_STATUSES.map((key) => ({
+        key, label: getTaskStatusLabel(key), count: count(`task_${key}`),
+      })),
+      projectStatusCounts: PROJECT_STATUSES.map((key) => ({
+        key, label: getProjectStatusLabel(key), count: count(`project_${key}`),
+      })),
+      sourceCounts,
+      strategicPriorityCounts: STRATEGIC_PRIORITIES.map((key) => ({
+        key, label: key, count: count(`priority_${key}`),
+      })),
+      tasksByClient: tasksByClient.map(({ entityId, name, count }) => ({ clientId: entityId, name, count })),
+      tasksByBrand: tasksByBrand.map(({ entityId, name, count }) => ({ brandId: entityId, name, count })),
+      tasksByUser: tasksByUser.map(({ entityId, name, count }) => ({ userId: entityId, name, count })),
+      evaluationsByUser: evaluationsByUser.map(({ entityId, name, count }) => ({ userId: entityId, name, count })),
+      weeklyTrend,
+      deliverables: {
+        historicalTotal: deliverables,
+        projectCount: count(datedDeliverables ? datedDeliverableMetrics.projects : "projectsWithDeliverables"),
+        byClient,
+      },
+      evaluations: {
+        total: count("evaluations"),
+        evaluatedTasks: count("evaluatedTasks"),
+        statusCounts: EVALUATION_STATUSES.map((key) => ({
+          key, label: getEvaluationStatusLabel(key), count: count(`evaluation_${key}`),
+        })),
+      },
+      attention: { overdue, dueSoon },
+    };
+  },
+});
+
+async function readPeriodCounts(ctx: QueryCtx, { periodType, periodKey }: AnalyticsPeriod) {
+  const row = await ctx.db.query("analyticsPeriodRollups").withIndex("by_period", (q) =>
+    q.eq("periodType", periodType).eq("periodKey", periodKey)).unique();
+  return row?.counts ?? {};
+}
+
+type AnalyticsNameTable = "corClients" | "clientBrands" | "subBrands" | "users";
+
+async function rankedAnalytics(
+  ctx: QueryCtx,
+  { periodType, periodKey }: AnalyticsPeriod,
+  metric: string,
+  table: AnalyticsNameTable,
+  limit: number,
+  parentKey = "",
+) {
+  const rows = await ctx.db.query("analyticsPeriodBreakdowns").withIndex("by_rank", (q) =>
+    q.eq("periodType", periodType).eq("periodKey", periodKey).eq("metric", metric)
+      .eq("parentKey", parentKey)).order("desc").take(limit);
+  const fallback = {
+    corClients: "Cliente sin nombre",
+    clientBrands: "Marca sin nombre",
+    subBrands: "Submarca sin nombre",
+    users: "Usuario sin nombre",
+  };
+  return await Promise.all(rows.map(async ({ entityId, count, projectCount }) => {
+    const id = ctx.db.normalizeId(table, entityId);
+    const doc = id ? await ctx.db.get(table, id) : null;
+    const name = doc && table === "users" ? formatUserName(doc) : doc?.name;
+    return { entityId, name: name ?? fallback[table], count, projectCount };
+  }));
+}
+
+async function readPeriodDeliverables(ctx: QueryCtx, period: AnalyticsPeriod, dated: boolean) {
+  const clientMetric = dated ? datedDeliverableMetrics.client : "deliverablesByClient";
+  const brandMetric = dated ? datedDeliverableMetrics.brand : "deliverablesByBrand";
+  const subBrandMetric = dated ? datedDeliverableMetrics.subBrand : "deliverablesBySubBrand";
+  const clients = await rankedAnalytics(ctx, period, clientMetric, "corClients", 8);
+  return await Promise.all(clients.map(async (client) => {
+    const brands = await rankedAnalytics(ctx, period, brandMetric, "clientBrands", 4, client.entityId);
+    return {
+      clientId: client.entityId, name: client.name, deliverablesTotal: client.count, projectCount: client.projectCount,
+      brands: await Promise.all(brands.map(async (brand) => {
+        const subBrands = await rankedAnalytics(ctx, period, subBrandMetric, "subBrands", 3,
+          analyticsParentKey(client.entityId, brand.entityId));
+        return {
+          clientBrandId: brand.entityId, name: brand.name, deliverablesTotal: brand.count, projectCount: brand.projectCount,
+          subBrands: subBrands.map((subBrand) => ({
+            subBrandId: subBrand.entityId, name: subBrand.name,
+            deliverablesTotal: subBrand.count, projectCount: subBrand.projectCount,
+          })),
+        };
+      })),
+    };
+  }));
+}
+
+async function periodAttention(
+  ctx: QueryCtx, { periodType, periodKey }: AnalyticsPeriod, kind: "overdue" | "dueSoon",
+) {
+  const rows = await ctx.db.query("analyticsTaskAttention").withIndex("by_period_kind_created", (q) =>
+    q.eq("periodType", periodType).eq("periodKey", periodKey).eq("kind", kind)).order("desc").take(8);
+  return rows.map(({ task }) => ({ _id: String(task.taskId), title: task.title,
+    deadline: task.deadline, status: task.status, source: task.source }));
+}
+
+async function buildDeliverableAnalytics(ctx: QueryCtx, projects: Doc<"projects">[]) {
+  type Dimension = {
+    scope: "global" | "client" | "brand" | "subBrand";
+    clientId?: string;
+    clientBrandId?: string;
+    subBrandId?: string;
+  };
+  const aggregated = new Map<string, Dimension & { deliverablesTotal: number; projectCount: number }>();
+  function add(dimension: Dimension, deliverables: number) {
+    const key = JSON.stringify(dimension);
+    const existing = aggregated.get(key);
+    if (existing) {
+      existing.deliverablesTotal += deliverables;
+      existing.projectCount++;
+    } else {
+      aggregated.set(key, { ...dimension, deliverablesTotal: deliverables, projectCount: 1 });
     }
-    if (rollup.deliverablesTotal <= 0) continue;
-    const key = [
-      rollup.scope,
-      rollup.clientId ? String(rollup.clientId) : "-",
-      rollup.clientBrandId ? String(rollup.clientBrandId) : "-",
-      rollup.subBrandId ? String(rollup.subBrandId) : "-",
-    ].join("|");
-    const current = aggregated.get(key);
-    if (current) {
-      current.deliverablesTotal += rollup.deliverablesTotal;
-      current.projectCount += rollup.projectCount;
-      continue;
-    }
-    aggregated.set(key, {
-      scope: rollup.scope,
-      clientId: rollup.clientId ? String(rollup.clientId) : undefined,
-      clientBrandId: rollup.clientBrandId
-        ? String(rollup.clientBrandId)
-        : undefined,
-      subBrandId: rollup.subBrandId ? String(rollup.subBrandId) : undefined,
-      deliverablesTotal: rollup.deliverablesTotal,
-      projectCount: rollup.projectCount,
-    });
+  }
+  for (const project of projects) {
+    if (project.convexStatus === "archived" || !PROJECT_STATUSES.some(status => status === project.status)) continue;
+    const deliverables = positiveDeliverables(project.deliverables);
+    if (!deliverables) continue;
+    const { clientId, clientBrandId, subBrandId } = project;
+    add({ scope: "global" }, deliverables);
+    if (clientId) add({ scope: "client", clientId }, deliverables);
+    if (clientId && clientBrandId) add({ scope: "brand", clientId, clientBrandId }, deliverables);
+    if (clientId && clientBrandId && subBrandId) add({ scope: "subBrand", clientId, clientBrandId, subBrandId }, deliverables);
   }
 
   const globalTotals = Array.from(aggregated.values()).filter(
@@ -498,10 +640,10 @@ function startOfToday(now: number) {
 }
 
 function buildWeeklyTrend(
-  tasks: Array<{ _creationTime: number }>,
+  tasks: Array<{ _creationTime: number; source?: "internal" | "external" }>,
   weeks: number,
 ) {
-  const buckets = new Map<string, number>();
+  const buckets = new Map<string, { internal: number; external: number }>();
   const today = new Date();
   today.setHours(0, 0, 0, 0);
 
@@ -509,7 +651,7 @@ function buildWeeklyTrend(
     const start = new Date(today);
     start.setDate(start.getDate() - index * 7);
     const key = `${start.getFullYear()}-${String(start.getMonth() + 1).padStart(2, "0")}-${String(start.getDate()).padStart(2, "0")}`;
-    buckets.set(key, 0);
+    buckets.set(key, { internal: 0, external: 0 });
   }
 
   const bucketKeys = Array.from(buckets.keys());
@@ -519,11 +661,13 @@ function buildWeeklyTrend(
     const diffWeeks = Math.floor(
       (task._creationTime - firstBucketTime) / (7 * 24 * 60 * 60 * 1000),
     );
-    const key = bucketKeys[Math.min(diffWeeks, bucketKeys.length - 1)];
-    if (key) buckets.set(key, (buckets.get(key) ?? 0) + 1);
+    const bucket = buckets.get(bucketKeys[Math.min(diffWeeks, bucketKeys.length - 1)]);
+    if (bucket) bucket[task.source ?? "internal"]++;
   }
 
-  return bucketKeys.map((key) => ({ week: key, count: buckets.get(key) ?? 0 }));
+  return Array.from(buckets, ([week, { internal, external }]) => ({
+    week, count: internal + external, internal, external,
+  }));
 }
 
 function formatTaskListItem(task: any) {

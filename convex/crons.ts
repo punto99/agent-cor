@@ -34,4 +34,6 @@ crons.interval("send new external task emails", { minutes: 1 }, internal.data.ta
 crons.interval("send comment mention emails", { minutes: 1 }, internal.data.commentNotifications.sweep, {});
 crons.interval("send external task status emails", { minutes: 1 }, internal.data.taskStatusNotifications.sweep, {});
 
+crons.daily("reconcile analytics changes", { hourUTC: 5, minuteUTC: 10 }, internal.analytics.jobs.nightly, {});
+
 export default crons;

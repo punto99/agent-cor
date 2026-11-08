@@ -19,7 +19,9 @@ export async function patchTaskWithStatusNotification(
   const before = await ctx.db.get(taskId);
   if (!before) throw new Error("Task no encontrada.");
   const fromStatus = before.status;
-  await ctx.db.patch(taskId, updates);
+  const analyticsChanged = (["title", "deadline", "status", "strategicPriority", "clientId", "clientBrandId"] as const)
+    .some(field => field in updates && updates[field] !== before[field]);
+  await ctx.db.patch(taskId, analyticsChanged ? { ...updates, updatedAt: Date.now() } : updates);
   if (updates.status === undefined || updates.status === fromStatus) return;
   const task = { ...before, ...updates };
   if (task.source !== "external" || task.convexStatus === "deleted" || task.convexStatus === "archived") return;

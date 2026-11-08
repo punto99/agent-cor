@@ -1,3 +1,5 @@
+import type { Id } from "../_generated/dataModel";
+import { notifyAnalytics } from "../analytics/notify";
 import { createTool } from "@convex-dev/agent";
 import { z } from "zod";
 import { internal } from "../_generated/api";
@@ -316,6 +318,8 @@ export const createExternalTaskTool = createTool({
           `- Tablero del requerimiento: [Abrir tablero de Trello](${trelloBoardUrl})`,
         ].join("\n")
       : "";
+
+    await notifyAnalytics(ctx, [result.taskId as Id<"tasks">, result.projectId as Id<"projects">]);
 
     return `Listo, el requerimiento quedó guardado para revisión del equipo.
 

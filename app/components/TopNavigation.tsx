@@ -49,12 +49,6 @@ export function TopNavigation() {
       isActive: pathname.startsWith("/workspace/requests"),
     },
     {
-      label: "Analytics",
-      href: "/workspace/analytics",
-      icon: BarChart3,
-      isActive: pathname === "/workspace/analytics",
-    },
-    {
       label: "Usuarios",
       href: "/workspace/users",
       icon: UserCog,
@@ -71,6 +65,12 @@ export function TopNavigation() {
       href: "/workspace/clients",
       icon: Building2,
       isActive: pathname === "/workspace/clients",
+    },
+    {
+      label: "Analíticas",
+      href: "/workspace/analytics",
+      icon: BarChart3,
+      isActive: pathname === "/workspace/analytics",
     },
   ].filter((tab) => {
     if (tab.href === "/workspace/requests") return isExternalUser && accessProfile?.canAccessExternalRequests === true;
