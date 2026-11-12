@@ -674,13 +674,16 @@ export const listTasksForScheduledPull = internalQuery({
       return deadline >= args.dateKey;
     };
 
-    const page = await ctx.db
-      .query("tasks")
-      .withIndex("by_convexStatus", (q) =>
-        q.eq("convexStatus", args.convexStatus),
-      )
-      .order("desc")
-      .paginate(args.paginationOpts);
+    // Both ranges page by creation time. A date update cannot reorder a dated task mid-scan.
+    const tasks = ctx.db.query("tasks");
+    const range = args.includeUndated
+      ? tasks.withIndex("by_convexStatus_deadline", (q) =>
+          q.eq("convexStatus", args.convexStatus).eq("deadline", undefined),
+        )
+      : tasks.withIndex("by_convexStatus", (q) =>
+          q.eq("convexStatus", args.convexStatus),
+        );
+    const page = await range.order("desc").paginate(args.paginationOpts);
 
     return {
       ...page,
@@ -721,13 +724,15 @@ export const listProjectsForScheduledPull = internalQuery({
       return endDate >= args.dateKey;
     };
 
-    const page = await ctx.db
-      .query("projects")
-      .withIndex("by_convexStatus", (q) =>
-        q.eq("convexStatus", args.convexStatus),
-      )
-      .order("desc")
-      .paginate(args.paginationOpts);
+    const projects = ctx.db.query("projects");
+    const range = args.includeUndated
+      ? projects.withIndex("by_convexStatus_endDate", (q) =>
+          q.eq("convexStatus", args.convexStatus).eq("endDate", undefined),
+        )
+      : projects.withIndex("by_convexStatus", (q) =>
+          q.eq("convexStatus", args.convexStatus),
+        );
+    const page = await range.order("desc").paginate(args.paginationOpts);
 
     return {
       ...page,

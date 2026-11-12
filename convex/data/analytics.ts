@@ -2,10 +2,12 @@ import { getAuthUserId } from "@convex-dev/auth/server";
 import { v } from "convex/values";
 import { mutation, query, type QueryCtx } from "../_generated/server";
 import {
+  analyticsDay,
   analyticsFirstDay,
   analyticsPeriod,
   analyticsTrendPeriods,
   isAnalyticsDay,
+  shiftAnalyticsPeriod,
   type AnalyticsPeriod,
 } from "../analytics/calendar";
 import {
@@ -365,7 +367,7 @@ export const getPeriodDashboard = query({
     const trendPeriods = analyticsTrendPeriods(period, today).filter((bucket) =>
       bucket.periodKey >= analyticsPeriod(bucket.periodType, analyticsFirstDay).periodKey);
     const [counts, tasksByClient, tasksByBrand, tasksByUser, evaluationsByUser,
-      byClient, weeklyTrend, overdue, dueSoon] = await Promise.all([
+      byClient, weeklyTrend, monthlyTrend, overdue, dueSoon] = await Promise.all([
       readPeriodCounts(ctx, period),
       rankedAnalytics(ctx, period, "tasksByClient", "corClients", 8),
       rankedAnalytics(ctx, period, "tasksByBrand", "clientBrands", 8),
@@ -381,6 +383,7 @@ export const getPeriodDashboard = query({
           external: counts.source_external ?? 0,
         };
       })),
+      periodType === "all" ? readMonthlyTaskTrend(ctx, today) : null,
       periodAttention(ctx, period, "overdue"),
       periodAttention(ctx, period, "dueSoon"),
     ]);
@@ -420,6 +423,7 @@ export const getPeriodDashboard = query({
       tasksByUser: tasksByUser.map(({ entityId, name, count }) => ({ userId: entityId, name, count })),
       evaluationsByUser: evaluationsByUser.map(({ entityId, name, count }) => ({ userId: entityId, name, count })),
       weeklyTrend,
+      monthlyTrend,
       deliverables: {
         historicalTotal: deliverables,
         projectCount: count(datedDeliverables ? datedDeliverableMetrics.projects : "projectsWithDeliverables"),
@@ -441,6 +445,31 @@ async function readPeriodCounts(ctx: QueryCtx, { periodType, periodKey }: Analyt
   const row = await ctx.db.query("analyticsPeriodRollups").withIndex("by_period", (q) =>
     q.eq("periodType", periodType).eq("periodKey", periodKey)).unique();
   return row?.counts ?? {};
+}
+
+async function readMonthlyTaskTrend(ctx: QueryCtx, today: string) {
+  const currentDay = analyticsDay(Date.now());
+  const endMonth = analyticsPeriod("month", today < currentDay ? today : currentDay).periodKey;
+  const months = await ctx.db.query("analyticsPeriodRollups")
+    .withIndex("by_period", (q) => q.eq("periodType", "month")
+      .gte("periodKey", analyticsFirstDay).lte("periodKey", endMonth))
+    .collect();
+  const firstMonth = months.find(({ counts }) => (counts.tasks ?? 0) > 0);
+  if (!firstMonth) return [];
+
+  const countsByMonth = new Map(months.map(({ periodKey, counts }) => [periodKey, counts]));
+  const trend = [];
+  for (let periodKey = firstMonth.periodKey; periodKey <= endMonth;
+    periodKey = shiftAnalyticsPeriod({ periodType: "month", periodKey }, 1)) {
+    const counts = countsByMonth.get(periodKey);
+    trend.push({
+      periodKey,
+      count: counts?.tasks ?? 0,
+      internal: counts?.source_internal ?? 0,
+      external: counts?.source_external ?? 0,
+    });
+  }
+  return trend;
 }
 
 type AnalyticsNameTable = "corClients" | "clientBrands" | "subBrands" | "users";

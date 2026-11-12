@@ -14,3 +14,9 @@ yarn-error.log*
 .temp-*
 /docs
 
+# Local environment files, including names without a leading dot
+.env.*
+env.local
+env.*.local
+!.env.example
+!.env.sample

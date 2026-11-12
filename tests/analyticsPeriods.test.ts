@@ -35,6 +35,7 @@ function fixture() {
   put("subBrands", { _id: "subBrand", name: "Submarca A" });
 
   const indexedOrder: Record<string, string> = {
+    by_period: "periodKey",
     by_rank: "count",
     by_period_kind_created: "task.createdAt",
     by_next_attention_day: "nextAttentionDay",
@@ -140,14 +141,14 @@ function fixture() {
   const drain = async () => {
     while (scheduled.length) await scheduled.shift()!();
   };
-  const readDashboard = async (periodType: string, periodKey: string) => {
+  const readDashboard = async (periodType: string, periodKey: string, today = "2026-11-05") => {
     const query = ctx.db.query;
     ctx.db.query = (table: string) => {
       assert.ok(!sourceTables.has(table), `Dashboard read operational table ${table}`);
       return query(table);
     };
     try {
-      return await call(getPeriodDashboard, { periodType, periodKey, today: "2026-11-05" });
+      return await call(getPeriodDashboard, { periodType, periodKey, today });
     } finally {
       ctx.db.query = query;
     }
@@ -194,6 +195,31 @@ test("the creation trend preserves totals and splits task sources in every perio
       (point: { count: number; internal: number; external: number }) => point.count === point.internal + point.external,
     ));
   }
+});
+
+test("the historical chart spans task creation months across years and fills empty months", async (t) => {
+  t.mock.timers.enable({ apis: ["Date"], now: new Date("2027-03-05T14:00:00Z") });
+  const f = fixture();
+  f.put("projects", { _id: "earlier-project", _creationTime: Date.parse("2026-01-12T13:00:00Z"),
+    name: "Proyecto", status: "active" });
+  f.put("tasks", { _id: "october-internal", _creationTime: october, title: "Interna", status: "nueva" });
+  f.put("tasks", { _id: "december-external", _creationTime: Date.parse("2026-12-15T13:00:00Z"),
+    title: "Externa", status: "nueva", source: "external" });
+  f.put("tasks", { _id: "february-internal", _creationTime: Date.parse("2027-02-15T13:00:00Z"),
+    title: "Interna", status: "nueva" });
+  await f.call(backfill, { dryRun: false });
+
+  const dashboard = await f.readDashboard("all", "all", "2027-03-05");
+  assert.deepEqual(dashboard.monthlyTrend, [
+    { periodKey: "2026-10-01", count: 1, internal: 1, external: 0 },
+    { periodKey: "2026-11-01", count: 0, internal: 0, external: 0 },
+    { periodKey: "2026-12-01", count: 1, internal: 0, external: 1 },
+    { periodKey: "2027-01-01", count: 0, internal: 0, external: 0 },
+    { periodKey: "2027-02-01", count: 1, internal: 1, external: 0 },
+    { periodKey: "2027-03-01", count: 0, internal: 0, external: 0 },
+  ]);
+  assert.equal(dashboard.summary.tasks, 3);
+  assert.equal((await f.readDashboard("year", "2027-01-01", "2027-03-05")).monthlyTrend, null);
 });
 
 test("backfill previews without writes, publishes when finished and reconciles edits without duplicates", async (t) => {

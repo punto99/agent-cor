@@ -92,3 +92,77 @@ test("both cron entry points retain current/expired dispatch and the same worker
     assert.equal(f.scheduled[0].args.dateMode, mode);
   }
 });
+
+test("scheduled pulls narrow only the undated scan and preserve eligibility for both statuses", async () => {
+  const dateKey = "2026-11-10";
+  for (const { handler, table, dateField, corIdField, corId, finished } of [
+    { handler: sync.listTasksForScheduledPull, table: "tasks", dateField: "deadline", corIdField: "corTaskId", corId: "11", finished: "finalizada" },
+    { handler: sync.listProjectsForScheduledPull, table: "projects", dateField: "endDate", corIdField: "corProjectId", corId: 22, finished: "finished" },
+  ]) {
+    for (const convexStatus of ["active", undefined]) {
+      const otherStatus = convexStatus === "active" ? undefined : "active";
+      const eligible = { convexStatus, [corIdField]: corId, status: "open" };
+      const docs: Record<string, unknown>[] = [
+        { ...eligible, _id: "today", [dateField]: dateKey },
+        { ...eligible, _id: "future", [dateField]: "2026-11-11" },
+        { ...eligible, _id: "past", [dateField]: "2026-11-09" },
+        { ...eligible, _id: "undated" },
+        { ...eligible, _id: "empty", [dateField]: "" },
+        { ...eligible, _id: "blank", [dateField]: " " },
+        { ...eligible, _id: "finished", status: finished },
+        { ...eligible, _id: "no-cor", [corIdField]: undefined },
+        { ...eligible, _id: "syncing", corSyncStatus: "syncing" },
+        { ...eligible, _id: "retrying", corSyncStatus: "retrying" },
+        { ...eligible, _id: "other-status", convexStatus: otherStatus },
+        { ...eligible, _id: "archived", convexStatus: "archived" },
+        { ...eligible, _id: "deleted", convexStatus: "deleted" },
+      ];
+      for (const { dateMode, includeUndated, expected } of [
+        { dateMode: "current", includeUndated: false, expected: ["today", "future"] },
+        { dateMode: "current", includeUndated: true, expected: ["undated"] },
+        { dateMode: "expired", includeUndated: false, expected: ["past"] },
+      ]) {
+        const paginationOpts = { cursor: "page-start", numItems: 100 };
+        const ctx = {
+          db: {
+            query(tableName: string) {
+              assert.equal(tableName, table);
+              return {
+                withIndex(indexName: string, range: (builder: unknown) => unknown) {
+                  assert.equal(indexName, includeUndated ? `by_convexStatus_${dateField}` : "by_convexStatus");
+                  const equalities: [string, unknown][] = [];
+                  const builder = {
+                    eq(field: string, value: unknown) {
+                      equalities.push([field, value]);
+                      return builder;
+                    },
+                  };
+                  range(builder);
+                  assert.deepEqual(equalities, includeUndated
+                    ? [["convexStatus", convexStatus], [dateField, undefined]]
+                    : [["convexStatus", convexStatus]]);
+                  return {
+                    order(direction: string) {
+                      assert.equal(direction, "desc");
+                      return {
+                        async paginate(opts: unknown) {
+                          assert.equal(opts, paginationOpts);
+                          const page = docs.filter(doc => equalities.every(([field, value]) => doc[field] === value));
+                          return { page, isDone: false, continueCursor: "page-end" };
+                        },
+                      };
+                    },
+                  };
+                },
+              };
+            },
+          },
+        };
+        const result = await (handler as any)._handler(ctx, { convexStatus, dateMode, dateKey, includeUndated, paginationOpts });
+        assert.deepEqual(result.page.map((doc: { _id: string }) => doc._id), expected);
+        assert.equal(result.isDone, false);
+        assert.equal(result.continueCursor, "page-end");
+      }
+    }
+  }
+});
