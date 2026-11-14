@@ -1,4 +1,4 @@
-import { getAuthorName } from "../lib/authorName";
+import { getAuthorName, getCommentAuthorName } from "../lib/authorName";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { paginationOptsValidator } from "convex/server";
 import { mergedStream, stream } from "convex-helpers/server/stream";
@@ -34,7 +34,7 @@ export const list = query({
         if ("messageId" in row) {
           const message = await ctx.db.get(row.messageId);
           if (!message || !(await canReceiveComment(ctx, userId, task, message, row.kind))) return null;
-          const author = await getAuthorName(ctx, message.userId, message.source === "trello" ? "Trello" : message.source === "cor" ? "COR" : "Autor sin nombre");
+          const author = await getCommentAuthorName(ctx, message, message.source === "cor" ? "COR" : "Autor sin nombre");
           return { id: row._id, taskId: task._id, title: task.title, kind: row.kind === "mention" ? "mention" as const : "comment" as const, author, external, read: row.read, createdAt: row.createdAt, context: "" };
         }
         if (!(await canReceiveTaskCreation(ctx, userId, task))) return null;

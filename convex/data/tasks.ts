@@ -1,5 +1,5 @@
 import type { FunctionArgs } from "convex/server";
-import { getAuthorName } from "../lib/authorName";
+import { getAuthorName, getCommentAuthorName } from "../lib/authorName";
 import { canViewExternalRequest, externalRequestCandidates, hasExternalRequestsAccess } from "../lib/externalRequestsAccess";
 import { notifyExternalTaskCreated } from "../lib/taskCreationNotifications";
 import { patchTaskWithStatusNotification } from "../lib/taskStatusNotifications";
@@ -1464,6 +1464,18 @@ export const applyExternalTaskEditInternal = internalMutation({
   },
 });
 
+// Optional author enrichment runs separately from the transaction that saves a comment.
+export const resolveTrelloCommentUserId = internalQuery({
+  args: { trelloMemberId: v.string() },
+  handler: async (ctx, { trelloMemberId }) => {
+    const externalMatches = await ctx.db.query("approvedExternalUsers")
+      .withIndex("by_trello_member", q => q.eq("trelloMemberId", trelloMemberId))
+      .take(2);
+    // A shared Trello account must not be attributed to an arbitrary user.
+    return externalMatches.length === 1 ? externalMatches[0].userId ?? null : null;
+  },
+});
+
 export const createTaskMessageInternal = internalMutation({
   args: {
     taskId: v.id("tasks"),
@@ -1478,6 +1490,8 @@ export const createTaskMessageInternal = internalMutation({
     userQuote: v.optional(v.string()),
     trelloCardId: v.optional(v.string()),
     trelloCommentId: v.optional(v.string()),
+    trelloMemberId: v.optional(v.string()),
+    trelloAuthorName: v.optional(v.string()),
     trelloSyncStatus: v.optional(v.string()),
     corTaskId: v.optional(v.number()),
     corMessageSyncStatus: v.optional(v.string()),
@@ -1588,7 +1602,7 @@ export const listInternalTaskComments = query({
     const messages = await ctx.db.query("taskMessages").withIndex("by_task", q => q.eq("taskId", taskId)).collect();
     return await Promise.all(messages.sort((a, b) => b.createdAt - a.createdAt).map(async message => ({
       id: message._id, text: message.message, createdAt: message.createdAt,
-      author: await getAuthorName(ctx, message.userId),
+      author: await getCommentAuthorName(ctx, message),
     })));
   },
 });

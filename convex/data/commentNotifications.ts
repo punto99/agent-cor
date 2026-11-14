@@ -1,4 +1,4 @@
-import { getAuthorName } from "../lib/authorName";
+import { getCommentAuthorName } from "../lib/authorName";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { v } from "convex/values";
 import { query, mutation, internalMutation, internalAction } from "../_generated/server";
@@ -18,7 +18,7 @@ export const unread = query({
       const message = await ctx.db.get(row.messageId);
       if (!task || !message || !(await canReceiveComment(ctx, userId, task, message, row.kind))) continue;
       const current = groups.get(String(task._id));
-      const author = await getAuthorName(ctx, message.userId, message.source === "trello" ? "Trello" : message.source === "cor" ? "COR" : "Autor sin nombre");
+      const author = await getCommentAuthorName(ctx, message, message.source === "cor" ? "COR" : "Autor sin nombre");
       groups.set(String(task._id), { taskId: task._id, title: task.title, count: (current?.count ?? 0) + 1, createdAt: Math.max(current?.createdAt ?? 0, row.createdAt), author: current && current.createdAt > row.createdAt ? current.author : author, messageIds: [...(current?.messageIds ?? []), row.messageId], external });
     }
     return [...groups.values()].sort((a,b) => b.createdAt - a.createdAt);
@@ -66,7 +66,7 @@ export const claimEmail = internalMutation({
         const baseUrl = process.env.APP_URL || process.env.SITE_URL;
         if (!baseUrl) throw new Error("Falta APP_URL o SITE_URL en Convex.");
         const external = Boolean(await ctx.db.query("approvedExternalUsers").withIndex("by_user", q => q.eq("userId", row.userId)).unique());
-        payload = JSON.stringify(commentEmail({ from: process.env.RESEND_FROM_EMAIL || "Punto99 <digital@pto99.com>", to: email, baseUrl, taskId: task._id, title: task.title, author: await getAuthorName(ctx, message.userId, message.source === "trello" ? "Trello" : "Autor sin nombre"), comment: message.message, quote: message.userQuote, external, kind: row.kind }));
+        payload = JSON.stringify(commentEmail({ from: process.env.RESEND_FROM_EMAIL || "Punto99 <digital@pto99.com>", to: email, baseUrl, taskId: task._id, title: task.title, author: await getCommentAuthorName(ctx, message), comment: message.message, quote: message.userQuote, external, kind: row.kind }));
       } else if (JSON.parse(payload).to[0] !== email) {
         await ctx.db.patch(id, { emailState: "cancelled", emailError: "El correo del destinatario cambió durante el envío." }); return null;
       }

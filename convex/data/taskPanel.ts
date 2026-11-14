@@ -1,5 +1,5 @@
 import { eligibleMentionUsers, resolveMentions, mentionsForSync } from "../lib/taskMentions";
-import { getAuthorName } from "../lib/authorName";
+import { getCommentAuthor, getCommentAuthorName } from "../lib/authorName";
 import { canViewExternalRequest } from "../lib/externalRequestsAccess";
 import { notifyTaskComment } from "../lib/commentNotifications";
 import { resolvePanelComment } from "../lib/taskPanelComment";
@@ -141,7 +141,10 @@ export const detail = query({
     return {
       viewerIsExternal: Boolean(external),
       attachments: await Promise.all(attachments.map(async a => ({ id: a._id, filename: a.filename, size: a.size, mimeType: a.mimeType, createdAt: a.createdAt, trelloAttachmentId: a.trelloAttachmentId, trelloUrl: a.trelloAttachmentUrl, corUrl: a.corUrl, url: await ctx.storage.getUrl(a.storageId as Id<"_storage">), entryId: a.panelEntryId }))),
-      comments: await Promise.all(messages.filter(m => !external || ["external_panel", "internal_panel", "external_agent", "trello"].includes(m.source)).sort((a,b) => b.createdAt-a.createdAt).map(async m => ({ id: m._id, mentionedUserIds: m.mentionedUserIds ?? [], replyTo: m.replyTo, quote: m.userQuote, text: m.message, createdAt: m.createdAt, own: m.userId === userId, isClient: !external && (m.source === "external_agent" || Boolean(m.userId && await ctx.db.query("approvedExternalUsers").withIndex("by_user", q => q.eq("userId", m.userId!)).unique())), authorName: await getAuthorName(ctx, m.userId) }))),
+      comments: await Promise.all(messages.filter(m => !external || ["external_panel", "internal_panel", "external_agent", "trello"].includes(m.source)).sort((a,b) => b.createdAt-a.createdAt).map(async m => {
+        const author = await getCommentAuthor(ctx, m);
+        return { id: m._id, mentionedUserIds: m.mentionedUserIds ?? [], replyTo: m.replyTo, quote: m.userQuote, text: m.message, createdAt: m.createdAt, own: m.userId === userId, isClient: !external && (m.source === "external_agent" || author.isExternal), authorName: author.name };
+      })),
       entries: entries.map(e => ({ id: e._id, createdAt: e.createdAt, trelloState: e.trelloState, corState: e.corState })),
     };
   },
@@ -156,9 +159,9 @@ export const syncContext = internalQuery({
     const attachments = (await ctx.db.query("taskAttachments").withIndex("by_task", q => q.eq("taskId", entry.taskId)).collect()).filter(a => a.panelEntryId === entryId);
     const message = entry.messageId ? await ctx.db.get(entry.messageId) : null;
     const parent = message?.replyTo ? await ctx.db.get(message.replyTo) : null;
-    const author = parent?.userId ? await ctx.db.get(parent.userId) : null;
+    const author = parent ? await getCommentAuthorName(ctx, parent, "un comentario") : null;
     // Providers receive a regular comment with context; local replies keep their structure.
-    const context = parent ? `En respuesta a ${author?.name || "un comentario"}: ${parent.message.replace(/\s+/g, " ").slice(0, 240)}\n\n` : "";
+    const context = parent ? `En respuesta a ${author}: ${parent.message.replace(/\s+/g, " ").slice(0, 240)}\n\n` : "";
     return { entry, task, attachments, message: message ? { ...message, message: mentionsForSync(context + message.message) } : null };
   },
 });

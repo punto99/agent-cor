@@ -116,7 +116,8 @@ export default defineSchema({
     addedBy: v.optional(v.id("users")),
   })
     .index("by_email", ["email"])
-    .index("by_user", ["userId"]),
+    .index("by_user", ["userId"])
+    .index("by_trello_member", ["trelloMemberId"]),
 
   externalOtpRequestLimits: defineTable({
     email: v.string(),
@@ -442,6 +443,9 @@ export default defineSchema({
     commentFileIds: v.optional(v.array(v.id("threadUploadedFiles"))),
     trelloCardId: v.optional(v.string()),
     trelloCommentId: v.optional(v.string()),
+    // Keep the Trello author even when they have no account in the platform.
+    trelloMemberId: v.optional(v.string()),
+    trelloAuthorName: v.optional(v.string()),
     trelloSyncStatus: v.optional(v.string()),
     trelloSyncError: v.optional(v.string()),
     trelloSyncedAt: v.optional(v.number()),

@@ -186,7 +186,8 @@ export const getDashboard = query({
         })),
         fullClientCount,
         brandCount,
-        isCompleteForBrief: Boolean(corUser) && assignments.length > 0,
+        isCompleteForBrief:
+          Boolean(corUser) && corUser?.isActive !== false && assignments.length > 0,
       });
     }
 

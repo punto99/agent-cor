@@ -3074,6 +3074,11 @@ export const processWebhookEvent: any = internalAction({
       } else if (event.actionType === "commentCard") {
         const trelloCommentId = action?.id;
         const commentText = typeof data.text === "string" ? data.text.trim() : "";
+        const author = action?.memberCreator;
+        const trelloMemberId = [author?.id, action?.idMemberCreator]
+          .find(value => typeof value === "string" && value.trim())?.trim();
+        const trelloAuthorName = [author?.fullName, author?.username]
+          .find(value => typeof value === "string" && value.trim())?.trim();
 
         if (!trelloCommentId) {
           console.log("[TrelloWebhook][commentCard] failed_missing_comment_id", {
@@ -3116,14 +3121,29 @@ export const processWebhookEvent: any = internalAction({
         const shouldSyncToCOR =
           typeof corTaskId === "number" && Number.isFinite(corTaskId);
 
+        let userId;
+        if (trelloMemberId) {
+          try {
+            userId = await ctx.runQuery(internal.data.tasks.resolveTrelloCommentUserId, { trelloMemberId }) ?? undefined;
+          } catch (error) {
+            console.warn("[TrelloWebhook] No se pudo vincular el autor; se guardará el comentario igualmente.", {
+              trelloCommentId,
+              error: error instanceof Error ? error.message : String(error),
+            });
+          }
+        }
+
         const taskMessageId = await ctx.runMutation(
           (internal as any).data.tasks.createTaskMessageInternal,
           {
             taskId: context.task._id,
+            userId,
             source: "trello",
             message: commentText,
             trelloCardId: cardId,
             trelloCommentId,
+            trelloMemberId,
+            trelloAuthorName,
             trelloSyncStatus: "synced",
             corTaskId: shouldSyncToCOR ? corTaskId : undefined,
             corMessageSyncStatus: shouldSyncToCOR ? "pending" : "pending_cor_task",

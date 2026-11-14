@@ -12,7 +12,7 @@ import * as taskNotifications from "../convex/data/taskCreationNotifications";
 import * as statusNotifications from "../convex/data/taskStatusNotifications";
 import { patchTaskWithStatusNotification, taskStatusEmail } from "../convex/lib/taskStatusNotifications";
 import { applyInboundTaskUpdate } from "../convex/data/corInboundSync";
-import { applySafeInboundCardUpdate } from "../convex/data/trello";
+import { applySafeInboundCardUpdate, processWebhookEvent } from "../convex/data/trello";
 import { canReceiveTaskCreation, notifyExternalTaskCreated, taskCreationEmail } from "../convex/lib/taskCreationNotifications";
 import { notifyTaskComment, commentEmail } from "../convex/lib/commentNotifications";
 import { clientConfig } from "../config/tenant.config";
@@ -1092,6 +1092,247 @@ test("external profile names appear in both comment views, notifications, histor
   f.as("user1");
   assert.ok((await detail()).comments.some((comment: any) => comment.authorName === "Interno"));
   assert.equal((await f.unread())[0].author, "Interno");
+});
+
+async function importTrelloComment(f: ReturnType<typeof notificationFixture>, authorFields: Record<string, unknown>) {
+  const runQuery = f.ctx.runQuery;
+  const runMutation = f.ctx.runMutation;
+  const event = {
+    status: "received", actionType: "commentCard", trelloCardId: "card1",
+    payloadJson: JSON.stringify({ action: { id: "trello-comment-1", data: { text: "Comentario de Trello" }, ...authorFields } }),
+  };
+  f.ctx.runQuery = async (ref: any, args: any) => {
+    const name = getFunctionName(ref);
+    if (name === "data/trello:getWebhookEventById") return event;
+    if (name === "data/trello:getTrelloCardContextByCardId") return { task: f.rows.get("task1"), project: { _id: "project1" } };
+    return runQuery(ref, args);
+  };
+  f.ctx.runMutation = async (ref: any, args: any) => {
+    const name = getFunctionName(ref);
+    if (name === "data/trello:markWebhookEventStatus") { event.status = args.status; return; }
+    if (name === "data/trello:recordInboundChange") return;
+    return runMutation(ref, args);
+  };
+  try {
+    const result = await f.call(processWebhookEvent, { eventId: "event1" });
+    assert.equal(result.success, true);
+    assert.equal(event.status, "processed");
+    const comments = [...f.rows.values()].filter(row => row._table === "taskMessages");
+    assert.equal(comments.length, 1);
+    return comments[0];
+  } finally {
+    f.ctx.runQuery = runQuery;
+    f.ctx.runMutation = runMutation;
+  }
+}
+
+test("Trello webhook authors survive import without a platform account and appear across comment views", async () => {
+  for (const sample of [
+    { fields: { memberCreator: { id: " member1 ", fullName: "  Lucía Pérez  ", username: "lucia" } }, memberId: "member1", name: "Lucía Pérez" },
+    { fields: { idMemberCreator: "member1", memberCreator: { fullName: " ", username: " lucia " } }, memberId: "member1", name: "lucia" },
+    { fields: { idMemberCreator: "member1", memberCreator: { id: 42, fullName: null, username: "lucia" } }, memberId: "member1", name: "lucia" },
+    { fields: {}, memberId: undefined, name: undefined },
+  ]) {
+    const f = notificationFixture();
+    const message = await importTrelloComment(f, sample.fields);
+    assert.equal(message.source, "trello");
+    assert.equal(message.userId, undefined);
+    assert.equal(message.trelloMemberId, sample.memberId);
+    assert.equal(message.trelloAuthorName, sample.name);
+    assert.equal((await f.call(panel.detail, { taskId: "task1" })).comments[0].authorName, sample.name ?? "Autor sin nombre");
+    f.as("internal1");
+    assert.equal((await f.call(panel.detail, { taskId: "task1" })).comments[0].authorName, sample.name ?? "Autor sin nombre");
+    assert.equal((await f.call(tasks.listInternalTaskComments, { taskId: "task1" }))[0].author, sample.name ?? "Autor sin nombre");
+    assert.equal((await f.unread())[0].author, sample.name ?? "Autor sin nombre");
+    const historyRows = (await f.call(history.list, { paginationOpts: { numItems: 10, cursor: null } })).page;
+    assert.equal(historyRows[0].author, sample.name ?? "Autor sin nombre");
+    // Repeated delivery does not duplicate the comment or its notifications.
+    const notificationCount = [...f.rows.values()].filter(row => row._table === "commentNotifications").length;
+    assert.equal((await importTrelloComment(f, sample.fields))._id, message._id);
+    assert.equal([...f.rows.values()].filter(row => row._table === "commentNotifications").length, notificationCount);
+  }
+});
+
+test("Trello author lookup failures still save the comment and finish the webhook", async t => {
+  t.mock.method(console, "warn", () => {});
+  for (const failure of ["sync", "async"]) {
+    for (const trelloName of [undefined, "Nombre conservado de Trello"]) {
+      const f = notificationFixture();
+      const query = f.ctx.db.query;
+      f.ctx.db.query = (table: string) => {
+        const result = query(table);
+        const withIndex = result.withIndex;
+        result.withIndex = (index: string, build: any) => {
+          if (table === "approvedExternalUsers" && index === "by_trello_member" && failure === "sync") {
+            throw new Error("Author lookup unavailable");
+          }
+          const indexed = withIndex(index, build);
+          if (table === "approvedExternalUsers" && index === "by_trello_member") {
+            indexed.take = async () => { throw new Error("Author lookup unavailable"); };
+          }
+          return indexed;
+        };
+        return result;
+      };
+      const fields = { memberCreator: { id: "member1", fullName: trelloName } };
+      const message = await importTrelloComment(f, fields);
+      assert.equal(message.userId, undefined);
+      assert.equal(message.message, "Comentario de Trello");
+      assert.equal(message.trelloCommentId, "trello-comment-1");
+      assert.equal(message.corMessageSyncStatus, "pending_cor_task");
+      const [comment] = (await f.call(panel.detail, { taskId: "task1" })).comments;
+      assert.equal(comment.authorName, trelloName ?? "Autor sin nombre");
+      assert.equal(comment.own, false);
+      f.as("internal1");
+      assert.equal((await f.unread())[0].messageIds[0], message._id);
+      assert.equal((await importTrelloComment(f, fields))._id, message._id);
+    }
+  }
+});
+
+test("author profile errors preserve comment display, notifications and reply context", async t => {
+  t.mock.method(console, "warn", () => {});
+  for (const failure of ["external-profile", "user-profile"]) {
+    for (const trelloName of [undefined, "Nombre de Trello"]) {
+      const f = notificationFixture();
+      f.put("users", { _id: "trello-author", name: "Nombre del perfil" });
+      f.put("taskMessages", { _id: "imported", taskId: "task1", source: "trello", userId: "trello-author", trelloAuthorName: trelloName, message: "Comentario guardado", createdAt: 1 });
+      await notifyTaskComment(f.ctx, "imported" as any);
+      if (failure === "external-profile") {
+        // A duplicate profile makes the real unique lookup fail for this author only.
+        f.put("approvedExternalUsers", { _id: "duplicate1", userId: "trello-author" });
+        f.put("approvedExternalUsers", { _id: "duplicate2", userId: "trello-author" });
+      } else {
+        f.put("approvedExternalUsers", { _id: "external-author", userId: "trello-author" });
+        const get = f.ctx.db.get;
+        f.ctx.db.get = async (id: string) => {
+          if (id === "trello-author") throw new Error("Author profile unavailable");
+          return get(id);
+        };
+      }
+      f.as("internal1");
+      const [comment] = (await f.call(panel.detail, { taskId: "task1" })).comments;
+      assert.equal(comment.authorName, trelloName ?? "Autor sin nombre");
+      assert.equal(comment.isClient, failure === "user-profile");
+      assert.equal((await f.call(tasks.listInternalTaskComments, { taskId: "task1" }))[0].author, trelloName ?? "Autor sin nombre");
+      assert.equal((await f.unread())[0].author, trelloName ?? "Autor sin nombre");
+      const historyRows = (await f.call(history.list, { paginationOpts: { numItems: 10, cursor: null } })).page;
+      assert.equal(historyRows[0].author, trelloName ?? "Autor sin nombre");
+      const entryId = await f.post("reply-with-author-error", "imported");
+      const context = await f.call(panel.syncContext, { entryId });
+      assert.ok(context.message.message.startsWith(`En respuesta a ${trelloName ?? "Autor sin nombre"}:`));
+      f.as("no-access");
+      await assert.rejects(f.call(panel.detail, { taskId: "task1" }), /acceso/);
+    }
+  }
+});
+
+test("comment persistence errors still fail instead of reporting a saved comment", async () => {
+  const f = notificationFixture();
+  const insert = f.ctx.db.insert;
+  f.ctx.db.insert = async (table: string, data: any) => {
+    if (table === "taskMessages") throw new Error("Comment storage unavailable");
+    return insert(table, data);
+  };
+  await assert.rejects(f.call(tasks.createTaskMessageInternal, { taskId: "task1", source: "trello", message: "No guardado" }), /Comment storage unavailable/);
+  assert.equal([...f.rows.values()].filter(row => row._table === "taskMessages" || row._table === "commentNotifications").length, 0);
+});
+
+test("Trello authors link by exact member ID and retain the Trello name as a fallback", async () => {
+  const f = notificationFixture();
+  Object.assign(f.rows.get("external1"), { trelloMemberId: "member1", name: "Nombre del perfil" });
+  const message = await importTrelloComment(f, { idMemberCreator: "member1", memberCreator: { fullName: "Nombre de Trello" } });
+  assert.equal(message.userId, "user1");
+  assert.equal(message.trelloAuthorName, "Nombre de Trello");
+  const detail = () => f.call(panel.detail, { taskId: "task1" });
+  assert.equal((await detail()).comments[0].authorName, "Nombre del perfil");
+  assert.equal((await detail()).comments[0].own, true);
+  f.as("internal1");
+  assert.equal((await detail()).comments[0].isClient, true);
+  delete f.rows.get("external1").name;
+  assert.equal((await detail()).comments[0].authorName, "Externo");
+  delete f.rows.get("user1").name;
+  assert.equal((await detail()).comments[0].authorName, "Nombre de Trello");
+});
+
+test("internal Trello authors use the Trello name without looking up an internal account", async () => {
+  for (const trelloName of ["Nombre en Trello", "Interno", undefined]) {
+    const f = notificationFixture();
+    const query = f.ctx.db.query;
+    let internalLookups = 0;
+    f.ctx.db.query = (table: string) => {
+      if (table === "users") internalLookups += 1;
+      return query(table);
+    };
+    const message = await importTrelloComment(f, { memberCreator: { id: "internal-member", fullName: trelloName } });
+    assert.equal(internalLookups, 0, "Trello identity must only be resolved through approvedExternalUsers");
+    assert.equal(message.userId, undefined);
+    f.as("internal1");
+    const [comment] = (await f.call(panel.detail, { taskId: "task1" })).comments;
+    assert.equal(comment.own, false);
+    assert.equal(comment.isClient, false);
+    assert.equal(comment.authorName, trelloName ?? "Autor sin nombre");
+    assert.equal((await f.unread())[0].author, trelloName ?? "Autor sin nombre");
+    assert.equal((await f.call(tasks.listInternalTaskComments, { taskId: "task1" }))[0].author, trelloName ?? "Autor sin nombre");
+  }
+});
+
+test("historical Trello comments with an internal userId still use Trello's name", async () => {
+  for (const trelloName of ["Nombre en Trello", undefined]) {
+    const f = notificationFixture();
+    f.put("taskMessages", { _id: "legacy-internal", taskId: "task1", source: "trello", userId: "internal2", trelloAuthorName: trelloName, message: "Comentario anterior", createdAt: 1 });
+    f.as("internal1");
+    const [comment] = (await f.call(panel.detail, { taskId: "task1" })).comments;
+    assert.equal(comment.authorName, trelloName ?? "Autor sin nombre");
+    assert.equal(comment.isClient, false);
+    assert.equal((await f.call(tasks.listInternalTaskComments, { taskId: "task1" }))[0].author, trelloName ?? "Autor sin nombre");
+  }
+});
+
+test("shared or unlinked Trello members keep their own name without assuming a platform user", async () => {
+  for (const shared of [false, true]) {
+    const f = notificationFixture();
+    Object.assign(f.rows.get("external1"), { trelloMemberId: "member1" });
+    if (shared) f.rows.get("external2").trelloMemberId = "member1";
+    else delete f.rows.get("external1").userId;
+    const message = await importTrelloComment(f, { memberCreator: { id: "member1", fullName: "Autor Trello" } });
+    assert.equal(message.userId, undefined);
+    f.as("internal1");
+    assert.equal((await f.call(panel.detail, { taskId: "task1" })).comments[0].authorName, "Autor Trello");
+  }
+});
+
+test("historical Trello comments can be repaired by name or user ID, including reply context and emails", async () => {
+  const f = notificationFixture();
+  f.put("taskMessages", { _id: "legacy-trello", taskId: "task1", source: "trello", message: "Comentario anterior", createdAt: 1 });
+  const message = f.rows.get("legacy-trello");
+  const detail = () => f.call(panel.detail, { taskId: "task1" });
+  assert.equal((await detail()).comments[0].authorName, "Autor sin nombre");
+  // These are the same fields an operator can edit in the Convex dashboard.
+  message.trelloAuthorName = "  Lucía Pérez  ";
+  assert.equal((await detail()).comments[0].authorName, "Lucía Pérez");
+  message.userId = "user1";
+  f.rows.get("external1").name = "Nombre aprobado";
+  assert.equal((await detail()).comments[0].authorName, "Nombre aprobado");
+  delete message.userId;
+  f.as("internal1");
+  const entryId = await f.post("trello-reply", message._id);
+  const context = await f.call(panel.syncContext, { entryId });
+  assert.match(context.message.message, /^En respuesta a Lucía Pérez: Comentario anterior/);
+
+  message.mentionedUserIds = ["internal2"];
+  f.rows.get("internal2").email = "internal2@example.com";
+  await notifyTaskComment(f.ctx, message._id);
+  const notification = [...f.rows.values()].find(row => row._table === "commentNotifications" && row.messageId === message._id && row.userId === "internal2");
+  const env = { APP_URL: process.env.APP_URL, RESEND_API_KEY: process.env.RESEND_API_KEY };
+  try {
+    process.env.APP_URL = "https://app.example.com";
+    process.env.RESEND_API_KEY = "test-only";
+    const claim = await f.call(notifications.claimEmail, { id: notification._id });
+    assert.match(JSON.parse(claim.payload).text, /Lucía Pérez te mencionó/);
+  } finally {
+    for (const [key, value] of Object.entries(env)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; }
+  }
 });
 
 test("three external users share brand tasks, comments and uploads while chats remain private", async () => {
