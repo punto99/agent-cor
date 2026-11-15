@@ -12,6 +12,7 @@ import { trelloProvider } from "../convex/integrations/trelloProvider";
 import { generateText } from "ai";
 import { createOpenAI } from "@ai-sdk/openai";
 import { createGoogleGenerativeAI } from "@ai-sdk/google";
+import { OPENAI_FALLBACK_MODEL_ID } from "../convex/lib/llmFallback";
 import { assertChatModelFileBudget } from "../convex/lib/chatModelFileBudget";
 import {
   CHAT_MAX_FILES, CHAT_MAX_FILE_SIZE_BYTES, CHAT_MAX_TOTAL_SIZE_BYTES,
@@ -264,14 +265,15 @@ test("both installed model adapters send five PDF references without downloading
   let openaiBody: any, geminiBody: any;
   const openai = createOpenAI({ apiKey: "test", fetch: async (_url, init) => {
     openaiBody = JSON.parse(init!.body as string);
-    return Response.json({ id: "response", object: "response", created_at: 1, model: "gpt-5.5", status: "completed", output: [{ type: "message", id: "message", role: "assistant", status: "completed", content: [{ type: "output_text", text: "Listo", annotations: [] }] }], usage: { input_tokens: 10, output_tokens: 2, total_tokens: 12 } });
+    return Response.json({ id: "response", object: "response", created_at: 1, model: OPENAI_FALLBACK_MODEL_ID, status: "completed", output: [{ type: "message", id: "message", role: "assistant", status: "completed", content: [{ type: "output_text", text: "Listo", annotations: [] }] }], usage: { input_tokens: 10, output_tokens: 2, total_tokens: 12 } });
   } });
   const google = createGoogleGenerativeAI({ apiKey: "test", fetch: async (_url, init) => {
     geminiBody = JSON.parse(init!.body as string);
     return Response.json({ candidates: [{ content: { role: "model", parts: [{ text: "Listo" }] }, finishReason: "STOP" }], usageMetadata: { promptTokenCount: 10, candidatesTokenCount: 2, totalTokenCount: 12 } });
   } });
   const urls = Array.from({ length: 5 }, (_, index) => `https://files.example/file${index}.pdf`);
-  await generateText({ model: openai("gpt-5.5"), maxRetries: 0, messages: [{ role: "user", content: urls.map(url => ({ type: "file", data: new URL(url), mediaType: "application/pdf" })) }] });
+  await generateText({ model: openai(OPENAI_FALLBACK_MODEL_ID), maxRetries: 0, messages: [{ role: "user", content: urls.map(url => ({ type: "file", data: new URL(url), mediaType: "application/pdf" })) }] });
+  assert.equal(openaiBody.model, "gpt-6-luna");
   assert.deepEqual(openaiBody.input[0].content.map((part: any) => part.file_url), urls);
   const googleUrls = urls.map((_, index) => `https://generativelanguage.googleapis.com/v1beta/files/file${index}`);
   await generateText({ model: google("gemini-3.7-flash"), maxRetries: 0, messages: [{ role: "user", content: googleUrls.map(url => ({ type: "file", data: new URL(url), mediaType: "application/pdf" })) }] });

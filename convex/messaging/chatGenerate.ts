@@ -422,7 +422,7 @@ async function prepareArgsForGeminiFiles(
 
 // Generar respuesta del agente (interna, llamada async)
 // CON ORQUESTADOR: Clasifica intención → enruta al agente correcto
-// CON SISTEMA DE FALLBACK: Gemini -> OpenAI GPT-5.5
+// CON SISTEMA DE FALLBACK: Gemini -> OpenAI GPT-6 Luna
 export const generateResponseAsync = internalAction({
   args: {
     threadId: v.string(),
